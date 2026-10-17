@@ -12,7 +12,8 @@ on real data. No changes to warpSPH, warpSPHCore, or warpSPHPlotting are require
 [Open the visualizer](https://fluids.dev/warpSPHRemote/), choose a local HDF5
 recording, or select NPZ snapshots. Data is read on your device; recording contents
 are not uploaded. **Remember last recording** retains one browser-local copy
-and restores its frame and selected field on refresh. You can disable this or
+and restores its frame, field, colormap, range, appearance, grid/streamline
+settings, diagnostic tab and playback preferences on refresh. Playback resumes paused. You can disable this or
 choose **Forget saved recording** in the open dialog. Reopen the original file
 to read later changes; browser quota, private-session and eviction rules apply.
 The built-in 2D/3D analytical examples require no files.

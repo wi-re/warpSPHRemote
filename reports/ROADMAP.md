@@ -9,7 +9,7 @@ rewritten for presentation.
 ## Current iteration
 
 - [x] Remember the last locally opened recording across refresh, with an explicit
-  browser-local copy policy, storage failure handling, and a forget control.
+  browser-local copy policy, visualization settings, storage failure handling, and a forget control.
 - [x] Compressible energy diagnostics: internal = sum(m*u), total = kinetic +
   internal, kind-0 fluid only. Accept recorded global diagnostics or specific
   internal-energy arrays. Missing quantities remain unavailable; no inferred EOS.
@@ -150,8 +150,9 @@ supply gradients/tangent state or whether reconstruction error is acceptable.
   kernel/normalization, masks, seed policy, integrator and accuracy parameters.
 - Selection and linked views: particle/region seeds, scalar curves, grid pixels,
   trace time markers and the shared timeline should seek consistently.
-- Persistence beyond the last file: view presets, probes, selected seeds and
-  derived-analysis definitions; distinguish local handles from stored copies.
+- Last-file visualization settings are retained. Further persistence: named view
+  presets, camera, probes, temporal UID selections/windows and derived-analysis
+  definitions; distinguish local handles from stored copies.
 - CPU numerical reference first where useful, then measured WebGL/WebGPU paths.
   Do not imply GPU acceleration before it is implemented and verified.
 - Live display snapshots may skip states. Complete temporal analysis needs a

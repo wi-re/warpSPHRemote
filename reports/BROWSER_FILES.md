@@ -57,7 +57,7 @@ Each compressed NPZ snapshot is buffered and decompressed as a unit; HDF5 is
 preferable for very large recordings. If no physical time is present, NPZ uses an
 explicit frame-index axis. File selection (including optional measurements.json)
 is local. With **Remember last recording** enabled, one copy is stored in
-IndexedDB and automatically restored on reload, along with its frame/field.
+IndexedDB and automatically restored on reload, along with its frame and visualization settings (details below).
 Opt-out and forget controls are in the open dialog. Saving is asynchronous;
 wait for “Saved for refresh” before reloading. Failure to save does not prevent
 viewing. Copies do not track later changes to the original files. Browser quota
@@ -160,3 +160,28 @@ sampling effects. Auto color limits come from finite grid samples when the grid
 is shown, and the same limits apply to the particle overlay. Float32 graphics
 precision, coverage errors, sparse export times and reconstruction choices remain
 scientific limitations. No spatial derivative or LCS result is advertised yet.
+
+## Completed-frame playback and settings
+
+A display request now returns its particle arrays and requested grid/streamlines
+as one completed presentation. Playback waits for that presentation before
+advancing, and the renderer updates both before its next draw. The last complete
+scene stays visible while reading/reconstructing the next; it never silently
+switches a selected grid to particles. Display time, diagnostics and trace markers
+follow the completed frame; the scrubber thumb shows the requested frame, with
+an arrow when it is ahead. Pausing leaves the in-flight target free to complete.
+
+Paused grid scrubbing uses a 60 ms debounce and cancels obsolete queued work.
+An already-running synchronous worker kernel can still finish before the latest
+target starts. Particle-only mode requests no grid. Playback includes load/compute
+time in its frame interval, rather than adding a full interval after each load.
+True grid/streamline playback is still bounded by CPU reconstruction cost; this
+change does not claim particle-only throughput or WebGPU acceleration.
+
+The remembered file's view record includes field, component, palette, normalization,
+automatic/fixed limits, particle size/visibility, background/reference grid, periodic
+mapping and clip plane, plus display mode, resolution/kernel/coverage, streamline
+seed policy/count/fixed position, diagnostic tab, playback speed and loop. Legacy
+frame/field-only records remain readable. Unsupported/nonfinite stored settings
+fall back safely. Playback restores paused; camera, pressure probes and temporal
+UID selections/windows are not persisted yet. Forget removes both file and view.

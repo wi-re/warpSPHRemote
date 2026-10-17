@@ -1,30 +1,26 @@
 import { useEffect, useState } from "react";
 import type { Mapping, Source } from "./types";
-import type { TrajectorySource } from "./sources/client";
 import {
   initialGrid,
   type FieldResult,
   type GridSettings,
-  categoricalField,
+  type FieldQuery,
 } from "./sources/grid";
 export type FieldMode = "particles" | "grid" | "both";
-export function useFieldView(
-  reader: TrajectorySource | undefined,
-  source: Source | undefined,
-  index: number,
-  field: string,
-  mapping: Mapping,
-  wrapPeriodic: boolean,
-  seed: number[],
-) {
+export interface FieldPreferences {
+  mode: FieldMode;
+  flow: boolean;
+  settings: GridSettings;
+  seeds: number;
+  seedMode: "regular" | "picked";
+  seed?: number[];
+}
+export function useFieldView(source: Source | undefined, seed: number[]) {
   const [mode, setMode] = useState<FieldMode>("particles"),
     [flow, setFlow] = useState(false),
     [settings, setSettings] = useState(initialGrid),
     [seeds, setSeeds] = useState(8),
     [seedMode, setSeedMode] = useState<"regular" | "picked">("regular");
-  const [result, setResult] = useState<FieldResult | null>(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
   const active = source?.dimension === 2 && (mode !== "particles" || flow);
   const [pickedSeed, setPickedSeed] = useState<{
     sourceId: string;
@@ -38,65 +34,25 @@ export function useFieldView(
   const fixedSeed =
     seed.length === 2
       ? seed
-      : pickedSeed && pickedSeed.sourceId === source?.id
-        ? pickedSeed.position
+      : pickedSeed?.sourceId === source?.id
+        ? (pickedSeed?.position ?? [])
         : [];
-  const seedKey = seedMode === "picked" ? JSON.stringify(fixedSeed) : "";
-  useEffect(() => {
-    setResult(null);
-    setError("");
-    setBusy(false);
-    if (!active || !reader) return;
-    if (categoricalField(field)) {
-      setError(
-        "Select a continuous scalar or vector quantity for reconstruction.",
-      );
-      return;
-    }
-    if (flow && seedMode === "picked" && fixedSeed.length !== 2) {
-      setError(
-        "Pick a particle to seed an instantaneous streamline, or choose regular seeds.",
-      );
-      return;
-    }
-    const abort = new AbortController();
-    setBusy(true);
-    reader
-      .grid(
-        {
-          index,
-          field,
-          mapping,
-          settings: { ...settings, wrapPeriodic },
-          streams: flow ? { seeds, steps: 400 } : null,
-          seed: flow && seedMode === "picked" ? fixedSeed : undefined,
-        },
-        abort.signal,
-      )
-      .then((r) => {
-        if (!abort.signal.aborted) setResult(r);
-      })
-      .catch((e) => {
-        if (!abort.signal.aborted) setError(e.message);
-      })
-      .finally(() => {
-        if (!abort.signal.aborted) setBusy(false);
-      });
-    return () => abort.abort();
-  }, [
-    reader,
-    source?.id,
-    active,
-    index,
-    field,
-    mapping,
-    wrapPeriodic,
-    settings,
+  const preferences: FieldPreferences = {
+    mode,
     flow,
+    settings,
     seeds,
     seedMode,
-    seedKey,
-  ]);
+    ...(fixedSeed.length === 2 ? { seed: fixedSeed } : {}),
+  };
+  const restore = (value: FieldPreferences, sourceId: string) => {
+    setMode(value.mode);
+    setFlow(value.flow);
+    setSettings(value.settings);
+    setSeeds(value.seeds);
+    setSeedMode(value.seedMode);
+    setPickedSeed(value.seed ? { sourceId, position: value.seed } : null);
+  };
   return {
     mode,
     setMode,
@@ -108,17 +64,36 @@ export function useFieldView(
     setSeeds,
     seedMode,
     setSeedMode,
-    result,
-    busy,
-    error,
     active,
+    preferences,
+    restore,
+    query(
+      index: number,
+      field: string,
+      mapping: Mapping,
+      wrapPeriodic: boolean,
+    ): FieldQuery | null {
+      if (!active) return null;
+      return {
+        index,
+        field,
+        mapping,
+        settings: { ...settings, wrapPeriodic },
+        streams: flow ? { seeds, steps: 400 } : null,
+        seed: flow && seedMode === "picked" ? fixedSeed : undefined,
+      };
+    },
   };
 }
 export function FieldControls({
   view: v,
   dimension,
 }: {
-  view: ReturnType<typeof useFieldView>;
+  view: ReturnType<typeof useFieldView> & {
+    result: FieldResult | null;
+    busy: boolean;
+    error: string;
+  };
   dimension: number | undefined;
 }) {
   const update = (patch: Partial<GridSettings>) =>
@@ -260,7 +235,7 @@ export function FieldControls({
           )}
           {v.busy && (
             <p className="subtle-note" role="status">
-              Reconstructing field…
+              Updating grid · keeping the last completed frame…
             </p>
           )}
           {v.error && (

@@ -130,7 +130,8 @@ without an API server. In the Chromium browser:
   3.75194 and total energy 3.9094 at t=2.0003.
 - After “Saved for refresh”, reloading reopened that recording at index 80
   (frame 81), with density still selected, without another file picker. The
-  renderer mode reset to particles as designed; view-style persistence is separate.
+  earlier iteration restored frame/field only. The follow-up below now restores
+  rendering settings as well.
 
 Numerical tests cover mass-weighted fluid energies, missing/invalid energy data,
 constant reconstruction, particle-volume weighting, variable cutoff support,
@@ -153,3 +154,37 @@ KHH index 80 to 81 (798 spatial line segments), independently of the temporal UI
 trace. The real “Forget saved recording” button removed the browser copy: after
 refresh the app returned to the analytical source and no KHH recording was
 registered. The browser returned no console warnings/errors in these checks.
+
+## Grid playback and retained visualization settings
+
+The previous independent grid effect cleared its result on every frame request;
+the playback timer advanced after the particle read alone. This discarded useful
+grid results and displayed particles while still spending CPU on grids. The new
+completed-presentation path commits arrays and reconstructed fields together,
+waits before advancing, keeps the last complete scene during scrubbing and
+coalesces paused grid targets for 60 ms. Requests enqueue frame and grid together
+so low-priority history work cannot be inserted between them.
+
+Production-build browser verification with the 65,536-particle energy-enabled
+KHH file showed scalar-grid playback advancing from frame 1 through frame 46,
+with grid frames visible at both ends (including frame 45 at t=1.1002). Rapid
+Home/PageUp seeking settled at index 80. After refresh, the file reopened there
+with density, Magma, symmetric-log mapping, fixed limits 0.8–2.2, scalar-grid mode,
+128² reconstruction, Wendland C4, streamlines, 2× speed and the total-energy tab.
+The restored scene reported 44,606 streamline segments, t=2.0003, and unchanged
+energy values. Switching back to particle-only playback and switching to the 3D
+analytical recording also advanced correctly through the shared presentation path. No browser warnings/errors were returned. This is a behavior
+check, not an assertion that CPU grids match particle-only playback speed.
+
+`tests/presentation.test.ts` checks atomic completion, cancellation of stale
+targets, no grid work in particle-only mode and explicit invalid-field failure.
+Session tests cover the extended settings round-trip, file association, forget,
+legacy records, malformed JSON and invalid/nonfinite stored values. There are
+29 frontend/data tests; the TypeScript check and production build pass.
+
+Screenshots/logs are outside Git under
+`warpSPHDevelopment/remote/playback-settings-20261017/` (or disposable `/tmp`
+equivalent). Reproduce with `npm ci && npm test && npm run build`, serve `dist`
+at the configured base path, choose the energy-enabled KHH demo, select a grid,
+play/pause, change the above settings, scrub and refresh. WebGPU grid mapping
+during scrubbing is still the planned compute milestone, not part of this fix.

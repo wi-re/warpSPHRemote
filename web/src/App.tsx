@@ -1,4 +1,5 @@
 import { useFieldView, FieldControls } from "./FieldView";
+import { loadPresentation, type Presentation } from "./sources/presentation";
 import {
   rememberFiles,
   recallFiles,
@@ -51,7 +52,7 @@ import { gradient, palettes } from "./palettes";
 import { usePressureProbes, PressureControls } from "./PressureProbes";
 import { DiagnosticChart, PressureChart } from "./Chart";
 import { initialOptions } from "./types";
-import type { Diagnostic, Frame, Source, ViewOptions } from "./types";
+import type { Diagnostic, Source, ViewOptions } from "./types";
 
 function Toggle({
   value,
@@ -116,9 +117,10 @@ export default function App() {
   const [sources, setSources] = useState<Source[]>([]),
     [sourceId, setSourceId] = useState("");
   const source = sources.find((s) => s.id === sourceId);
-  const [frame, setFrame] = useState<Frame | null>(null),
+  const [presentation, setPresentation] = useState<Presentation | null>(null),
     [index, setIndex] = useState(0),
     [field, setField] = useState("velocities");
+  const frame = presentation?.sourceId === sourceId ? presentation.frame : null;
   const [options, setOptions] = useState<ViewOptions>(initialOptions),
     [range, setRange] = useState<[number, number]>([0, 1]),
     [validRange, setValidRange] = useState(true);
@@ -199,6 +201,34 @@ export default function App() {
     key: K,
     value: ViewOptions[K],
   ) => setOptions((o) => ({ ...o, [key]: value }));
+  const selectedPosition =
+    selected >= 0 && frame
+      ? Array.from({ length: source?.dimension ?? 2 }, (_, c) =>
+          Number(
+            frame.arrays.positions.data[
+              selected * (source?.dimension ?? 2) + c
+            ],
+          ),
+        )
+      : [];
+  const fieldView = useFieldView(source, selectedPosition);
+  const fieldQuery = fieldView.query(
+    index,
+    field,
+    options.mapping,
+    options.wrapPeriodic,
+  );
+  const displayMode = source?.dimension === 2 ? fieldView.mode : "particles";
+  const presentationKey = JSON.stringify([
+    sourceId,
+    index,
+    field,
+    displayMode,
+    fieldQuery,
+  ]);
+  const frameStarted = useRef(0);
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
   const chooseSource = (s: Source, automatic = false) => {
     if (!automatic) interactions.current++;
     const files = localFiles.current.get(s.id);
@@ -207,7 +237,7 @@ export default function App() {
     setPlaying(false);
     setSourceId(s.id);
     setIndex(0);
-    setFrame(null);
+    setPresentation(null);
     setSelected(-1);
     setTraceUid("");
     setError("");
@@ -280,6 +310,28 @@ export default function App() {
                   );
                 if (reader.metadata.fields.some((f) => f.name === view.field))
                   setField(view.field);
+                if (view.options) {
+                  // A 2D recording cannot use the saved Z component/clip plane.
+                  setOptions({
+                    ...view.options,
+                    mapping:
+                      reader.metadata.dimension === 2 &&
+                      view.options.mapping === "z"
+                        ? "magnitude"
+                        : view.options.mapping,
+                    clipAxis:
+                      view.options.clipAxis >= reader.metadata.dimension
+                        ? -1
+                        : view.options.clipAxis,
+                  });
+                }
+                if (view.fieldView)
+                  fieldView.restore(view.fieldView, reader.metadata.id);
+                if (view.playback) {
+                  setSpeed(view.playback.speed);
+                  setLoop(view.playback.loop);
+                }
+                if (view.metric) setMetric(view.metric);
               }
               setStorageStatus("Restored local copy");
             }
@@ -331,45 +383,57 @@ export default function App() {
     const abort = new AbortController();
     setLoading(true);
     setError("");
-    const t = performance.now();
-    registry.current
-      .get(source.id)!
-      .frame(index, field, abort.signal)
-      .then((loadedFrame) => {
-        if (abort.signal.aborted) return;
-        setFrame(loadedFrame);
-        setFetchMs(performance.now() - t);
-        setSelected(-1);
-      })
-      .catch((e) => {
-        if (e.name !== "AbortError") {
-          setError(e.message);
-          setPlaying(false);
-        }
-      })
-      .finally(() => {
-        if (!abort.signal.aborted) setLoading(false);
-      });
-    return () => abort.abort();
-  }, [sourceId, index, field]);
+    // Scrubbing coalesces requests; playback requests each complete display frame.
+    const timer = setTimeout(
+      () => {
+        const t = performance.now();
+        frameStarted.current = t;
+        loadPresentation(
+          registry.current.get(source.id)!,
+          index,
+          field,
+          displayMode,
+          fieldQuery,
+          presentationKey,
+          abort.signal,
+        )
+          .then((next) => {
+            if (abort.signal.aborted) return;
+            setPresentation(next);
+            setFetchMs(performance.now() - t);
+            setSelected(-1);
+          })
+          .catch((e) => {
+            if (!abort.signal.aborted) {
+              setError(e.message);
+              setPlaying(false);
+            }
+          })
+          .finally(() => {
+            if (!abort.signal.aborted) setLoading(false);
+          });
+      },
+      fieldQuery && !playingRef.current ? 60 : 0,
+    );
+    return () => {
+      clearTimeout(timer);
+      abort.abort();
+    };
+  }, [presentationKey]);
   useEffect(() => {
-    if (
-      !frame ||
-      !source ||
-      !engine.current ||
-      frame.index !== index ||
-      !frame.arrays[field]
-    )
-      return;
+    if (!presentation || !frame || !source || !engine.current) return;
     try {
-      engine.current.setFrame(frame, source, field, optionsRef.current);
-      setRange([...engine.current.range]);
-      setValidRange(engine.current.validRange);
+      const e = engine.current;
+      // Both calls happen before the renderer's next animation frame.
+      e.setFrame(frame, source, presentation.field, optionsRef.current);
+      e.setFieldView(presentation.result, presentation.mode);
+      setRange([...e.range]);
+      setValidRange(e.validRange);
       setEngineError("");
     } catch (e) {
       setEngineError(String(e));
     }
-  }, [frame, sourceId, field]);
+  }, [presentation, sourceId]);
   useEffect(() => {
     if (engine.current) {
       engine.current.setOptions(options);
@@ -412,7 +476,13 @@ export default function App() {
     return () => abort.abort();
   }, [frame, sourceId]);
   useEffect(() => {
-    if (!playing || !source || !frame || loading || frame.index !== index)
+    if (
+      !playing ||
+      !source ||
+      !frame ||
+      loading ||
+      presentation?.key !== presentationKey
+    )
       return;
     if (index === source.frames - 1) {
       if (loop) {
@@ -428,10 +498,20 @@ export default function App() {
         : 100;
     const timer = setTimeout(
       () => setIndex(index + 1),
-      Math.max(16, delta / speed),
+      Math.max(0, delta / speed - (performance.now() - frameStarted.current)),
     );
     return () => clearTimeout(timer);
-  }, [playing, sourceId, frame, index, loading, speed, loop]);
+  }, [
+    playing,
+    sourceId,
+    frame,
+    index,
+    loading,
+    speed,
+    loop,
+    presentationKey,
+    presentation,
+  ]);
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
       if (
@@ -565,13 +645,31 @@ export default function App() {
     if (remaining.length) chooseSource(remaining[0]);
     else {
       setSourceId("");
-      setFrame(null);
+      setPresentation(null);
     }
   };
   useEffect(() => {
     if (remember && activeFileKey)
-      saveView({ key: activeFileKey, index, field });
-  }, [remember, activeFileKey, index, field]);
+      saveView({
+        key: activeFileKey,
+        index,
+        field,
+        options,
+        fieldView: fieldView.preferences,
+        playback: { speed, loop },
+        metric,
+      });
+  }, [
+    remember,
+    activeFileKey,
+    index,
+    field,
+    options,
+    JSON.stringify(fieldView.preferences),
+    speed,
+    loop,
+    metric,
+  ]);
   const currentField = source?.fields.find((f) => f.name === field),
     isVector = (currentField?.components ?? 1) > 1;
   const current = rows.find((r) => r.index === frame?.index);
@@ -587,57 +685,31 @@ export default function App() {
     setPlaying(false);
     setIndex(i);
   };
+  const displayedIndex = frame?.index ?? index;
   const n = frame?.arrays.positions.shape[0] ?? 0;
-  const selectedPosition =
-    selected >= 0 && frame
-      ? Array.from({ length: source?.dimension ?? 2 }, (_, c) =>
-          Number(
-            frame.arrays.positions.data[
-              selected * (source?.dimension ?? 2) + c
-            ],
-          ),
-        )
-      : [];
-  const fieldView = useFieldView(
-    registry.current.get(sourceId),
-    source,
-    index,
-    field,
-    options.mapping,
-    options.wrapPeriodic,
-    selectedPosition,
-  );
-  useEffect(() => {
-    engine.current?.setFieldView(fieldView.result, fieldView.mode);
-    if (engine.current) {
-      setRange([...engine.current.range]);
-      setValidRange(engine.current.validRange);
-    }
-  }, [
-    fieldView.result,
-    fieldView.mode,
-    frame,
-    field,
-    options.mapping,
-    options.background,
-  ]);
   const selectedValue =
     selected >= 0 ? engine.current?.values[selected] : undefined;
   const pressure = usePressureProbes(
     registry.current.get(sourceId),
     source,
-    index,
+    displayedIndex,
   );
   const trace = useParticleTrace(
     registry.current.get(sourceId),
     source,
-    index,
+    displayedIndex,
     traceUid,
   );
   useEffect(() => {
     engine.current?.setProbes(pressure.probes);
-    engine.current?.setTrace(trace.rows, index);
-  }, [pressure.probes, trace.rows, frame, index, options.wrapPeriodic]);
+    engine.current?.setTrace(trace.rows, displayedIndex);
+  }, [
+    pressure.probes,
+    trace.rows,
+    frame,
+    displayedIndex,
+    options.wrapPeriodic,
+  ]);
   const hasMetric =
     metric !== "pressure" && rows.some((r) => r[metric] != null);
   const fixedError =
@@ -781,7 +853,15 @@ export default function App() {
             <SlidersHorizontal size={14} />
             {mobileControls ? "Hide view settings" : "View settings"}
           </button>
-          <FieldControls view={fieldView} dimension={source?.dimension} />
+          <FieldControls
+            view={{
+              ...fieldView,
+              result: presentation?.result ?? null,
+              busy: loading && fieldView.active && !playing,
+              error: fieldView.active ? error : "",
+            }}
+            dimension={source?.dimension}
+          />
           <section className="control-section">
             <div className="section-heading">
               <span>COLOR BY</span>
@@ -1040,6 +1120,12 @@ export default function App() {
             <div className="scene-title">
               <span className="scene-title-dot" />
               {scalarTitle}
+              {loading && !playing && (
+                <span className="scene-time" role="status">
+                  {" "}
+                  · Updating…
+                </span>
+              )}
               {source && (
                 <span className="scene-time">
                   {source.timeKind === "simulation" ? "t = " : "frame "}
@@ -1062,10 +1148,10 @@ export default function App() {
                 <ArrowDownToLine size={17} />
               </IconButton>
             </div>
-            {loading && (
+            {loading && (!playing || !frame) && (
               <div className="loading-badge">
                 <LoaderCircle size={13} className="spin" />
-                Reading frame
+                {fieldView.active ? "Reconstructing frame" : "Reading frame"}
               </div>
             )}
             {(error || engineError) && (
@@ -1203,7 +1289,11 @@ export default function App() {
             <div className="scrubber">
               <div className="scrubber-info">
                 <span>
-                  FRAME <strong>{String(index + 1).padStart(3, "0")}</strong>
+                  FRAME{" "}
+                  <strong>{String(displayedIndex + 1).padStart(3, "0")}</strong>
+                  {index !== displayedIndex && (
+                    <span className="muted"> → {index + 1}</span>
+                  )}
                   <span className="muted">
                     {" "}
                     / {String(source?.frames ?? 0).padStart(3, "0")}
@@ -1213,7 +1303,9 @@ export default function App() {
                   {source?.timeKind === "simulation"
                     ? "SIMULATION TIME"
                     : "FRAME INDEX"}{" "}
-                  <strong>{formatNumber(source?.times[index] ?? 0, 5)}</strong>
+                  <strong>
+                    {formatNumber(source?.times[displayedIndex] ?? 0, 5)}
+                  </strong>
                 </span>
               </div>
               <input
@@ -1289,7 +1381,7 @@ export default function App() {
                   rows={pressure.samples}
                   probes={pressure.probes}
                   source={source}
-                  index={index}
+                  index={displayedIndex}
                   onSeek={seek}
                 />
               ) : (
@@ -1297,7 +1389,7 @@ export default function App() {
                   rows={rows}
                   source={source}
                   metric={metric}
-                  index={index}
+                  index={displayedIndex}
                 />
               ))}
             <div className="chart-note">
@@ -1523,10 +1615,14 @@ export default function App() {
           <span className="tiny-dot" />
           {source?.format ?? "No source"}
           <span className="status-separator">/</span>
-          {loading
-            ? "Reading snapshot"
-            : playing
-              ? "Playing trajectory"
+          {playing
+            ? fieldView.active
+              ? "Playing reconstructed frames"
+              : "Playing trajectory"
+            : loading
+              ? fieldView.active
+                ? "Updating grid · showing last completed frame"
+                : "Reading snapshot"
               : "Ready to inspect"}
         </span>
         <span>
@@ -1536,7 +1632,7 @@ export default function App() {
               <span className="status-separator">/</span>
             </span>
           )}
-          Read frame {fetchMs.toFixed(1)} ms
+          Prepare frame {fetchMs.toFixed(1)} ms
           <span className="status-separator">/</span>CPU render submission{" "}
           {renderMs.toFixed(1)} ms<span className="status-separator">/</span>
           <button onClick={() => setHelp(true)}>
@@ -1609,8 +1705,9 @@ export default function App() {
               Remember last recording on this device
             </label>
             <p className="subtle-note">
-              Stores one browser-local copy for refresh. Reopen the original to
-              read changes. Browser storage limits apply.
+              Stores one browser-local copy and visualization settings for
+              refresh. Reopen the original to read changes. Browser storage
+              limits apply.
             </p>
             {storageStatus && (
               <p className="subtle-note" role="status">

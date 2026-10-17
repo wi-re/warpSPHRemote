@@ -1,3 +1,11 @@
+import {
+  initialOptions,
+  type ViewOptions,
+  type DiagnosticMetric,
+} from "./types";
+import { palettes } from "./palettes";
+import { initialGrid } from "./sources/grid";
+import type { FieldPreferences } from "./FieldView";
 /** One browser-local snapshot, replacing the previous recording atomically. */
 export interface RememberedRecording {
   files: { blob: Blob; name: string; type: string; lastModified: number }[];
@@ -95,13 +103,132 @@ export interface SavedView {
   key: string;
   index: number;
   field: string;
+  options?: ViewOptions;
+  fieldView?: FieldPreferences;
+  playback?: { speed: number; loop: boolean };
+  metric?: DiagnosticMetric | "pressure";
+}
+const object = (v: unknown): v is Record<string, any> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+const oneOf = <T>(v: unknown, allowed: readonly T[], fallback: T): T =>
+  allowed.includes(v as T) ? (v as T) : fallback;
+const finite = (
+  v: unknown,
+  fallback: number,
+  min = -Infinity,
+  max = Infinity,
+) =>
+  typeof v === "number" && Number.isFinite(v) && v >= min && v <= max
+    ? v
+    : fallback;
+/** Treat browser storage as versioned, optional input; tolerate old and corrupt values. */
+export function sanitizeView(value: unknown, key: string): SavedView | null {
+  if (!object(value) || value.key !== key) return null;
+  const view: SavedView = {
+    key,
+    index: Number.isInteger(value.index) && value.index >= 0 ? value.index : 0,
+    field: typeof value.field === "string" ? value.field : "velocities",
+  };
+  if (object(value.options)) {
+    const o = value.options,
+      options = { ...initialOptions };
+    for (const name of [
+      "wrapPeriodic",
+      "physical",
+      "boundaries",
+      "ghosts",
+      "grid",
+    ] as const)
+      if (typeof o[name] === "boolean") options[name] = o[name];
+    options.palette =
+      typeof o.palette === "string" && Object.hasOwn(palettes, o.palette)
+        ? o.palette
+        : initialOptions.palette;
+    options.mapping = oneOf(
+      o.mapping,
+      ["magnitude", "x", "y", "z"] as const,
+      "magnitude",
+    );
+    options.normalization = oneOf(
+      o.normalization,
+      ["linear", "log", "symlog"] as const,
+      "linear",
+    );
+    options.range = oneOf(o.range, ["frame", "fixed"] as const, "frame");
+    options.min = finite(o.min, 0);
+    options.max = finite(o.max, 1);
+    if (
+      !(options.max > options.min) ||
+      (options.normalization === "log" && options.min <= 0)
+    )
+      options.range = "frame";
+    options.size = finite(o.size, 1, 0.25, 2.5);
+    options.background = oneOf(
+      o.background,
+      ["dark", "light"] as const,
+      "dark",
+    );
+    options.clipAxis = oneOf(o.clipAxis, [-1, 0, 1, 2], -1);
+    options.clip = finite(o.clip, 1, 0, 1);
+    view.options = options;
+  }
+  if (object(value.fieldView)) {
+    const f = value.fieldView,
+      g = object(f.settings) ? f.settings : {};
+    view.fieldView = {
+      mode: oneOf(f.mode, ["particles", "grid", "both"] as const, "particles"),
+      flow: f.flow === true,
+      settings: {
+        resolution: oneOf(
+          g.resolution,
+          [128, 256, 512] as const,
+          initialGrid.resolution,
+        ),
+        kernel: oneOf(
+          g.kernel,
+          ["wendland2", "wendland4"] as const,
+          initialGrid.kernel,
+        ),
+        minCoverage: finite(g.minCoverage, initialGrid.minCoverage, 0.05, 0.95),
+        wrapPeriodic: view.options?.wrapPeriodic ?? initialOptions.wrapPeriodic,
+      },
+      seeds: Number.isInteger(f.seeds) ? finite(f.seeds, 8, 2, 16) : 8,
+      seedMode: oneOf(f.seedMode, ["regular", "picked"] as const, "regular"),
+    };
+    if (
+      Array.isArray(f.seed) &&
+      f.seed.length === 2 &&
+      f.seed.every((v: unknown) => typeof v === "number" && Number.isFinite(v))
+    )
+      view.fieldView.seed = [...f.seed];
+    else if (view.fieldView.seedMode === "picked")
+      view.fieldView.seedMode = "regular";
+  }
+  if (object(value.playback))
+    view.playback = {
+      speed: oneOf(value.playback.speed, [0.25, 0.5, 1, 2, 4], 1),
+      loop: value.playback.loop !== false,
+    };
+  view.metric = oneOf(
+    value.metric,
+    [
+      "kineticEnergy",
+      "internalEnergy",
+      "totalEnergy",
+      "maxSpeed",
+      "meanDensity",
+      "pressure",
+    ] as const,
+    "kineticEnergy",
+  );
+  return view;
 }
 export function recallView(key: string): SavedView | null {
   try {
     const view = JSON.parse(
       localStorage.getItem("warpsph-last-view") ?? "null",
     );
-    return view?.key === key ? view : null;
+    return sanitizeView(view, key);
   } catch {
     return null;
   }

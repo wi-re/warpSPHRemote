@@ -380,6 +380,10 @@ export class ParticleRenderer {
     this.fieldMode = mode;
     this.fieldPlane.visible = !!valid && mode !== "particles";
     this.material.uniforms.uFluid.value = valid && mode === "grid" ? 0 : 1;
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      `${valid && mode !== "particles" ? (mode === "grid" ? "Scalar grid" : "Grid and particles") : "Particles"}, frame ${(this.frame?.index ?? 0) + 1}${valid && result?.lines.length ? ", instantaneous streamlines" : ""}. Drag to pan in 2D or rotate in 3D; scroll to zoom; click to inspect.`,
+    );
     for (const child of [...this.flowLines.children]) {
       const line = child as THREE.LineSegments;
       line.geometry.dispose();
