@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warpSPHRemote"
+version = "0.1.0"
+description = "Local, browser-rendered SPH trajectory inspection"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "h5py>=3.8"]
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+warpsph-remote = "warpsph_remote.server:main"
+
+[tool.setuptools.packages.find]
+where = ["python"]
