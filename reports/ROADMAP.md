@@ -15,6 +15,9 @@ rewritten for presentation.
   internal-energy arrays. Missing quantities remain unavailable; no inferred EOS.
 - [x] 2D scalar/vector reconstruction on a regular grid with physical supports,
   volume weights, coverage masks, selectable resolution and explicit kernels.
+- [x] Plot toolbar particle picking, floating UID/trace card, header trajectory picker,
+  analysis left / visualization right, bottom pressure-probe tools and viewer settings.
+- [x] Downloadable/cacheable 65K CRKSPH KHH preview alongside WCSPH and sloshing.
 - [x] Instantaneous velocity streamlines from that same masked reconstruction,
   with controllable seeding, bounded integration and periodic seam handling.
 
@@ -169,7 +172,7 @@ supply gradients/tangent state or whether reconstruction error is acceptable.
 5. FTLE fields and LCS overlays, with measured compute/memory costs.
 6. More advanced Lyapunov/LCS methods and live acquisition requirements.
 
-## WebGPU compute foundation (first grid milestone implemented)
+## WebGPU compute foundation (grids and normalized velocity derivatives implemented)
 
 Use warpSPHCore as the numerical specification for a **selected forward-operator
 subset**. Implement WGSL kernels with a shared typed browser API and parity
@@ -180,11 +183,13 @@ The first grid milestone is implemented and measured; see [WEBGPU.md](WEBGPU.md)
 It supplies packed local-coordinate buffers, GPU cell counting, hierarchical
 exclusive scans, contiguous particle reordering, direct cell traversal and masked
 Wendland C2/C4 grid interpolation. Auto/explicit backends work in the reader worker.
+Analytic derivatives of normalized velocity now provide divergence and signed 2D
+vorticity on CPU and WebGPU; see [VELOCITY_DERIVATIVES.md](VELOCITY_DERIVATIVES.md).
 No linked lists or fixed neighbour capacity remain. The bounded dense 2D cell table
 is not a literal port of the core's sparse occupied-cell hash table.
 
 The following remains the broader operator roadmap. CSR adjacency, general point
-queries, gradients/divergence/curl/Laplacians, correction variants, LIC/FTLE and a
+queries, general core particle gradients/divergence/curl/Laplacians, correction variants, LIC/FTLE and a
 shared WebGPU renderer are **not implemented by the initial grid milestone**:
 
 

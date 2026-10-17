@@ -8,7 +8,7 @@ struct Parameters {
   span: vec2f, size: vec2u,
   bins: vec2u, radius: vec2u,
   periodic: vec2u, count: u32, kernel: u32,
-  minCoverage: f32, components: u32, mapping: u32, padding: u32,
+  minCoverage: f32, components: u32, mapping: u32, quantity: u32,
 }
 struct Result { field: vec4f, velocity: vec2f, coverage: f32, flags: u32 }
 @group(0) @binding(0) var<storage, read> particles: array<Particle>;
@@ -55,6 +55,7 @@ fn reconstruct(@builtin(global_invocation_id) id: vec3u) {
   }
   var weight = 0.0; var field = vec4f(0); var velocity = vec2f(0);
   var badField = false; var badVelocity = false;
+  var velocityAnchor = vec2f(0); var anchored = false;
   for (var y = start.y; y <= stop.y; y++) {
     for (var x = start.x; x <= stop.x; x++) {
       let bin = wrap(y, p.bins.y) * p.bins.x + wrap(x, p.bins.x);
@@ -72,7 +73,8 @@ fn reconstruct(@builtin(global_invocation_id) id: vec3u) {
           var k = 7.0 * t4 * (1.0 + 4.0*q);
           if (p.kernel == 1u) { k = 9.0 * t4*t2 * (1.0 + 6.0*q + (35.0/3.0)*q*q); }
           let w = particle.volume / (3.141592653589793 * particle.support * particle.support) * k;
-          weight += w; field += w * particle.field; velocity += w * particle.velocity;
+          if (!anchored) { velocityAnchor = particle.velocity; anchored = true; }
+          weight += w; field += w * particle.field; velocity += w * (particle.velocity - velocityAnchor);
           badField = badField || (particle.flags & 2u) == 0u;
           badVelocity = badVelocity || (particle.flags & 4u) == 0u;
         }
@@ -81,9 +83,57 @@ fn reconstruct(@builtin(global_invocation_id) id: vec3u) {
   }
   var flags = 0u;
   if (weight >= p.minCoverage) {
-    field /= weight; velocity /= weight;
+    let relativeMean = velocity / weight;
+    if (p.quantity == 0u) { field /= weight; }
+    else { field = vec4f(velocityAnchor, relativeMean); }
+    velocity = velocityAnchor + relativeMean;
     if (!badField) { flags |= 1u; }
     if (!badVelocity) { flags |= 2u; }
   }
   results[i] = Result(field, velocity, weight, flags);
+}
+
+// Analytic derivative of the normalized velocity interpolant:
+// d(vbar)/dx = sum_j (vj-vbar) * d(Vj Wj)/dx / coverage.
+// A separate pass reuses compact cell ranges and the completed mean velocity.
+@compute @workgroup_size(128)
+fn differentiate(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= p.size.x * p.size.y) { return; }
+  if ((results[i].flags & 2u) == 0u) { results[i].flags &= ~1u; return; }
+  let position = (vec2f(f32(i % p.size.x), f32(i / p.size.x)) + 0.5) / vec2f(p.size) * p.span;
+  let cell = vec2i(floor(position / p.span * vec2f(p.bins)));
+  var start = cell - vec2i(p.radius); var stop = cell + vec2i(p.radius);
+  for (var c = 0u; c < 2u; c++) {
+    if (p.periodic[c] != 0u) { stop[c] = min(stop[c], start[c] + i32(p.bins[c]) - 1); }
+    else { start[c] = max(start[c], 0); stop[c] = min(stop[c], i32(p.bins[c]) - 1); }
+  }
+  let anchor = results[i].field.xy;
+  let relativeMean = results[i].field.zw;
+  var gradient = vec4f(0); // du/dx, du/dy, dv/dx, dv/dy
+  for (var y = start.y; y <= stop.y; y++) {
+    for (var x = start.x; x <= stop.x; x++) {
+      let bin = wrap(y, p.bins.y) * p.bins.x + wrap(x, p.bins.x);
+      let begin = offsets[bin]; let end = begin + atomicLoad(&counts[bin]);
+      for (var j = begin; j < end; j++) {
+        let particle = sorted[j]; var delta = position - particle.position;
+        for (var c = 0u; c < 2u; c++) {
+          if (p.periodic[c] != 0u) { delta[c] -= floor(delta[c] / p.span[c] + 0.5) * p.span[c]; }
+        }
+        let q = length(delta) / particle.support;
+        if (q < 1.0) {
+          let t = 1.0 - q; let t2 = t*t;
+          var dkOverQ = -20.0 * t2*t; var norm = 7.0 / 3.141592653589793;
+          if (p.kernel == 1u) { dkOverQ = -(56.0/3.0) * (5.0*q + 1.0) * t2*t2*t; norm = 9.0 / 3.141592653589793; }
+          let h2 = particle.support * particle.support;
+          let gradW = (particle.volume / h2) * (norm * dkOverQ / h2) * delta;
+          let dv = (particle.velocity - anchor) - relativeMean;
+          gradient += vec4f(dv.x * gradW.x, dv.x * gradW.y, dv.y * gradW.x, dv.y * gradW.y);
+        }
+      }
+    }
+  }
+  var value = (gradient.x + gradient.w) / results[i].coverage;
+  if (p.quantity == 2u) { value = (gradient.z - gradient.y) / results[i].coverage; }
+  results[i].field = vec4f(value, 0, 0, 0); results[i].flags |= 1u;
 }

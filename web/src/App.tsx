@@ -1,3 +1,11 @@
+import { selectionIndex, type ParticleSelection } from "./sources/selection";
+import {
+  TrajectoryPicker,
+  type PickerTab,
+  type SavedRecordingInfo,
+} from "./TrajectoryPicker";
+import { readPreferences, savePreferences } from "./preferences";
+import { derivativeQuantity, gridQuantityLabel } from "./sources/grid";
 import { useFieldView, FieldControls } from "./FieldView";
 import {
   recordedDemos,
@@ -21,7 +29,7 @@ import {
 } from "./session";
 import type { DiagnosticMetric } from "./types";
 import { useParticleTrace, TraceControls } from "./ParticleTrace";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -90,7 +98,7 @@ function IconButton({
   children,
   onClick,
   disabled = false,
-  active = false,
+  active,
 }: {
   label: string;
   children: React.ReactNode;
@@ -104,6 +112,7 @@ function IconButton({
       title={label}
       aria-label={label}
       onClick={onClick}
+      aria-pressed={active}
       disabled={disabled}
     >
       {children}
@@ -130,7 +139,11 @@ export default function App() {
     [index, setIndex] = useState(0),
     [field, setField] = useState("velocities");
   const frame = presentation?.sourceId === sourceId ? presentation.frame : null;
-  const [options, setOptions] = useState<ViewOptions>(initialOptions),
+  const [options, setOptions] = useState<ViewOptions>(() => ({
+      ...initialOptions,
+      background: readPreferences().theme,
+      wrapPeriodic: readPreferences().wrapPeriodic,
+    })),
     [range, setRange] = useState<[number, number]>([0, 1]),
     [validRange, setValidRange] = useState(true);
   const [playing, setPlaying] = useState(false),
@@ -139,6 +152,10 @@ export default function App() {
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [engineError, setEngineError] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false),
+    [theme, setTheme] = useState(() => readPreferences().theme),
+    [pickerTab, setPickerTab] = useState<PickerTab>("examples"),
+    [savedInfo, setSavedInfo] = useState<SavedRecordingInfo | null>(null);
   const [open, setOpen] = useState(false),
     [path, setPath] = useState(""),
     [opening, setOpening] = useState(false),
@@ -196,6 +213,7 @@ export default function App() {
     try {
       await forgetFiles();
       setStorageStatus("Remembered recording removed");
+      setSavedInfo(null);
     } catch (e) {
       setStorageStatus(e instanceof Error ? e.message : String(e));
     }
@@ -206,12 +224,13 @@ export default function App() {
       "kineticEnergy",
     );
   const [traceUid, setTraceUid] = useState("");
-  const [selected, setSelected] = useState(-1),
+  const [selection, setSelection] = useState<ParticleSelection | null>(null),
+    [picking, setPicking] = useState(false),
+    [chartsExpanded, setChartsExpanded] = useState(true),
     [renderMs, setRenderMs] = useState(0),
     [fetchMs, setFetchMs] = useState(0),
     [inspector, setInspector] = useState(true),
-    [help, setHelp] = useState(false),
-    [mobileControls, setMobileControls] = useState(false);
+    [help, setHelp] = useState(false);
   const [axes, setAxes] = useState([
     [1, 0],
     [0, 1],
@@ -226,6 +245,15 @@ export default function App() {
     key: K,
     value: ViewOptions[K],
   ) => setOptions((o) => ({ ...o, [key]: value }));
+  const selected = useMemo(
+    () => selectionIndex(selection, sourceId, frame),
+    [selection, sourceId, frame],
+  );
+  const clearSelection = () => {
+    setSelection(null);
+    setTraceUid("");
+    engine.current?.select(-1);
+  };
   const selectedPosition =
     selected >= 0 && frame
       ? Array.from({ length: source?.dimension ?? 2 }, (_, c) =>
@@ -251,6 +279,48 @@ export default function App() {
     displayMode,
     fieldQuery,
   ]);
+  useEffect(
+    () =>
+      savePreferences({
+        theme,
+        backend: fieldView.settings.backend ?? "auto",
+        wrapPeriodic: options.wrapPeriodic,
+      }),
+    [theme, fieldView.settings.backend, options.wrapPeriodic],
+  );
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    recallFiles()
+      .then((saved) => {
+        if (!cancelled)
+          setSavedInfo(
+            saved
+              ? {
+                  name: saved.files.map((f) => f.name).join(", "),
+                  bytes: saved.files.reduce((sum, f) => sum + f.size, 0),
+                  key: saved.key,
+                }
+              : null,
+          );
+      })
+      .catch(() => {
+        if (!cancelled) setSavedInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, storageStatus]);
+  const showPicker = () => {
+    setSettingsOpen(false);
+    setHelp(false);
+    setOpen(true);
+  };
+  const showSettings = () => {
+    setOpen(false);
+    setHelp(false);
+    setSettingsOpen(true);
+  };
   const frameStarted = useRef(0);
   const playingRef = useRef(playing);
   playingRef.current = playing;
@@ -266,7 +336,7 @@ export default function App() {
     setSourceId(s.id);
     setIndex(0);
     setPresentation(null);
-    setSelected(-1);
+    setSelection(null);
     setTraceUid("");
     setError("");
     setRows([]);
@@ -450,9 +520,23 @@ export default function App() {
       const e = new ParticleRenderer(host.current);
       engine.current = e;
       e.onPick = (i) => {
-        setSelected(i);
-        if (i >= 0 && e.frame?.arrays.UIDs)
-          setTraceUid(String(e.frame.arrays.UIDs.data[i]));
+        setSelection(
+          i >= 0 && e.frame && e.source
+            ? {
+                sourceId: e.source.id,
+                frame: e.frame.index,
+                index: i,
+                uid: e.frame.arrays.UIDs
+                  ? String(e.frame.arrays.UIDs.data[i])
+                  : undefined,
+              }
+            : null,
+        );
+        setTraceUid(
+          i >= 0 && e.frame?.arrays.UIDs
+            ? String(e.frame.arrays.UIDs.data[i])
+            : "",
+        );
       };
       e.onRender = (ms) => {
         setRenderMs(ms);
@@ -491,7 +575,6 @@ export default function App() {
             if (abort.signal.aborted) return;
             setPresentation(next);
             setFetchMs(performance.now() - t);
-            setSelected(-1);
           })
           .catch((e) => {
             if (!abort.signal.aborted) {
@@ -531,6 +614,12 @@ export default function App() {
       setValidRange(engine.current.validRange);
     }
   }, [options]);
+  useEffect(() => {
+    engine.current?.setPicking(picking);
+  }, [picking]);
+  useEffect(() => {
+    engine.current?.select(selected);
+  }, [selected, presentation]);
   useEffect(() => {
     if (!source) return;
     const abort = new AbortController();
@@ -609,7 +698,8 @@ export default function App() {
           (e.target as HTMLElement).tagName,
         ) ||
         open ||
-        help
+        help ||
+        settingsOpen
       )
         return;
       if (e.code === "Space") {
@@ -627,34 +717,42 @@ export default function App() {
         setIndex((i) => Math.max(0, i - 1));
       }
       if (e.key.toLowerCase() === "f") engine.current?.fit();
+      if (e.key.toLowerCase() === "p") setPicking((v) => !v);
+      if (e.key === "Escape") {
+        setPicking(false);
+        clearSelection();
+      }
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [source, open, help]);
+  }, [source, open, help, settingsOpen]);
   useEffect(() => {
-    if (open)
-      document.querySelector<HTMLElement>("[role=dialog] button")?.focus();
-    else if (help)
-      document.querySelector<HTMLElement>("[role=dialog] button")?.focus();
-  }, [open, help]);
-  useEffect(() => {
-    if (!open && !help) return;
+    if (!open && !help && !settingsOpen) return;
     const previous = document.activeElement as HTMLElement;
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]");
+    const focusable = () =>
+      Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button,input,select,a[href],[tabindex="0"]',
+        ) ?? [],
+      ).filter(
+        (el) =>
+          !el.hasAttribute("disabled") &&
+          el.tabIndex >= 0 &&
+          el.getClientRects().length > 0,
+      );
+    focusable()[0]?.focus();
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOpen(false);
         setHelp(false);
+        setSettingsOpen(false);
       }
       if (e.key === "Tab") {
-        const dialog = document.querySelector("[role=dialog]");
-        const elements = Array.from(
-          dialog?.querySelectorAll<HTMLElement>(
-            'button,input,select,[tabindex="0"]',
-          ) ?? [],
-        ).filter((el) => !el.hasAttribute("disabled"));
-        if (!elements.length) return;
-        const first = elements[0],
-          last = elements.at(-1)!;
+        const elements = focusable(),
+          first = elements[0],
+          last = elements.at(-1);
+        if (!first || !last) return;
         if (e.shiftKey && document.activeElement === first) {
           e.preventDefault();
           last.focus();
@@ -669,7 +767,7 @@ export default function App() {
       window.removeEventListener("keydown", handler);
       previous?.focus();
     };
-  }, [open, help]);
+  }, [open, help, settingsOpen]);
   const openSource = async (e: React.FormEvent) => {
     e.preventDefault();
     setOpening(true);
@@ -702,6 +800,7 @@ export default function App() {
     const existing = registry.current.get(demo.id);
     if (existing) {
       chooseSource(existing.metadata);
+      setOpen(false);
       return;
     }
     const abort = new AbortController();
@@ -736,6 +835,7 @@ export default function App() {
       demoAbort.current = null;
       setDemoDownload(null);
       chooseSource(reader.metadata);
+      setOpen(false);
     } catch (e) {
       if (!abort.signal.aborted)
         setDemoError(e instanceof Error ? e.message : String(e));
@@ -754,7 +854,8 @@ export default function App() {
     openingRef.current = true;
     setOpening(true);
     setOpenError("");
-    setOpen(true);
+    setPickerTab("file");
+    showPicker();
     try {
       if (
         [...registry.current.keys()].filter((id) => !id.startsWith("demo-"))
@@ -816,14 +917,18 @@ export default function App() {
   const currentField = source?.fields.find((f) => f.name === field),
     isVector = (currentField?.components ?? 1) > 1;
   const current = rows.find((r) => r.index === frame?.index);
-  const scalarTitle =
-    fieldLabel(field) +
-    (isVector
-      ? " · " +
-        (options.mapping === "magnitude"
-          ? "magnitude"
-          : options.mapping.toUpperCase())
-      : "");
+  const shownDerivative =
+    presentation?.mode !== "particles" &&
+    derivativeQuantity(presentation?.result?.grid.quantity);
+  const scalarTitle = shownDerivative
+    ? gridQuantityLabel(presentation?.result?.grid.quantity)
+    : fieldLabel(presentation?.field ?? field) +
+      (isVector
+        ? " · " +
+          (options.mapping === "magnitude"
+            ? "magnitude"
+            : options.mapping.toUpperCase())
+        : "");
   const seek = (i: number) => {
     setPlaying(false);
     setIndex(i);
@@ -863,6 +968,7 @@ export default function App() {
   return (
     <div
       className="app-shell"
+      data-theme={theme}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) {
           e.preventDefault();
@@ -931,381 +1037,130 @@ export default function App() {
         <span className="header-context">Trajectory studio</span>
         <span className="version">PREVIEW 0.1</span>
         <div className="header-actions">
-          <span className="local-status">
-            <span />
-            Runs on your device
-          </span>
-          <button className="secondary-button" onClick={() => setOpen(true)}>
+          <button
+            className="trajectory-trigger"
+            onClick={showPicker}
+            aria-label="Choose trajectory"
+            title={source?.name}
+          >
+            <span>
+              <strong>
+                {source ? friendlyName(source) : "Choose a trajectory"}
+              </strong>
+              <small>
+                {source
+                  ? `${source.dimension}D · ${source.frames} frames`
+                  : "Examples, saved files and uploads"}
+              </small>
+            </span>
+            {demoDownload ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : (
+              <ChevronDown size={15} />
+            )}
+          </button>
+          <button
+            className="secondary-button"
+            onClick={showPicker}
+            aria-label="Open trajectory"
+          >
             <FolderOpen size={15} />
             Open trajectory
           </button>
-          <IconButton label="Viewer help" onClick={() => setHelp(true)}>
+          <IconButton label="Viewer settings" onClick={showSettings}>
+            <Settings2 size={18} />
+          </IconButton>
+          <IconButton
+            label="Viewer help"
+            onClick={() => {
+              setOpen(false);
+              setSettingsOpen(false);
+              setHelp(true);
+            }}
+          >
             <Info size={18} />
           </IconButton>
         </div>
       </header>
       <div className={`workspace ${inspector ? "" : "inspector-hidden"}`}>
-        <aside className={`sidebar ${mobileControls ? "show-controls" : ""}`}>
-          <section className="library-section">
-            <div className="section-heading">
-              <span>TRAJECTORIES</span>
-              <button
-                className="small-icon"
-                aria-label="Add trajectory"
-                title="Add trajectory"
-                onClick={() => setOpen(true)}
-              >
-                <Plus size={15} />
-              </button>
+        <aside
+          className="analysis-panel"
+          aria-label="Frame information and diagnostics"
+        >
+          <div className="inspector-title">
+            <span>FRAME & DIAGNOSTICS</span>
+            <Target size={15} />
+          </div>
+          <section className="inspector-section">
+            <div className="section-heading">CURRENT FRAME</div>
+            <div className="metric-large">
+              {n.toLocaleString()}
+              <span>particles</span>
             </div>
-            <div className="source-list">
-              {sources.map((s) => (
-                <button
-                  className={`source-card ${s.id === sourceId ? "selected" : ""}`}
-                  key={s.id}
-                  onClick={() => chooseSource(s)}
-                  title={s.name}
-                >
-                  <span className="source-icon">
-                    {s.dimension === 3 ? (
-                      <Box size={17} />
-                    ) : (
-                      <Layers size={17} />
-                    )}
-                  </span>
-                  <span className="source-card-text">
-                    <strong>{friendlyName(s)}</strong>
-                    <small>
-                      {s.dimension}D · {s.frames} frames
-                      {s.format.endsWith("demo") ? " · demo" : ""}
-                      {cachedDemos.has(s.id) ? " · saved locally" : ""}
-                    </small>
-                  </span>
-                  {s.id === sourceId && <span className="selected-dot" />}
-                </button>
-              ))}
-              {!sources.length && (
-                <p className="muted">Drop a local recording to get started.</p>
+            <dl className="properties">
+              <dt>Fluid particles</dt>
+              <dd>{current?.particles.toLocaleString() ?? "—"}</dd>
+              <dt>Dimension</dt>
+              <dd>{source?.dimension ?? "—"}D</dd>
+              <dt>Simulation time</dt>
+              <dd>
+                {source?.timeKind === "simulation"
+                  ? formatNumber(frame?.time ?? 0, 5)
+                  : "Not recorded"}
+              </dd>
+              <dt>Frame size</dt>
+              <dd>{frame ? `${(frame.bytes / 1e6).toFixed(2)} MB` : "—"}</dd>
+            </dl>
+          </section>
+          <section className="inspector-section">
+            <div className="section-heading">FLUID DIAGNOSTICS</div>
+            <div className="stat-card">
+              <span>Kinetic energy</span>
+              <strong>
+                {current?.kineticEnergy != null
+                  ? formatNumber(current.kineticEnergy, 5)
+                  : "—"}
+              </strong>
+              <span className="stat-unit">½ ∑ mᵢ |vᵢ|²</span>
+            </div>
+            <dl className="properties">
+              {source?.internalEnergyAvailable && (
+                <>
+                  <dt>Internal energy</dt>
+                  <dd>
+                    {current?.internalEnergy != null
+                      ? formatNumber(current.internalEnergy, 6)
+                      : "—"}
+                  </dd>
+                  <dt>Total energy</dt>
+                  <dd>
+                    {current?.totalEnergy != null
+                      ? formatNumber(current.totalEnergy, 6)
+                      : "—"}
+                  </dd>
+                </>
               )}
-            </div>
-            {!serviceMode &&
-              recordedDemos.some(
-                (d) => !sources.some((s) => s.id === d.id),
-              ) && (
-                <div className="recorded-demo-library">
-                  <div className="section-heading">TRY A SOLVER RECORDING</div>
-                  <p className="subtle-note">
-                    Real simulations · no local file needed
-                  </p>
-                  {recordedDemos
-                    .filter((d) => !sources.some((s) => s.id === d.id))
-                    .map((demo) => (
-                      <div key={demo.id}>
-                        <button
-                          className="source-card recorded-demo-card"
-                          disabled={opening || demoDownload?.id === demo.id}
-                          onClick={() => void openRecordedDemo(demo)}
-                          title={demo.description}
-                          aria-label={`${cachedDemos.has(demo.id) ? "Open saved demo" : "Load demo"}: ${demo.name}`}
-                        >
-                          <span className="source-icon">
-                            {demoDownload?.id === demo.id ? (
-                              <LoaderCircle size={17} className="spin" />
-                            ) : cachedDemos.has(demo.id) ? (
-                              <FolderOpen size={17} />
-                            ) : (
-                              <ArrowDownToLine size={17} />
-                            )}
-                          </span>
-                          <span className="source-card-text">
-                            <strong>{demo.name}</strong>
-                            <small>
-                              {demo.particles.toLocaleString()} particles ·{" "}
-                              {demo.frames} frames · {demoSize(demo.bytes)}
-                              {cachedDemos.has(demo.id) && (
-                                <span className="cached-demo-label">
-                                  Saved on this device
-                                </span>
-                              )}
-                            </small>
-                          </span>
-                        </button>
-                        {demoDownload?.id === demo.id && (
-                          <div className="demo-download" role="status">
-                            {demoDownload.stage === "downloading" && (
-                              <progress
-                                aria-label={`Downloading ${demo.name}`}
-                                max={demo.bytes}
-                                value={demoDownload.received}
-                              />
-                            )}
-                            <span>
-                              {demoDownload.stage === "checking"
-                                ? "Checking saved download…"
-                                : demoDownload.stage === "saving"
-                                  ? "Saving on this device…"
-                                  : demoDownload.stage === "opening"
-                                    ? "Opening recording…"
-                                    : `${Math.round((100 * demoDownload.received) / demo.bytes)}% downloaded`}
-                            </span>
-                            <button
-                              className="text-button"
-                              onClick={cancelDemo}
-                            >
-                              Cancel loading demo
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  {demoError && (
-                    <p className="inline-error" role="alert">
-                      {demoError}
-                    </p>
-                  )}
-                </div>
-              )}
-            {demoCacheError && (
-              <p className="inline-error" role="status">
-                {demoCacheError}
-              </p>
-            )}
+              <dt>Maximum speed</dt>
+              <dd>
+                {current?.maxSpeed != null
+                  ? formatNumber(current.maxSpeed, 4)
+                  : "—"}
+              </dd>
+              <dt>Mean density</dt>
+              <dd>
+                {current?.meanDensity != null
+                  ? formatNumber(current.meanDensity, 5)
+                  : "—"}
+              </dd>
+            </dl>
           </section>
-          <button
-            className="mobile-settings secondary-button"
-            aria-expanded={mobileControls}
-            onClick={() => setMobileControls((v) => !v)}
-          >
-            <SlidersHorizontal size={14} />
-            {mobileControls ? "Hide view settings" : "View settings"}
-          </button>
-          <FieldControls
-            view={{
-              ...fieldView,
-              result: presentation?.result ?? null,
-              busy: loading && fieldView.active && !playing,
-              error: fieldView.active ? error : "",
-            }}
-            dimension={source?.dimension}
-          />
-          <section className="control-section">
-            <div className="section-heading">
-              <span>COLOR BY</span>
-              <SlidersHorizontal size={14} />
-            </div>
-            <label className="control-label" htmlFor="field">
-              Particle quantity
-            </label>
-            <div className="select-wrap">
-              <select
-                id="field"
-                value={field}
-                onChange={(e) => setField(e.target.value)}
-                disabled={!source}
-              >
-                {source?.fields.map((f) => (
-                  <option key={f.name} value={f.name}>
-                    {fieldLabel(f.name)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={13} />
-            </div>
-            {isVector && (
-              <div
-                className="segmented mapping"
-                role="group"
-                aria-label="Vector component"
-              >
-                {(
-                  [
-                    "magnitude",
-                    "x",
-                    "y",
-                    ...(currentField!.components >= 3 ? ["z"] : []),
-                  ] as ViewOptions["mapping"][]
-                ).map((m) => (
-                  <button
-                    key={m}
-                    className={options.mapping === m ? "selected" : ""}
-                    onClick={() => setOption("mapping", m)}
-                  >
-                    {m === "magnitude" ? "Magnitude" : m.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            )}
-            <label className="control-label" htmlFor="palette">
-              Color palette
-            </label>
-            <div className="palette-select">
-              <div
-                className="palette-strip"
-                style={{ background: gradient(options.palette) }}
-              />
-              <div className="select-wrap">
-                <select
-                  id="palette"
-                  value={options.palette}
-                  onChange={(e) => setOption("palette", e.target.value)}
-                >
-                  {Object.entries(palettes).map(([id, p]) => (
-                    <option key={id} value={id}>
-                      {p.label} · {p.category}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={13} />
-              </div>
-            </div>
-            <label className="control-label" htmlFor="normalization">
-              Normalization
-            </label>
-            <div className="select-wrap">
-              <select
-                id="normalization"
-                value={options.normalization}
-                onChange={(e) =>
-                  setOption(
-                    "normalization",
-                    e.target.value as ViewOptions["normalization"],
-                  )
-                }
-              >
-                <option value="linear">Linear</option>
-                <option value="log">Logarithmic</option>
-                <option value="symlog">Symmetric log · threshold 1</option>
-              </select>
-              <ChevronDown size={13} />
-            </div>
-            <div className="label-row">
-              <span>Color range</span>
-              <button
-                className="text-button"
-                onClick={() =>
-                  setOptions((o) => ({
-                    ...o,
-                    range: o.range === "frame" ? "fixed" : "frame",
-                    min: range[0],
-                    max: range[1],
-                  }))
-                }
-              >
-                {options.range === "frame" ? "Auto · per frame" : "Fixed range"}
-              </button>
-            </div>
-            <div className="range-inputs">
-              <label>
-                <span>MIN</span>
-                <input
-                  aria-label="Minimum color value"
-                  type="number"
-                  step="any"
-                  disabled={options.range === "frame"}
-                  value={
-                    options.range === "frame"
-                      ? Number(range[0].toPrecision(5))
-                      : options.min
-                  }
-                  onChange={(e) => setOption("min", Number(e.target.value))}
-                />
-              </label>
-              <span>—</span>
-              <label>
-                <span>MAX</span>
-                <input
-                  aria-label="Maximum color value"
-                  type="number"
-                  step="any"
-                  disabled={options.range === "frame"}
-                  value={
-                    options.range === "frame"
-                      ? Number(range[1].toPrecision(5))
-                      : options.max
-                  }
-                  onChange={(e) => setOption("max", Number(e.target.value))}
-                />
-              </label>
-            </div>
-            {fixedError && (
-              <p className="inline-error">
-                Maximum must exceed minimum; logarithmic bounds must be
-                positive. Showing automatic range.
-              </p>
-            )}
-          </section>
-          <section className="control-section">
-            <div className="section-heading">
-              <span>APPEARANCE</span>
-              <Settings2 size={14} />
-            </div>
-            <div className="label-row">
-              <label htmlFor="size">Particle scale</label>
-              <span className="mono">{options.size.toFixed(2)}×</span>
-            </div>
-            <input
-              id="size"
-              className="slider"
-              type="range"
-              min="0.25"
-              max="2.5"
-              step="0.05"
-              value={options.size}
-              onChange={(e) => setOption("size", +e.target.value)}
-            />
-            <div className="toggle-row">
-              <span>Physical particle size</span>
-              <Toggle
-                label="Physical particle size"
-                value={options.physical}
-                onChange={(v) => setOption("physical", v)}
-              />
-            </div>
-            <div className="toggle-row">
-              <span>Boundary particles</span>
-              <Toggle
-                label="Boundary particles"
-                value={options.boundaries}
-                onChange={(v) => setOption("boundaries", v)}
-              />
-            </div>
-            <div className="toggle-row">
-              <span>Ghost particles</span>
-              <Toggle
-                label="Ghost particles"
-                value={options.ghosts}
-                onChange={(v) => setOption("ghosts", v)}
-              />
-            </div>
-            <div className="toggle-row">
-              <span>Reference grid</span>
-              <Toggle
-                label="Reference grid"
-                value={options.grid}
-                onChange={(v) => setOption("grid", v)}
-              />
-            </div>
-            <div className="label-row background-row">
-              <span>Background</span>
-              <div className="segmented">
-                <button
-                  className={options.background === "dark" ? "selected" : ""}
-                  onClick={() => setOption("background", "dark")}
-                >
-                  Dark
-                </button>
-                <button
-                  className={options.background === "light" ? "selected" : ""}
-                  onClick={() => setOption("background", "light")}
-                >
-                  Light
-                </button>
-              </div>
-            </div>
-          </section>
-          <div className="sidebar-foot">
-            <span className="tiny-dot" />
-            Browser-rendered · WebGL2
+          <div className="inspector-bottom">
+            <Eye size={14} />
+            <span>
+              Viewing recorded data
+              <br />
+              <strong>Simulator disconnected</strong>
+            </span>
           </div>
         </aside>
         <main className="main-panel">
@@ -1332,7 +1187,7 @@ export default function App() {
                 {source?.dimension ?? "—"}D PARTICLES
               </span>
               <IconButton
-                label="Toggle inspector"
+                label="Toggle visualization controls"
                 active={inspector}
                 onClick={() => setInspector((v) => !v)}
               >
@@ -1341,7 +1196,7 @@ export default function App() {
             </div>
           </div>
           <section
-            className={`viewport ${options.background === "light" ? "light" : ""}`}
+            className={`viewport ${options.background === "light" ? "light" : ""} ${selection && (selected >= 0 || selection.uid) ? "has-particle-selection" : ""} ${picking ? "picking" : ""}`}
             aria-label="Particle visualization"
           >
             <div className="scene-host" ref={host} />
@@ -1362,6 +1217,17 @@ export default function App() {
               )}
             </div>
             <div className="scene-tools">
+              <IconButton
+                label="Pick a particle (P)"
+                active={picking}
+                disabled={!frame}
+                onClick={() => {
+                  setPlaying(false);
+                  setPicking((v) => !v);
+                }}
+              >
+                <MousePointer2 size={17} />
+              </IconButton>
               <IconButton
                 label="Fit current frame (F)"
                 onClick={() => engine.current?.fit()}
@@ -1387,10 +1253,7 @@ export default function App() {
                 <Info size={22} />
                 <strong>Unable to display this frame</strong>
                 <p>{engineError || error}</p>
-                <button
-                  className="secondary-button"
-                  onClick={() => setOpen(true)}
-                >
+                <button className="secondary-button" onClick={showPicker}>
                   Open another trajectory
                 </button>
               </div>
@@ -1400,14 +1263,84 @@ export default function App() {
                 <Layers size={30} />
                 <strong>Open a trajectory to begin</strong>
                 <p>Explore recorded SPH data with a GPU-rendered scene.</p>
-                <button
-                  className="primary-button"
-                  onClick={() => setOpen(true)}
-                >
+                <button className="primary-button" onClick={showPicker}>
                   Open trajectory
                 </button>
               </div>
             )}
+            {picking && !selection && (
+              <div className="pick-hint" role="status">
+                Click a particle to inspect · drag to pan
+              </div>
+            )}
+            {selection?.sourceId === sourceId &&
+              frame &&
+              (selected >= 0 || selection.uid) && (
+                <section
+                  className="particle-card"
+                  aria-label="Selected particle"
+                >
+                  <div className="particle-card-heading">
+                    <MousePointer2 size={14} />
+                    <strong>
+                      {selection.uid != null
+                        ? `UID ${selection.uid}`
+                        : `Particle ${selected}`}
+                    </strong>
+                    <label className="particle-trace-toggle">
+                      <input
+                        type="checkbox"
+                        aria-label="Show particle trace"
+                        checked={trace.enabled}
+                        disabled={source?.identity !== "UIDs"}
+                        onChange={(e) => trace.setEnabled(e.target.checked)}
+                      />
+                      Trace
+                    </label>
+                    <IconButton
+                      label="Clear particle selection"
+                      onClick={clearSelection}
+                    >
+                      <X size={14} />
+                    </IconButton>
+                  </div>
+                  {selected >= 0 ? (
+                    <dl className="properties">
+                      <dt>Array index</dt>
+                      <dd>{selected}</dd>
+                      {selectedPosition.map((v, c) => (
+                        <span className="property-pair" key={c}>
+                          <dt>{"XYZ"[c]}</dt>
+                          <dd>{formatNumber(v, 5)}</dd>
+                        </span>
+                      ))}
+                      <dt>{fieldLabel(presentation?.field ?? field)}</dt>
+                      <dd>
+                        {selectedValue == null
+                          ? "—"
+                          : formatNumber(selectedValue, 5)}
+                      </dd>
+                      <dt>Kind</dt>
+                      <dd>{String(frame.arrays.kinds.data[selected])}</dd>
+                    </dl>
+                  ) : (
+                    <p className="subtle-note">
+                      This UID is absent from the current frame. Its recorded
+                      trace remains available.
+                    </p>
+                  )}
+                  {(trace.enabled || source?.identity !== "UIDs") && (
+                    <TraceControls
+                      trace={trace}
+                      uid={traceUid}
+                      supported={source?.identity === "UIDs"}
+                      onClear={clearSelection}
+                      compact
+                      hideToggle
+                    />
+                  )}
+                </section>
+              )}
             {frame && (
               <>
                 <div className="scene-caption">
@@ -1567,7 +1500,9 @@ export default function App() {
               <Repeat2 size={17} />
             </IconButton>
           </section>
-          <section className="diagnostics">
+          <section
+            className={`diagnostics ${metric === "pressure" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
+          >
             <div className="diagnostics-heading">
               <div className="section-heading">
                 <Activity size={14} />
@@ -1591,139 +1526,312 @@ export default function App() {
                   <button
                     key={id}
                     className={metric === id ? "selected" : ""}
-                    onClick={() => setMetric(id)}
+                    aria-pressed={metric === id}
+                    onClick={() => {
+                      setMetric(id);
+                      setChartsExpanded(true);
+                    }}
                   >
                     {label}
                   </button>
                 ))}
               </div>
+              <IconButton
+                label={
+                  chartsExpanded ? "Collapse diagnostics" : "Expand diagnostics"
+                }
+                active={chartsExpanded}
+                onClick={() => setChartsExpanded((v) => !v)}
+              >
+                <ChevronDown size={15} />
+              </IconButton>
               <span className="diagnostic-progress">
                 {rows.length < (source?.frames ?? 0)
                   ? `${rows.length} / ${source?.frames} frames`
                   : "Fluid particles only"}
               </span>
             </div>
-            {source &&
-              (metric === "pressure" ? (
-                <PressureChart
-                  rows={pressure.samples}
-                  probes={pressure.probes}
-                  source={source}
-                  index={displayedIndex}
-                  onSeek={seek}
-                />
-              ) : (
-                <DiagnosticChart
-                  rows={rows}
-                  source={source}
-                  metric={metric}
-                  index={displayedIndex}
-                />
-              ))}
-            <div className="chart-note">
-              {metric === "pressure" ? (
-                pressure.probes.length ? (
-                  "Click a pressure sample to jump to its recorded frame. Add or edit fixed points in the inspector; generate histories to scan the recording."
-                ) : (
-                  "Add a pressure probe in the inspector, then generate its history. Pressure must be present in the recording."
-                )
-              ) : diagnosticError ? (
-                <span className="inline-error">{diagnosticError}</span>
-              ) : rows.length > 0 && !hasMetric ? (
-                "This quantity is unavailable in this trajectory. Missing values are not replaced with zeros."
-              ) : source?.format === "Analytical demo" ? (
-                "Analytical field sampled on a fixed lattice; this is not an advected solver trajectory."
-              ) : (
-                "Computed from recorded numerical arrays. Playback slows when reading takes longer than the requested interval."
-              )}
-            </div>
+            {chartsExpanded && (
+              <>
+                <div className="diagnostic-body">
+                  {metric === "pressure" && (
+                    <PressureControls
+                      controller={pressure}
+                      selectedPosition={selectedPosition}
+                    />
+                  )}
+                  {source &&
+                    (metric === "pressure" ? (
+                      <PressureChart
+                        theme={theme}
+                        rows={pressure.samples}
+                        probes={pressure.probes}
+                        source={source}
+                        index={displayedIndex}
+                        onSeek={seek}
+                      />
+                    ) : (
+                      <DiagnosticChart
+                        theme={theme}
+                        rows={rows}
+                        source={source}
+                        metric={metric}
+                        index={displayedIndex}
+                      />
+                    ))}
+                </div>
+                <div className="chart-note">
+                  {metric === "pressure" ? (
+                    pressure.probes.length ? (
+                      "Click a pressure sample to jump to its recorded frame. Add or edit fixed points in this tab; generate histories to scan the recording."
+                    ) : (
+                      "Add a pressure probe in this tab, then generate its history. Pressure must be present in the recording."
+                    )
+                  ) : diagnosticError ? (
+                    <span className="inline-error">{diagnosticError}</span>
+                  ) : rows.length > 0 && !hasMetric ? (
+                    "This quantity is unavailable in this trajectory. Missing values are not replaced with zeros."
+                  ) : source?.format === "Analytical demo" ? (
+                    "Analytical field sampled on a fixed lattice; this is not an advected solver trajectory."
+                  ) : (
+                    "Computed from recorded numerical arrays. Playback slows when reading takes longer than the requested interval."
+                  )}
+                </div>
+              </>
+            )}
           </section>
         </main>
         {inspector && (
-          <aside className="inspector">
+          <aside
+            className="visualization-panel"
+            aria-label="Visualization controls"
+          >
             <div className="inspector-title">
-              <span>INSPECTOR</span>
-              <Target size={15} />
+              <span>VISUALIZATION</span>
+              <SlidersHorizontal size={15} />
             </div>
-            {source?.domain?.periodic.some(Boolean) && (
-              <section className="inspector-section">
-                <div className="section-heading">PERIODIC DOMAIN</div>
-                <div className="label-row">
-                  <span>Wrap display coordinates</span>
-                  <Toggle
-                    label="Wrap periodic coordinates"
-                    value={options.wrapPeriodic}
-                    onChange={(v) => setOption("wrapPeriodic", v)}
-                  />
+            <FieldControls
+              view={{
+                ...fieldView,
+                result: presentation?.result ?? null,
+                busy: loading && fieldView.active && !playing,
+                error: fieldView.active ? error : "",
+              }}
+              dimension={source?.dimension}
+              hasVelocity={
+                source?.fields.some(
+                  (f) => f.name === "velocities" && f.components >= 2,
+                ) ?? false
+              }
+              onQuantityChange={(quantity) => {
+                if (derivativeQuantity(quantity))
+                  setOptions((old) => ({
+                    ...old,
+                    palette: "coolwarm",
+                    normalization: "linear",
+                    range: "frame",
+                  }));
+              }}
+            />
+            <section className="control-section">
+              <div className="section-heading">
+                <span>COLOR BY</span>
+                <SlidersHorizontal size={14} />
+              </div>
+              <label className="control-label" htmlFor="field">
+                Particle quantity
+              </label>
+              <div className="select-wrap">
+                <select
+                  id="field"
+                  value={field}
+                  onChange={(e) => setField(e.target.value)}
+                  disabled={!source}
+                >
+                  {source?.fields.map((f) => (
+                    <option key={f.name} value={f.name}>
+                      {fieldLabel(f.name)}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={13} />
+              </div>
+              {isVector && (
+                <div
+                  className="segmented mapping"
+                  role="group"
+                  aria-label="Vector component"
+                >
+                  {(
+                    [
+                      "magnitude",
+                      "x",
+                      "y",
+                      ...(currentField!.components >= 3 ? ["z"] : []),
+                    ] as ViewOptions["mapping"][]
+                  ).map((m) => (
+                    <button
+                      key={m}
+                      className={options.mapping === m ? "selected" : ""}
+                      onClick={() => setOption("mapping", m)}
+                    >
+                      {m === "magnitude" ? "Magnitude" : m.toUpperCase()}
+                    </button>
+                  ))}
                 </div>
-                <p className="subtle-note">
-                  Display mapping only. Stored coordinates and UID traces retain
-                  their original unwrapped values.
+              )}
+              <label className="control-label" htmlFor="palette">
+                Color palette
+              </label>
+              <div className="palette-select">
+                <div
+                  className="palette-strip"
+                  style={{ background: gradient(options.palette) }}
+                />
+                <div className="select-wrap">
+                  <select
+                    id="palette"
+                    value={options.palette}
+                    onChange={(e) => setOption("palette", e.target.value)}
+                  >
+                    {Object.entries(palettes).map(([id, p]) => (
+                      <option key={id} value={id}>
+                        {p.label} · {p.category}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={13} />
+                </div>
+              </div>
+              <label className="control-label" htmlFor="normalization">
+                Normalization
+              </label>
+              <div className="select-wrap">
+                <select
+                  id="normalization"
+                  value={options.normalization}
+                  onChange={(e) =>
+                    setOption(
+                      "normalization",
+                      e.target.value as ViewOptions["normalization"],
+                    )
+                  }
+                >
+                  <option value="linear">Linear</option>
+                  <option value="log">Logarithmic</option>
+                  <option value="symlog">Symmetric log · threshold 1</option>
+                </select>
+                <ChevronDown size={13} />
+              </div>
+              <div className="label-row">
+                <span>Color range</span>
+                <button
+                  className="text-button"
+                  onClick={() =>
+                    setOptions((o) => ({
+                      ...o,
+                      range: o.range === "frame" ? "fixed" : "frame",
+                      min: range[0],
+                      max: range[1],
+                    }))
+                  }
+                >
+                  {options.range === "frame"
+                    ? "Auto · per frame"
+                    : "Fixed range"}
+                </button>
+              </div>
+              <div className="range-inputs">
+                <label>
+                  <span>MIN</span>
+                  <input
+                    aria-label="Minimum color value"
+                    type="number"
+                    step="any"
+                    disabled={options.range === "frame"}
+                    value={
+                      options.range === "frame"
+                        ? Number(range[0].toPrecision(5))
+                        : options.min
+                    }
+                    onChange={(e) => setOption("min", Number(e.target.value))}
+                  />
+                </label>
+                <span>—</span>
+                <label>
+                  <span>MAX</span>
+                  <input
+                    aria-label="Maximum color value"
+                    type="number"
+                    step="any"
+                    disabled={options.range === "frame"}
+                    value={
+                      options.range === "frame"
+                        ? Number(range[1].toPrecision(5))
+                        : options.max
+                    }
+                    onChange={(e) => setOption("max", Number(e.target.value))}
+                  />
+                </label>
+              </div>
+              {fixedError && (
+                <p className="inline-error">
+                  Maximum must exceed minimum; logarithmic bounds must be
+                  positive. Showing automatic range.
                 </p>
-              </section>
-            )}
-            <section className="inspector-section">
-              <div className="section-heading">CURRENT FRAME</div>
-              <div className="metric-large">
-                {n.toLocaleString()}
-                <span>particles</span>
-              </div>
-              <dl className="properties">
-                <dt>Fluid particles</dt>
-                <dd>{current?.particles.toLocaleString() ?? "—"}</dd>
-                <dt>Dimension</dt>
-                <dd>{source?.dimension ?? "—"}D</dd>
-                <dt>Simulation time</dt>
-                <dd>
-                  {source?.timeKind === "simulation"
-                    ? formatNumber(frame?.time ?? 0, 5)
-                    : "Not recorded"}
-                </dd>
-                <dt>Frame size</dt>
-                <dd>{frame ? `${(frame.bytes / 1e6).toFixed(2)} MB` : "—"}</dd>
-              </dl>
+              )}
             </section>
-            <section className="inspector-section">
-              <div className="section-heading">FLUID DIAGNOSTICS</div>
-              <div className="stat-card">
-                <span>Kinetic energy</span>
-                <strong>
-                  {current?.kineticEnergy != null
-                    ? formatNumber(current.kineticEnergy, 5)
-                    : "—"}
-                </strong>
-                <span className="stat-unit">½ ∑ mᵢ |vᵢ|²</span>
+            <section className="control-section">
+              <div className="section-heading">
+                <span>APPEARANCE</span>
+                <Settings2 size={14} />
               </div>
-              <dl className="properties">
-                {source?.internalEnergyAvailable && (
-                  <>
-                    <dt>Internal energy</dt>
-                    <dd>
-                      {current?.internalEnergy != null
-                        ? formatNumber(current.internalEnergy, 6)
-                        : "—"}
-                    </dd>
-                    <dt>Total energy</dt>
-                    <dd>
-                      {current?.totalEnergy != null
-                        ? formatNumber(current.totalEnergy, 6)
-                        : "—"}
-                    </dd>
-                  </>
-                )}
-                <dt>Maximum speed</dt>
-                <dd>
-                  {current?.maxSpeed != null
-                    ? formatNumber(current.maxSpeed, 4)
-                    : "—"}
-                </dd>
-                <dt>Mean density</dt>
-                <dd>
-                  {current?.meanDensity != null
-                    ? formatNumber(current.meanDensity, 5)
-                    : "—"}
-                </dd>
-              </dl>
+              <div className="label-row">
+                <label htmlFor="size">Particle scale</label>
+                <span className="mono">{options.size.toFixed(2)}×</span>
+              </div>
+              <input
+                id="size"
+                className="slider"
+                type="range"
+                min="0.25"
+                max="2.5"
+                step="0.05"
+                value={options.size}
+                onChange={(e) => setOption("size", +e.target.value)}
+              />
+              <div className="toggle-row">
+                <span>Physical particle size</span>
+                <Toggle
+                  label="Physical particle size"
+                  value={options.physical}
+                  onChange={(v) => setOption("physical", v)}
+                />
+              </div>
+              <div className="toggle-row">
+                <span>Boundary particles</span>
+                <Toggle
+                  label="Boundary particles"
+                  value={options.boundaries}
+                  onChange={(v) => setOption("boundaries", v)}
+                />
+              </div>
+              <div className="toggle-row">
+                <span>Ghost particles</span>
+                <Toggle
+                  label="Ghost particles"
+                  value={options.ghosts}
+                  onChange={(v) => setOption("ghosts", v)}
+                />
+              </div>
+              <div className="toggle-row">
+                <span>Reference grid</span>
+                <Toggle
+                  label="Reference grid"
+                  value={options.grid}
+                  onChange={(v) => setOption("grid", v)}
+                />
+              </div>
             </section>
             {source?.dimension === 3 && (
               <section className="inspector-section">
@@ -1761,79 +1869,9 @@ export default function App() {
                 )}
               </section>
             )}
-            <TraceControls
-              trace={trace}
-              uid={traceUid}
-              supported={source?.identity === "UIDs"}
-              onClear={() => setTraceUid("")}
-            />
-            <PressureControls
-              controller={pressure}
-              selectedPosition={selectedPosition}
-            />
-            <section className="inspector-section">
-              <div className="section-heading">PARTICLE PROBE</div>
-              {selected >= 0 && frame ? (
-                <>
-                  <div className="probe-title">
-                    <span>
-                      UID{" "}
-                      {frame.arrays.UIDs
-                        ? String(frame.arrays.UIDs.data[selected])
-                        : "not recorded"}
-                    </span>
-                    <button
-                      className="small-icon"
-                      aria-label="Clear particle selection"
-                      onClick={() => {
-                        setSelected(-1);
-                        engine.current?.select(-1);
-                      }}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                  <dl className="properties">
-                    <dt>Array index</dt>
-                    <dd>{selected}</dd>
-                    {selectedPosition.map((v, c) => (
-                      <span className="property-pair" key={c}>
-                        <dt>{"XYZ"[c]}</dt>
-                        <dd>{formatNumber(v, 5)}</dd>
-                      </span>
-                    ))}
-                    <dt>{fieldLabel(field)}</dt>
-                    <dd>
-                      {selectedValue === undefined
-                        ? "—"
-                        : formatNumber(selectedValue, 5)}
-                    </dd>
-                    <dt>Kind</dt>
-                    <dd>{String(frame.arrays.kinds.data[selected])}</dd>
-                  </dl>
-                </>
-              ) : (
-                <div className="probe-empty">
-                  <MousePointer2 size={20} />
-                  <p>
-                    Click a particle in the scene to inspect its recorded
-                    values.
-                  </p>
-                </div>
-              )}
-              {source?.identity === "unavailable" && (
-                <p className="subtle-note">
-                  UIDs were not recorded. Selection applies to this frame only.
-                </p>
-              )}
-            </section>
-            <div className="inspector-bottom">
-              <Eye size={14} />
-              <span>
-                Viewing recorded data
-                <br />
-                <strong>Simulator disconnected</strong>
-              </span>
+            <div className="sidebar-foot">
+              <span className="tiny-dot" />
+              Browser-rendered · WebGL2
             </div>
           </aside>
         )}
@@ -1863,56 +1901,207 @@ export default function App() {
           Prepare frame {fetchMs.toFixed(1)} ms
           <span className="status-separator">/</span>CPU render submission{" "}
           {renderMs.toFixed(1)} ms<span className="status-separator">/</span>
-          <button onClick={() => setHelp(true)}>
+          <button
+            onClick={() => {
+              setOpen(false);
+              setSettingsOpen(false);
+              setHelp(true);
+            }}
+          >
             Keyboard shortcuts <kbd>?</kbd>
           </button>
         </span>
       </footer>
       {open && (
+        <TrajectoryPicker
+          sources={sources}
+          active={sourceId}
+          cached={cachedDemos}
+          saved={savedInfo}
+          tab={pickerTab}
+          onTab={setPickerTab}
+          onSource={(s) => {
+            chooseSource(s);
+            setOpen(false);
+          }}
+          onDemo={(demo) => void openRecordedDemo(demo)}
+          onSaved={() =>
+            void (async () => {
+              try {
+                const saved = await recallFiles();
+                if (!saved) {
+                  setSavedInfo(null);
+                  return;
+                }
+                const entry = [...localFiles.current].find(
+                  ([, files]) => fileKey(files) === saved.key,
+                );
+                const existing = entry && registry.current.get(entry[0]);
+                if (existing) {
+                  chooseSource(existing.metadata);
+                  setOpen(false);
+                } else await openFiles(saved.files);
+              } catch (e) {
+                setOpenError(e instanceof Error ? e.message : String(e));
+              }
+            })()
+          }
+          onClose={() => setOpen(false)}
+          busy={opening}
+          download={demoDownload}
+          onCancelDownload={cancelDemo}
+          error={demoError || (pickerTab !== "file" ? openError : "")}
+          storageError={demoCacheError}
+        >
+          <button
+            type="button"
+            className="file-picker-zone"
+            disabled={opening}
+            onClick={() => fileInput.current?.click()}
+          >
+            {opening ? (
+              <LoaderCircle className="spin" size={28} />
+            ) : (
+              <FolderOpen size={28} />
+            )}
+            <strong>
+              {opening ? "Reading recording…" : "Choose a trajectory file"}
+            </strong>
+            <span>or drop it anywhere on the page</span>
+          </button>
+          <div className="format-hints">
+            <span>HDF5 · .h5 / .hdf5</span>
+            <span>NPZ · multiple snapshots</span>
+          </div>
+          <button
+            className="text-button folder-button"
+            disabled={opening}
+            onClick={() => folderInput.current?.click()}
+          >
+            Select a folder of NPZ snapshots
+          </button>
+          {openError && (
+            <div className="form-error" role="alert">
+              {openError}
+            </div>
+          )}
+          {serviceMode && (
+            <details className="service-details">
+              <summary>Open a path through this local service</summary>
+              <form onSubmit={openSource}>
+                <input
+                  ref={initialFocus}
+                  id="path"
+                  aria-label="Local file or directory path"
+                  className="path-input"
+                  placeholder="/path/to/trajectory.h5"
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  required
+                />
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={opening || !path.trim()}
+                >
+                  Open server path
+                </button>
+              </form>
+            </details>
+          )}
+        </TrajectoryPicker>
+      )}
+      {settingsOpen && (
         <div
           className="modal-backdrop"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
+            if (e.target === e.currentTarget) setSettingsOpen(false);
           }}
         >
           <section
-            className="modal"
+            className="modal settings-modal"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="open-title"
+            aria-labelledby="settings-title"
           >
             <div className="modal-heading">
               <span className="modal-icon">
-                <FolderOpen size={22} />
+                <Settings2 size={22} />
               </span>
               <IconButton
-                label="Close open dialog"
-                onClick={() => setOpen(false)}
+                label="Close settings"
+                onClick={() => setSettingsOpen(false)}
               >
                 <X size={18} />
               </IconButton>
             </div>
-            <h2 id="open-title">Open a trajectory</h2>
-            <p>
-              Read an existing recording directly from this computer. Files stay
-              local and are opened read-only. No Python service is required.
-            </p>
-            <button
-              type="button"
-              className="file-picker-zone"
-              disabled={opening}
-              onClick={() => fileInput.current?.click()}
+            <h2 id="settings-title">Viewer settings</h2>
+            <p>Preferences for this device. Your recordings stay local.</p>
+            <label className="control-label" htmlFor="viewer-theme">
+              Theme
+            </label>
+            <select
+              id="viewer-theme"
+              value={theme}
+              onChange={(e) => {
+                const next = e.target.value as "dark" | "light";
+                setTheme(next);
+                setOption("background", next);
+              }}
             >
-              {opening ? (
-                <LoaderCircle className="spin" size={28} />
-              ) : (
-                <FolderOpen size={28} />
-              )}
-              <strong>
-                {opening ? "Reading recording…" : "Choose a trajectory file"}
-              </strong>
-              <span>or drop it anywhere on the page</span>
-            </button>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+            <label className="control-label" htmlFor="compute-backend">
+              Compute backend
+            </label>
+            <select
+              id="compute-backend"
+              value={fieldView.settings.backend ?? "auto"}
+              onChange={(e) =>
+                fieldView.setSettings((old) => ({
+                  ...old,
+                  backend: e.target.value as "auto" | "webgpu" | "cpu",
+                }))
+              }
+            >
+              <option value="auto">Auto · prefer WebGPU</option>
+              <option value="webgpu">WebGPU</option>
+              <option value="cpu">CPU reference</option>
+            </select>
+            <p className="subtle-note">
+              Auto falls back to CPU when WebGPU is unavailable. The active
+              backend appears below Field view.
+            </p>
+            <div className="label-row">
+              <span>Wrap periodic coordinates</span>
+              <Toggle
+                label="Wrap periodic coordinates"
+                value={options.wrapPeriodic}
+                onChange={(v) => setOption("wrapPeriodic", v)}
+              />
+            </div>
+            <p className="subtle-note">
+              Uses periodic domain metadata. Original recording coordinates and
+              material traces are preserved.
+            </p>
+            <div className="label-row background-row">
+              <span>Scene background</span>
+              <div className="segmented">
+                <button
+                  className={options.background === "dark" ? "selected" : ""}
+                  onClick={() => setOption("background", "dark")}
+                >
+                  Dark
+                </button>
+                <button
+                  className={options.background === "light" ? "selected" : ""}
+                  onClick={() => setOption("background", "light")}
+                >
+                  Light
+                </button>
+              </div>
+            </div>
             <label className="remember-choice">
               <input
                 type="checkbox"
@@ -1952,62 +2141,14 @@ export default function App() {
             >
               Forget saved recording
             </button>
-            <div className="format-hints">
-              <span>HDF5 · .h5 / .hdf5</span>
-              <span>NPZ · multiple snapshots</span>
-            </div>
-            <button
-              className="text-button folder-button"
-              disabled={opening}
-              onClick={() => folderInput.current?.click()}
-            >
-              Select a folder of NPZ snapshots
-            </button>
-            {openError && (
-              <div className="form-error" role="alert">
-                {openError}
-              </div>
-            )}
-            {serviceMode && (
-              <details className="service-details">
-                <summary>Open a path through this local service</summary>
-                <form onSubmit={openSource}>
-                  <input
-                    ref={initialFocus}
-                    id="path"
-                    aria-label="Local file or directory path"
-                    className="path-input"
-                    placeholder="/path/to/trajectory.h5"
-                    value={path}
-                    onChange={(e) => setPath(e.target.value)}
-                    required
-                  />
-                  <button
-                    className="primary-button"
-                    type="submit"
-                    disabled={opening || !path.trim()}
-                  >
-                    Open server path
-                  </button>
-                </form>
-              </details>
-            )}
+
             <div className="modal-actions">
               <button
-                className="secondary-button"
-                disabled={opening}
-                onClick={() => setOpen(false)}
+                className="primary-button"
+                onClick={() => setSettingsOpen(false)}
               >
-                Cancel
+                Done
               </button>
-            </div>
-            <div className="modal-footnote">
-              <Info size={14} />
-              <span>
-                Files are read in a browser worker and are never uploaded. For
-                NPZ sequences, select measurements.json too when it contains the
-                recorded timestamps.
-              </span>
             </div>
           </section>
         </div>
@@ -2054,8 +2195,14 @@ export default function App() {
               <dd>Right drag</dd>
               <dt>Zoom</dt>
               <dd>Scroll</dd>
-              <dt>Inspect particle</dt>
-              <dd>Click</dd>
+              <dt>Pick particle tool</dt>
+              <dd>
+                <kbd>P</kbd>, then click
+              </dd>
+              <dt>Clear particle selection</dt>
+              <dd>
+                <kbd>Esc</kbd>
+              </dd>
             </dl>
             <p className="subtle-note">
               Logarithmic views show nonpositive or invalid values in gray.

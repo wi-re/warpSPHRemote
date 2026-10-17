@@ -67,6 +67,7 @@ test("saved visualization settings round-trip with the recording and forget toge
         settings: {
           ...initialGrid,
           backend: "cpu" as const,
+          quantity: "vorticity" as const,
           resolution: 128 as const,
           minCoverage: 0.3,
         },
@@ -111,7 +112,7 @@ test("old saved views remain usable; corrupt, unsupported and nonfinite settings
       fieldView: {
         mode: "unsupported",
         seeds: 1000,
-        settings: { resolution: 8192, minCoverage: NaN },
+        settings: { resolution: 8192, minCoverage: NaN, quantity: "FTLE" },
         seedMode: "picked",
         seed: [NaN, 1],
       },
@@ -124,6 +125,7 @@ test("old saved views remain usable; corrupt, unsupported and nonfinite settings
   assert.equal(view.options!.size, 1);
   assert.equal(view.fieldView!.settings.resolution, 256);
   assert.equal(view.fieldView!.settings.backend, "auto");
+  assert.equal(view.fieldView!.settings.quantity, "field");
   assert.equal(view.fieldView!.seeds, 8);
   assert.equal(view.fieldView!.seedMode, "regular");
 });

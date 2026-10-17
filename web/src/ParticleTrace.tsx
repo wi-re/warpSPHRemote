@@ -63,30 +63,36 @@ export function TraceControls({
   uid,
   supported,
   onClear,
+  compact = false,
+  hideToggle = false,
 }: {
   trace: ReturnType<typeof useParticleTrace>;
   uid: string;
   supported: boolean;
   onClear: () => void;
+  compact?: boolean;
+  hideToggle?: boolean;
 }) {
   return (
     <section className="inspector-section trace-controls">
-      <div className="section-heading">PARTICLE TRACE</div>
-      <label className="trace-enable">
-        <input
-          type="checkbox"
-          aria-label="Show particle trace"
-          checked={t.enabled}
-          disabled={!supported}
-          onChange={(e) => t.setEnabled(e.target.checked)}
-        />
-        Show trace for picked UID
-      </label>
+      {!compact && <div className="section-heading">PARTICLE TRACE</div>}
+      {!hideToggle && (
+        <label className="trace-enable">
+          <input
+            type="checkbox"
+            aria-label="Show particle trace"
+            checked={t.enabled}
+            disabled={!supported}
+            onChange={(e) => t.setEnabled(e.target.checked)}
+          />
+          Show trace for picked UID
+        </label>
+      )}
       {!supported ? (
         <p className="subtle-note">
           Recorded UIDs are required to follow particles across frames.
         </p>
-      ) : (
+      ) : !compact || t.enabled ? (
         <>
           <div className="probe-coordinates">
             <label>
@@ -123,16 +129,18 @@ export function TraceControls({
           </div>
           {uid ? (
             <>
-              <div className="probe-title">
-                <span>UID {uid}</span>
-                <button
-                  className="small-icon"
-                  aria-label="Clear particle trace"
-                  onClick={onClear}
-                >
-                  ×
-                </button>
-              </div>
+              {!compact && (
+                <div className="probe-title">
+                  <span>UID {uid}</span>
+                  <button
+                    className="small-icon"
+                    aria-label="Clear particle trace"
+                    onClick={onClear}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               <p className="subtle-note">
                 {t.busy
                   ? "Reading trace…"
@@ -157,7 +165,7 @@ export function TraceControls({
             </p>
           )}
         </>
-      )}
+      ) : null}
     </section>
   );
 }

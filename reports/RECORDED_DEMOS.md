@@ -1,9 +1,9 @@
 # Shipped solver recordings
 
-The user explicitly requested these two small trajectories in the repository to
+The user explicitly requested these three trajectories in the repository to
 share the viewer with colleagues without distributing data separately. This is
 a narrow product-data exception to the development-evidence storage contract.
-Only the two files named in `web/src/recorded-demos.json` are allowed by the
+Only the three files named in `web/src/recorded-demos.json` are allowed by the
 `.gitignore` exception. Full simulations, summaries, logs, intermediate exports
 and screenshots remain outside Git.
 
@@ -11,6 +11,7 @@ and screenshots remain outside Git.
 |---|---:|---:|---:|---:|
 | `random-wcsph-128.h5` | 16,384 fluid | 61 | 6 | 16,505,671 |
 | `sloshing-200.h5` | 10,660 total / 4,200 fluid | 71 | 7.0001 | 7,899,034 |
+| `khh-crksph-256.h5` | 65,536 fluid | 41 | 3.999181509 | 48,963,114 |
 
 The compact files use gzip level 9, byte shuffle, one-frame chunks and exact
 deduplication of arrays constant across every retained frame (supports). All
@@ -54,6 +55,25 @@ The original finer export remains available outside Git. The reduced cadence
 is intended for UI feedback and can miss short pressure peaks; do quantitative
 probe analysis on suitably sampled original recordings.
 
+## Kelvin–Helmholtz run
+
+The KHH example is a losslessly compressed, lower-cadence copy of
+`browser-demos-20261017/khh-crksph-256-energy.h5`, from the completed 256² CRKSPH
+run described in [SOLVER_DEMOS.md](SOLVER_DEMOS.md). It retains 41 whole states
+through t=3.999181509, approximately every 0.1 simulated seconds. Initial time is
+0.0003613133 (after the first solver step). Positions remain unwrapped and domain
+metadata declares periodic [0,1]². All 65,536 particles, exact UIDs, velocities,
+pressure, density, supports, masses, and global kinetic/internal/total energy
+samples are retained at matching timestamps. No values are quantized or resampled.
+
+The package is 48,963,114 bytes (46.7 MiB), down from about 186 MiB / 161 frames.
+It uses the same catalogue checksum, base-relative download path and independent
+IndexedDB cache as the other examples. All retained arrays were compared exactly
+to the energy-enabled original. Finer temporal pressure analysis should use the
+original recording rather than infer behavior between the preview frames.
+
+SHA-256: `3bdaaa14ec3ad802307e4318b024682dbd37b9d324a6484b8590b4ffbf89c87c`.
+
 ## Regenerate and verify
 
 Use a distinct external evidence directory for each run. Only generation needs
@@ -76,7 +96,19 @@ python examples/verify_demo_recording.py /path/to/browser-demos/sloshing-200.h5 
   /path/to/public-bundle/demos/sloshing-200.h5
 ```
 
-Copy the two curated bundle assets to `web/public/demos/` and its catalogue to
+Pass `--khh /path/to/browser-demos/khh-crksph-256-energy.h5` to include KHH in
+`build_recorded_demos.py`, or package only that new asset without changing the
+existing two files:
+
+```bash
+python examples/prepare_demo_recording.py /path/to/khh-crksph-256-energy.h5 \
+  /path/to/warpSPHDevelopment/remote/new-run/khh-crksph-256.h5 \
+  --interval 0.1 --compression 9 --static-constants
+python examples/verify_demo_recording.py /path/to/khh-crksph-256-energy.h5 \
+  /path/to/warpSPHDevelopment/remote/new-run/khh-crksph-256.h5
+```
+
+Copy the curated bundle assets to `web/public/demos/` and its catalogue to
 `web/src/recorded-demos.json`. Both generator and packaging output paths must be
 new. Source files are opened read-only. GPU/runtime changes can alter floating
 results, so regenerating also regenerates hashes; do not reuse stale checksums.
@@ -109,5 +141,7 @@ The original implementation retained only the last selected file. Both demo
 downloads now have separate, catalogue-versioned IndexedDB entries. Retaining
 these is independent of the last-file checkbox and does not depend on HTTP cache
 headers. See [the browser storage contract](BROWSER_FILES.md) and the concrete
-no-network verification in [VERIFICATION.md](VERIFICATION.md). The recording
-assets themselves and their hashes are unchanged.
+no-network verification in [VERIFICATION.md](VERIFICATION.md). The original two recording assets and their hashes are unchanged. The KHH addition
+uses the same cache contract; all three independent slots are covered by the cache
+tests. KHH packaging and verification evidence lives in
+`../warpSPHDevelopment/remote/khh-public-20261017/`.

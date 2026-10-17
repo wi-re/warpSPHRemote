@@ -122,3 +122,32 @@ test("particle-only playback never requests reconstruction, and invalid grid cho
   );
   assert.equal(frames, 1);
 });
+
+test("a derived velocity grid can accompany categorical particle coloring without changing its source/frame contract", async () => {
+  let requested = "";
+  const derived = {
+    ...query,
+    field: "velocities",
+    settings: { ...initialGrid, quantity: "vorticity" as const },
+  };
+  const reader = {
+    metadata: { id: "recording" },
+    frame: async (_i: number, f: string) => {
+      requested = f;
+      return frame;
+    },
+    grid: async () => result,
+  };
+  const p = await loadPresentation(
+    reader,
+    7,
+    "UIDs",
+    "both",
+    derived,
+    "derived",
+    new AbortController().signal,
+  );
+  assert.equal(requested, "UIDs");
+  assert.equal(p.field, "UIDs");
+  assert.equal(p.result, result);
+});

@@ -10,7 +10,7 @@ Commit written findings and limitations in `reports/`, reproduction code in
 `examples/`, and automated checks in `tests/`. Do not commit recorded simulation
 states, dependency directories, production bundles, or notebook outputs.
 
-Explicit product-data exception requested by the user: the two curated HDF5
+Explicit product-data exception requested by the user: the three curated HDF5
 recordings named in `web/src/recorded-demos.json` live in `web/public/demos/`
 and are committed for the public demo picker. Keep their provenance/checksums
 and regeneration instructions in `reports/RECORDED_DEMOS.md`. Full solver runs,

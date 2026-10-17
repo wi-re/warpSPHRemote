@@ -29,3 +29,31 @@ export function fixture(n = 157): RawFrame {
     test: { data: scalar, shape: [n] },
   };
 }
+
+/** A regular fluid lattice for manufactured affine-flow checks. */
+export function velocityFixture(
+  velocity: (x: number, y: number) => number[],
+  side = 36,
+): RawFrame {
+  const n = side * side,
+    positions = new Float64Array(n * 2),
+    velocities = new Float64Array(n * 2);
+  for (let y = 0; y < side; y++)
+    for (let x = 0; x < side; x++) {
+      const p = [-1 + ((x + 0.5) * 2) / side, -1 + ((y + 0.5) * 2) / side],
+        i = y * side + x;
+      positions.set(p, 2 * i);
+      velocities.set(velocity(p[0], p[1]), 2 * i);
+    }
+  return {
+    positions: { data: positions, shape: [n, 2] },
+    velocities: { data: velocities, shape: [n, 2] },
+    masses: { data: new Float64Array(n).fill((2 / side) ** 2), shape: [n] },
+    densities: { data: new Float64Array(n).fill(1), shape: [n] },
+    supports: { data: new Float64Array(n).fill(0.3), shape: [n] },
+    kinds: { data: new Int32Array(n), shape: [n] },
+  };
+}
+export const velocityDomain = {
+  domain: { min: [-1, -1], max: [1, 1], periodic: [false, false] },
+};

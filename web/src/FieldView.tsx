@@ -1,7 +1,11 @@
+import { readPreferences } from "./preferences";
 import { useEffect, useState } from "react";
 import type { Mapping, Source } from "./types";
 import {
   initialGrid,
+  derivativeQuantity,
+  gridQuantityLabel,
+  type GridQuantity,
   type FieldResult,
   type GridSettings,
   type FieldQuery,
@@ -18,9 +22,22 @@ export interface FieldPreferences {
 export function useFieldView(source: Source | undefined, seed: number[]) {
   const [mode, setMode] = useState<FieldMode>("particles"),
     [flow, setFlow] = useState(false),
-    [settings, setSettings] = useState(initialGrid),
+    [settings, setSettings] = useState<GridSettings>(() => ({
+      ...initialGrid,
+      backend: readPreferences().backend,
+    })),
     [seeds, setSeeds] = useState(8),
     [seedMode, setSeedMode] = useState<"regular" | "picked">("regular");
+  useEffect(() => {
+    if (
+      source &&
+      !source.fields.some((f) => f.name === "velocities" && f.components >= 2)
+    ) {
+      if (derivativeQuantity(settings.quantity))
+        setSettings((old) => ({ ...old, quantity: "field" }));
+      setFlow(false);
+    }
+  }, [source?.id, settings.quantity]);
   const active = source?.dimension === 2 && (mode !== "particles" || flow);
   const [pickedSeed, setPickedSeed] = useState<{
     sourceId: string;
@@ -76,9 +93,19 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
       if (!active) return null;
       return {
         index,
-        field,
-        mapping,
-        settings: { ...settings, wrapPeriodic },
+        field:
+          mode === "particles" || derivativeQuantity(settings.quantity)
+            ? "velocities"
+            : field,
+        mapping:
+          mode === "particles" || derivativeQuantity(settings.quantity)
+            ? "magnitude"
+            : mapping,
+        settings: {
+          ...settings,
+          wrapPeriodic,
+          quantity: mode === "particles" ? "field" : settings.quantity,
+        },
         streams: flow ? { seeds, steps: 400 } : null,
         seed: flow && seedMode === "picked" ? fixedSeed : undefined,
       };
@@ -88,6 +115,8 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
 export function FieldControls({
   view: v,
   dimension,
+  hasVelocity,
+  onQuantityChange,
 }: {
   view: ReturnType<typeof useFieldView> & {
     result: FieldResult | null;
@@ -95,6 +124,8 @@ export function FieldControls({
     error: string;
   };
   dimension: number | undefined;
+  hasVelocity: boolean;
+  onQuantityChange: (quantity: GridQuantity) => void;
 }) {
   const update = (patch: Partial<GridSettings>) =>
     v.setSettings((old) => ({ ...old, ...patch }));
@@ -126,30 +157,52 @@ export function FieldControls({
               type="checkbox"
               aria-label="Show instantaneous streamlines"
               checked={v.flow}
+              disabled={!hasVelocity}
               onChange={(e) => v.setFlow(e.target.checked)}
             />
             Instantaneous streamlines
           </label>
           {(v.mode !== "particles" || v.flow) && (
             <>
-              <label className="control-label" htmlFor="grid-backend">
-                Compute backend
-              </label>
-              <div className="select-wrap">
-                <select
-                  id="grid-backend"
-                  value={v.settings.backend ?? "auto"}
-                  onChange={(e) =>
-                    update({
-                      backend: e.target.value as GridSettings["backend"],
-                    })
-                  }
-                >
-                  <option value="auto">Auto · prefer WebGPU</option>
-                  <option value="webgpu">WebGPU</option>
-                  <option value="cpu">CPU reference</option>
-                </select>
-              </div>
+              {v.mode !== "particles" && (
+                <>
+                  <label className="control-label" htmlFor="grid-quantity">
+                    Grid quantity
+                  </label>
+                  <div className="select-wrap">
+                    <select
+                      id="grid-quantity"
+                      value={v.settings.quantity ?? "field"}
+                      onChange={(e) => {
+                        const quantity = e.target.value as GridQuantity;
+                        update({ quantity });
+                        onQuantityChange(quantity);
+                      }}
+                    >
+                      <option value="field">Recorded quantity</option>
+                      <option value="divergence" disabled={!hasVelocity}>
+                        Velocity divergence
+                      </option>
+                      <option value="vorticity" disabled={!hasVelocity}>
+                        Vorticity · out of plane
+                      </option>
+                    </select>
+                  </div>
+                  {derivativeQuantity(v.settings.quantity) && (
+                    <p className="subtle-note">
+                      Analytic derivative of normalized SPH velocity · velocity
+                      / length units. Linear and symmetric-log auto ranges are
+                      centered on zero. Particle overlays are neutral; picked
+                      values remain recorded.
+                    </p>
+                  )}
+                  {!hasVelocity && (
+                    <p className="subtle-note">
+                      Record velocities to enable divergence and vorticity.
+                    </p>
+                  )}
+                </>
+              )}
               <label className="control-label" htmlFor="grid-resolution">
                 Grid resolution · longest side
               </label>
@@ -263,6 +316,12 @@ export function FieldControls({
           )}
           {v.result && (
             <p className="subtle-note">
+              {derivativeQuantity(v.result.grid.quantity) && (
+                <>
+                  {gridQuantityLabel(v.result.grid.quantity)}
+                  <br />
+                </>
+              )}
               {v.result.grid.compute && (
                 <span title={v.result.grid.compute.adapter}>
                   {v.result.grid.compute.backend === "webgpu"

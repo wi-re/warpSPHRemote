@@ -1686,3 +1686,634 @@ kbd {
 .diagnostic-tabs {
   flex-wrap: wrap;
 }
+
+/* Analysis on the left, visualization on the right. */
+.workspace {
+  grid-template-columns: 300px minmax(0, 1fr) 280px;
+}
+.workspace.inspector-hidden {
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+.analysis-panel,
+.visualization-panel {
+  background: var(--panel);
+  overflow: auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.analysis-panel {
+  border-right: 1px solid var(--border);
+}
+.visualization-panel {
+  border-left: 1px solid var(--border);
+}
+.analysis-panel .inspector-title,
+.visualization-panel .inspector-title {
+  height: 46px;
+  min-height: 46px;
+}
+.analysis-panel .inspector-section {
+  padding: 17px 18px;
+}
+.analysis-panel .inspector-section > .section-heading {
+  margin-bottom: 13px;
+}
+.analysis-panel .properties {
+  gap: 9px 6px;
+}
+.analysis-panel .metric-large {
+  font-size: 25px;
+}
+.main-panel .viewport-heading {
+  height: 67px;
+  min-height: 67px;
+  padding: 0 22px;
+}
+.main-panel .viewport-heading h1 {
+  font-size: 18px;
+}
+.trajectory-trigger {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-align: left;
+  min-width: 0;
+  max-width: 260px;
+}
+.trajectory-trigger > span {
+  min-width: 0;
+}
+.trajectory-trigger strong {
+  font-weight: 550;
+  font-size: 11px;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trajectory-trigger small {
+  font-size: 9px;
+  color: var(--muted);
+  display: block;
+  margin-top: 3px;
+}
+.header-actions {
+  gap: 10px;
+  min-width: 0;
+}
+.modal {
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+}
+.settings-modal .control-label {
+  margin-top: 20px;
+}
+.settings-modal > .label-row {
+  margin-top: 23px;
+}
+.settings-modal .remember-choice {
+  margin-top: 24px;
+}
+.trajectory-picker {
+  width: 750px;
+  max-width: 100%;
+}
+.picker-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-top: 24px;
+}
+.picker-tabs button {
+  padding: 12px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.picker-tabs button[aria-selected="true"] {
+  color: var(--mint);
+  border-color: var(--mint);
+}
+.picker-panel {
+  padding-top: 16px;
+  min-height: 220px;
+}
+.picker-panel > .section-heading {
+  margin: 18px 0 10px;
+}
+.picker-panel > .subtle-note {
+  margin: 0 0 14px;
+}
+.picker-cards {
+  display: grid;
+  gap: 12px;
+}
+.picker-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  text-align: left;
+  background: #202c36;
+  min-width: 0;
+}
+.picker-card > svg:first-child {
+  color: #9fb5c6;
+}
+.picker-card > span {
+  flex: 1;
+  min-width: 0;
+}
+.picker-card strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.picker-card small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 6px;
+}
+.picker-card em {
+  display: block;
+  font-style: normal;
+  color: var(--mint);
+  font-size: 9px;
+  margin-top: 7px;
+}
+.picker-card.selected {
+  border-color: #527d69;
+  background: #233a31;
+}
+.picker-description {
+  font-size: 10px !important;
+  line-height: 1.6 !important;
+  color: var(--muted) !important;
+  margin: 7px 5px 4px !important;
+}
+.picker-empty {
+  padding: 30px 15px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--muted);
+}
+.picker-empty strong {
+  font-size: 13px;
+}
+.picker-panel .file-picker-zone {
+  margin-top: 0;
+}
+.app-shell[data-theme="light"] {
+  color-scheme: light;
+  --mint: #157a58;
+  --muted: #52697b;
+  --border: #cbd7df;
+  --panel: #f3f6f8;
+  --bg: #e8eef2;
+  color: #243946;
+  background: var(--bg);
+}
+.app-shell[data-theme="light"]
+  :is(
+    .app-header,
+    .analysis-panel,
+    .visualization-panel,
+    .diagnostics,
+    .status-bar,
+    .modal
+  ) {
+  background: #f3f6f8;
+}
+.app-shell[data-theme="light"] .main-panel {
+  background: #eaf0f4;
+}
+.app-shell[data-theme="light"]
+  :is(
+    select,
+    option,
+    .secondary-button,
+    .picker-card,
+    .source-card,
+    .path-input
+  ) {
+  background: #e6edf2;
+  color: #243946;
+  border-color: #bdccd6;
+}
+.app-shell[data-theme="light"] .primary-button {
+  background: #157a58;
+  color: white;
+}
+.app-shell[data-theme="light"]
+  :is(.picker-card.selected, .source-card.selected) {
+  background: #dfefe7;
+  border-color: #75a68e;
+}
+.app-shell[data-theme="light"]
+  :is(
+    .section-heading,
+    .control-label,
+    .label-row,
+    .properties dt,
+    .inspector-title,
+    .subtle-note,
+    .sidebar-foot,
+    .chart-note,
+    .brand-remote,
+    .header-context,
+    .version,
+    .modal p,
+    .diagnostic-progress,
+    .metric-large > span,
+    .probe-empty
+  ) {
+  color: #52697b;
+}
+.app-shell[data-theme="light"]
+  :is(
+    .metric-large,
+    .properties dd,
+    .probe-title,
+    .modal h2,
+    .range-inputs,
+    .stat-card > strong
+  ) {
+  color: #243946;
+}
+.app-shell[data-theme="light"] .stat-card {
+  background: #dfefe7;
+  border-color: #a9c8b8;
+}
+.app-shell[data-theme="light"] :is(.stat-card > span, .stat-unit) {
+  color: #426552;
+}
+.app-shell[data-theme="light"] :is(input[type="number"], .text-button) {
+  color: #285e4a;
+}
+.app-shell[data-theme="light"] .segmented {
+  background: #dce6ec;
+}
+.app-shell[data-theme="light"] .segmented button {
+  color: #52697b;
+}
+.app-shell[data-theme="light"] .segmented button.selected {
+  background: #bedccb;
+  color: #204b39;
+}
+.app-shell[data-theme="light"] .icon-button:hover {
+  background: #dce6ec;
+  color: #243946;
+}
+.app-shell[data-theme="light"] .file-picker-zone {
+  background: #e7f0ec;
+  border-color: #9bb9a9;
+  color: #285a44;
+}
+@media (max-width: 1250px) {
+  .workspace {
+    grid-template-columns: 270px minmax(0, 1fr) 260px;
+  }
+  .workspace.inspector-hidden {
+    grid-template-columns: 270px minmax(0, 1fr);
+  }
+  .header-context,
+  .version {
+    display: none;
+  }
+  .trajectory-trigger {
+    max-width: 230px;
+  }
+}
+@media (max-width: 1050px) {
+  .app-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  .workspace {
+    grid-template-columns: minmax(0, 1fr) 260px;
+    align-items: start;
+  }
+  .workspace.inspector-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .main-panel {
+    order: 0;
+    min-height: 650px;
+  }
+  .visualization-panel {
+    order: 1;
+    max-height: none;
+  }
+  .analysis-panel {
+    order: 2;
+    grid-column: 1/-1;
+    border-top: 1px solid var(--border);
+  }
+  .viewport-heading-actions > .icon-button {
+    display: inline-flex;
+  }
+}
+@media (max-width: 700px) {
+  .workspace,
+  .workspace.inspector-hidden {
+    display: flex;
+    flex-direction: column;
+  }
+  .main-panel,
+  .visualization-panel,
+  .analysis-panel {
+    width: 100%;
+  }
+  .main-panel {
+    min-height: 600px;
+  }
+  .visualization-panel {
+    border-left: 0;
+  }
+  .header-actions .trajectory-trigger {
+    max-width: 130px;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .trajectory-trigger small {
+    display: none;
+  }
+  .header-actions .secondary-button {
+    width: 30px;
+    min-width: 30px;
+  }
+  .header-actions {
+    gap: 3px;
+  }
+  .header-actions .icon-button {
+    width: 26px;
+    min-width: 26px;
+  }
+  .brand-remote {
+    display: none;
+  }
+  .picker-tabs {
+    gap: 0;
+    flex-wrap: wrap;
+  }
+  .picker-tabs button {
+    font-size: 10px;
+    padding: 10px 7px;
+  }
+  .trajectory-picker {
+    padding: 20px;
+  }
+  .picker-card {
+    padding: 13px;
+  }
+}
+
+.diagnostics {
+  height: 214px;
+  min-height: 214px;
+}
+.diagnostics.pressure-active {
+  height: 280px;
+  min-height: 280px;
+}
+.diagnostics.collapsed {
+  height: 44px;
+  min-height: 44px;
+}
+.main-panel .diagnostics-heading {
+  padding: 0 16px;
+  gap: 12px;
+}
+.diagnostics-heading .section-heading {
+  flex-shrink: 0;
+}
+.diagnostics-heading .diagnostic-progress {
+  display: none;
+}
+.diagnostics-heading > .icon-button {
+  flex-shrink: 0;
+}
+.diagnostics.collapsed .diagnostics-heading > .icon-button svg {
+  transform: rotate(180deg);
+}
+.diagnostic-tabs {
+  overflow-x: auto;
+  min-width: 0;
+  gap: 12px;
+  flex: 1;
+}
+.diagnostic-tabs button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.diagnostic-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.diagnostic-body > .chart-canvas {
+  width: 0;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+}
+.diagnostic-body > .pressure-controls {
+  width: 232px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+  border-bottom: 0;
+}
+.pressure-controls .section-heading {
+  gap: 12px;
+}
+.pressure-controls .add-probe {
+  white-space: nowrap;
+  font-size: 10px;
+}
+.pressure-controls .probe-actions {
+  flex-wrap: wrap;
+}
+.particle-card {
+  position: absolute;
+  z-index: 8;
+  right: 16px;
+  bottom: 16px;
+  width: 250px;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 65px);
+  overflow: auto;
+  padding: 12px;
+  background: #1b2934f2;
+  border: 1px solid #435767;
+  border-radius: 8px;
+  box-shadow: 0 8px 26px #0005;
+  backdrop-filter: blur(8px);
+}
+.particle-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.particle-card-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  flex: 1;
+  font-weight: 550;
+}
+.particle-card-heading .icon-button {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.particle-card > .properties {
+  margin: 10px 0 12px;
+  gap: 7px 6px;
+}
+.particle-card .trace-controls {
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+.particle-card .trace-controls > .section-heading {
+  margin-bottom: 10px;
+}
+.particle-card .probe-coordinates {
+  margin-top: 10px;
+}
+.particle-card .subtle-note {
+  font-size: 9px;
+  line-height: 1.5;
+}
+.viewport.has-particle-selection .color-legend {
+  left: 16px;
+  right: auto;
+  top: 58px;
+  bottom: auto;
+  width: 160px;
+}
+.pick-hint {
+  position: absolute;
+  left: 16px;
+  bottom: 47px;
+  z-index: 6;
+  background: #253b34e8;
+  color: #afeccc;
+  border: 1px solid #4b7561;
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 10px;
+  pointer-events: none;
+}
+.app-shell[data-theme="light"] .particle-card {
+  background: #f2f6f9f2;
+  border-color: #a7bac8;
+  color: #243946;
+}
+.app-shell[data-theme="light"] .pick-hint {
+  background: #e3f0e9e8;
+  color: #24563e;
+  border-color: #9ab9a8;
+}
+@media (max-width: 700px) {
+  .main-panel {
+    min-height: 760px;
+  }
+  .main-panel .diagnostics-heading {
+    padding: 0 12px;
+  }
+  .diagnostics-heading > .section-heading {
+    display: none;
+  }
+  .diagnostics.pressure-active {
+    height: 420px;
+    min-height: 420px;
+  }
+  .diagnostic-body {
+    flex-direction: column;
+  }
+  .diagnostic-body > .pressure-controls {
+    width: 100%;
+    max-height: 165px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .diagnostic-body > .chart-canvas {
+    width: 100%;
+    min-height: 135px;
+  }
+  .particle-card {
+    width: 220px;
+    right: 10px;
+    bottom: 12px;
+  }
+}
+
+.particle-card-heading {
+  position: sticky;
+  top: -12px;
+  background: inherit;
+  z-index: 1;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.particle-trace-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.particle-trace-toggle input {
+  accent-color: var(--mint);
+  margin: 0;
+  width: 11px;
+  height: 11px;
+}
+.app-shell[data-theme="light"]
+  :is(
+    h1,
+    .scrubber-info strong,
+    .scrubber-info .mono,
+    .scrubber-info span,
+    .inspector-bottom strong
+  ) {
+  color: #243946;
+}
+.app-shell[data-theme="light"]
+  :is(
+    .status-bar,
+    .eyebrow,
+    .diagnostic-tabs button,
+    .icon-button,
+    .inspector-bottom
+  ) {
+  color: #52697b;
+}
+.app-shell[data-theme="light"] .diagnostic-tabs button.selected {
+  color: #157a58;
+}
+.app-shell[data-theme="light"] .play-button {
+  color: white;
+}
+.app-shell[data-theme="light"] .icon-button.active {
+  background: #c5dfd1;
+  color: #1d6248;
+}

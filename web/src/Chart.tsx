@@ -15,11 +15,13 @@ export function DiagnosticChart({
   source,
   metric,
   index,
+  theme = "dark",
 }: {
   rows: Diagnostic[];
   source: Source;
   metric: DiagnosticMetric;
   index: number;
+  theme?: "dark" | "light";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -53,7 +55,10 @@ export function DiagnosticChart({
             connectgaps: false,
             type: "scatter",
             mode: "lines",
-            line: { color: "#75ddba", width: 2 },
+            line: {
+              color: theme === "light" ? "#187c5c" : "#75ddba",
+              width: 2,
+            },
             fill: "tozeroy",
             fillcolor: "rgba(117,221,186,.045)",
             hovertemplate: "%{x:.4g}<br>%{y:.5g}<extra></extra>",
@@ -63,7 +68,10 @@ export function DiagnosticChart({
             y: current?.[metric] != null ? [current[metric]] : [],
             type: "scatter",
             mode: "markers",
-            marker: { color: "#b6ffe1", size: 7 },
+            marker: {
+              color: theme === "light" ? "#187c5c" : "#b6ffe1",
+              size: 7,
+            },
             hoverinfo: "skip",
           },
         ],
@@ -72,7 +80,7 @@ export function DiagnosticChart({
           plot_bgcolor: "transparent",
           font: {
             family: "Inter, system-ui, sans-serif",
-            color: "#8394a5",
+            color: theme === "light" ? "#526776" : "#8394a5",
             size: 10,
           },
           margin: { l: 61, r: 20, t: 10, b: 28 },
@@ -85,7 +93,7 @@ export function DiagnosticChart({
                   : "Frame index",
               font: { size: 10 },
             },
-            gridcolor: "#26313b",
+            gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
             zeroline: false,
             range: [
               source.times[0],
@@ -96,7 +104,7 @@ export function DiagnosticChart({
             fixedrange: false,
           },
           yaxis: {
-            gridcolor: "#26313b",
+            gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
             zeroline: false,
             tickformat: ".3~g",
             autorange: true,
@@ -121,7 +129,7 @@ export function DiagnosticChart({
     return () => {
       cancelled = true;
     };
-  }, [rows, source, metric, index]);
+  }, [rows, source, metric, index, theme]);
   return (
     <div
       className="chart-canvas"
@@ -137,11 +145,13 @@ export function PressureChart({
   source,
   index,
   onSeek,
+  theme = "dark",
 }: {
   rows: ProbeSample[];
   probes: PressureProbe[];
   source: Source;
   index: number;
+  theme?: "dark" | "light";
   onSeek: (index: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null),
@@ -179,7 +189,9 @@ export function PressureChart({
           type: "scatter",
           connectgaps: false,
           line: {
-            color: ["#75ddba", "#e6b873", "#91aafa", "#e78aab"][c],
+            color: (theme === "light"
+              ? ["#187c5c", "#956014", "#4865ba", "#a53e68"]
+              : ["#75ddba", "#e6b873", "#91aafa", "#e78aab"])[c],
             width: 2,
           },
           marker: { size: 4 },
@@ -191,7 +203,7 @@ export function PressureChart({
           plot_bgcolor: "transparent",
           font: {
             family: "Inter,system-ui,sans-serif",
-            color: "#8394a5",
+            color: theme === "light" ? "#526776" : "#8394a5",
             size: 10,
           },
           margin: { l: 61, r: 20, t: 10, b: 28 },
@@ -205,11 +217,15 @@ export function PressureChart({
                   : "Frame index",
               font: { size: 10 },
             },
-            gridcolor: "#26313b",
+            gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
             zeroline: false,
             range: [source.times[0], source.times.at(-1) || 1],
           },
-          yaxis: { gridcolor: "#26313b", zeroline: false, tickformat: ".3~g" },
+          yaxis: {
+            gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
+            zeroline: false,
+            tickformat: ".3~g",
+          },
           shapes: [
             {
               type: "line",
@@ -237,7 +253,7 @@ export function PressureChart({
     return () => {
       cancelled = true;
     };
-  }, [rows, probes, source, index]);
+  }, [rows, probes, source, index, theme]);
   return (
     <div
       className="chart-canvas"

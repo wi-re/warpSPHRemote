@@ -1,4 +1,9 @@
-import type { FieldResult } from "./sources/grid";
+import {
+  matchesFieldResult,
+  derivativeQuantity,
+  gridQuantityLabel,
+  type FieldResult,
+} from "./sources/grid";
 import { mappedCoordinate, mappedPosition } from "./spatial";
 import { traceSegments, type TraceSample } from "./sources/traces";
 import * as THREE from "three";
@@ -48,6 +53,7 @@ uniform float uMax;
 uniform float uNorm;
 uniform float u3D;
 uniform float uLight;
+uniform float uNeutral;
 varying vec2 vUv;
 varying float vValue;
 varying float vKind;
@@ -63,7 +69,7 @@ void main(){
  float t=clamp((transformValue(vValue)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);
  vec3 color=texture2D(uPalette,vec2(t,0.5)).rgb;
  if(invalid)color=vec3(0.5);
- if(vKind>0.5)color=uLight>0.5?vec3(0.45,0.50,0.55):vec3(0.43,0.51,0.59);
+ if(vKind>0.5||uNeutral>0.5)color=uLight>0.5?vec3(0.45,0.50,0.55):vec3(0.43,0.51,0.59);
  if(vSelected>0.5&&r2>0.5)color=vec3(1.0);
  if(u3D>0.5){
   float z=sqrt(max(0.0,1.0-r2));
@@ -114,6 +120,11 @@ export class ParticleRenderer {
   private down = [0, 0];
   private bounds = new THREE.Box3();
   private span = 1;
+  picking = false;
+  setPicking(enabled: boolean) {
+    this.picking = enabled;
+    this.renderer.domElement.style.cursor = enabled ? "crosshair" : "grab";
+  }
   onPick: (index: number) => void = () => {};
   onRender: (ms: number) => void = () => {};
   constructor(private host: HTMLElement) {
@@ -162,6 +173,7 @@ export class ParticleRenderer {
         uClip: { value: 0 },
         u3D: { value: 0 },
         uLight: { value: 0 },
+        uNeutral: { value: 0 },
         uSelected: { value: -1 },
       },
     });
@@ -222,6 +234,7 @@ export class ParticleRenderer {
   };
   private pointerUp = (e: PointerEvent) => {
     if (
+      this.picking &&
       e.button === 0 &&
       Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) < 4
     )
@@ -370,19 +383,21 @@ export class ParticleRenderer {
     result: FieldResult | null,
     mode: "particles" | "grid" | "both",
   ) {
-    const valid =
-      result &&
-      result.sourceId === this.source?.id &&
-      result.grid.index === this.frame?.index &&
-      result.field === this.field &&
-      result.mapping === this.options?.mapping;
+    const valid = matchesFieldResult(
+      result,
+      this.source?.id,
+      this.frame?.index,
+      this.field,
+      this.options?.mapping,
+      mode,
+    );
     this.fieldResult = valid ? result : null;
     this.fieldMode = mode;
     this.fieldPlane.visible = !!valid && mode !== "particles";
     this.material.uniforms.uFluid.value = valid && mode === "grid" ? 0 : 1;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      `${valid && mode !== "particles" ? (mode === "grid" ? "Scalar grid" : "Grid and particles") : "Particles"}, frame ${(this.frame?.index ?? 0) + 1}${valid && result?.lines.length ? ", instantaneous streamlines" : ""}. Drag to pan in 2D or rotate in 3D; scroll to zoom; click to inspect.`,
+      `${valid && mode !== "particles" ? (mode === "grid" ? "Scalar grid" : "Grid and particles") : "Particles"}, frame ${(this.frame?.index ?? 0) + 1}${valid && derivativeQuantity(result?.grid.quantity) && mode !== "particles" ? `, ${gridQuantityLabel(result?.grid.quantity)}` : ""}${valid && result?.lines.length ? ", instantaneous streamlines" : ""}. Drag to pan in 2D or rotate in 3D; scroll to zoom; click to inspect.`,
     );
     for (const child of [...this.flowLines.children]) {
       const line = child as THREE.LineSegments;
@@ -529,14 +544,21 @@ export class ParticleRenderer {
     ) {
       this.values = scalarValues(this.frame, this.field, options.mapping);
       this.updateAttribute("aValue", this.values, 1);
+      const matched = matchesFieldResult(
+        this.fieldResult,
+        this.source?.id,
+        this.frame.index,
+        this.field,
+        options.mapping,
+        this.fieldMode,
+      );
       const gridValues =
-        this.fieldResult &&
-        this.fieldMode !== "particles" &&
-        this.fieldResult.grid.index === this.frame.index &&
-        this.fieldResult.field === this.field &&
-        this.fieldResult.mapping === options.mapping
-          ? this.fieldResult.grid.values
+        matched && this.fieldMode !== "particles"
+          ? this.fieldResult!.grid.values
           : null;
+      const derived =
+        !!gridValues && derivativeQuantity(this.fieldResult?.grid.quantity);
+      this.material.uniforms.uNeutral.value = derived ? 1 : 0;
       const auto = scalarRange(
         gridValues ?? this.values,
         gridValues ? undefined : this.frame.arrays.kinds?.data,
@@ -551,7 +573,12 @@ export class ParticleRenderer {
         (options.normalization !== "log" || options.min > 0);
       this.range = fixed
         ? [options.min, options.max]
-        : (auto ?? (options.normalization === "log" ? [0.1, 1] : [0, 1]));
+        : derived && auto && options.normalization !== "log"
+          ? [
+              -Math.max(Math.abs(auto[0]), Math.abs(auto[1])),
+              Math.max(Math.abs(auto[0]), Math.abs(auto[1])),
+            ]
+          : (auto ?? (options.normalization === "log" ? [0.1, 1] : [0, 1]));
     }
     if (old?.palette !== options.palette) {
       this.texture.image.data.set(paletteBytes(options.palette));

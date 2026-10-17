@@ -2,12 +2,22 @@ import type { RawFrame } from "./core";
 import { validateRaw } from "./core";
 import type { Mapping, Source } from "../types";
 import { mappedCoordinate, spatialDifference, type Domain } from "../spatial";
+export type GridQuantity = "field" | "divergence" | "vorticity";
+export const derivativeQuantity = (quantity?: GridQuantity) =>
+  quantity === "divergence" || quantity === "vorticity";
+export const gridQuantityLabel = (quantity?: GridQuantity) =>
+  quantity === "divergence"
+    ? "Velocity divergence · ∂u/∂x + ∂v/∂y"
+    : quantity === "vorticity"
+      ? "Vorticity · ∂v/∂x − ∂u/∂y"
+      : "Recorded quantity";
 export interface GridSettings {
   resolution: 128 | 256 | 512;
   kernel: "wendland2" | "wendland4";
   minCoverage: number;
   wrapPeriodic: boolean;
   backend?: "auto" | "webgpu" | "cpu";
+  quantity?: GridQuantity;
 }
 export const initialGrid: GridSettings = {
   resolution: 256,
@@ -15,8 +25,10 @@ export const initialGrid: GridSettings = {
   minCoverage: 0.2,
   wrapPeriodic: true,
   backend: "auto",
+  quantity: "field",
 };
 export interface GridData {
+  quantity?: GridQuantity;
   index: number;
   time: number;
   width: number;
@@ -55,6 +67,9 @@ export function gridLayout(
   if (
     ![128, 256, 512].includes(settings.resolution) ||
     !["wendland2", "wendland4"].includes(settings.kernel) ||
+    !["field", "divergence", "vorticity"].includes(
+      settings.quantity ?? "field",
+    ) ||
     !(settings.minCoverage > 0 && settings.minCoverage <= 1)
   )
     throw new Error("Invalid grid settings.");
@@ -70,6 +85,10 @@ export function gridLayout(
   if (!f || !m || !rho || !h)
     throw new Error(
       "Grid reconstruction requires the selected field, masses, densities and supports.",
+    );
+  if (derivativeQuantity(settings.quantity) && (!v || (v.shape[1] ?? 0) < 2))
+    throw new Error(
+      "Velocity derivatives require a recorded two-component velocity array.",
     );
   const n = p.shape[0],
     components = f.shape[1] ?? 1,
@@ -139,6 +158,10 @@ export function reconstructGrid(
     velocitySums = new Float64Array(count * 2),
     bad = new Uint8Array(count),
     badV = new Uint8Array(count);
+  const derived = derivativeQuantity(settings.quantity),
+    gradientSums = derived ? new Float64Array(count * 4) : null,
+    weightGradients = derived ? new Float64Array(count * 2) : null;
+  let anchor: number[] | undefined;
   let excluded = 0,
     work = 0;
   for (let i = 0; i < n; i++) {
@@ -157,6 +180,14 @@ export function reconstructGrid(
       excluded++;
       continue;
     }
+    const vx = Number(v?.data[i * (v.shape[1] ?? 0)]),
+      vy = Number(v?.data[i * (v.shape[1] ?? 0) + 1]),
+      goodVelocity =
+        !!v &&
+        (v.shape[1] ?? 0) >= 2 &&
+        Number.isFinite(vx) &&
+        Number.isFinite(vy);
+    if (goodVelocity && !anchor) anchor = [vx, vy];
     const x = mappedCoordinate(Number(p.data[2 * i]), 0, domain),
       y = mappedCoordinate(Number(p.data[2 * i + 1]), 1, domain);
     let x0 = Math.floor((x - support - lo[0]) / dx - 0.5),
@@ -201,13 +232,29 @@ export function reconstructGrid(
           if (!Number.isFinite(value)) bad[j] = 1;
           else sums[j * components + c] += weight * value;
         }
-        if (v && (v.shape[1] ?? 0) >= 2)
-          for (let c = 0; c < 2; c++) {
-            const value = Number(v.data[i * v.shape[1] + c]);
-            if (!Number.isFinite(value)) badV[j] = 1;
-            else velocitySums[2 * j + c] += weight * value;
+        if (goodVelocity) {
+          // Accumulate offsets to a common velocity anchor for translation stability.
+          const ux = vx - anchor![0],
+            uy = vy - anchor![1];
+          velocitySums[2 * j] += weight * ux;
+          velocitySums[2 * j + 1] += weight * uy;
+          if (derived) {
+            const t = 1 - q,
+              factor =
+                (norm / (support * support)) *
+                (settings.kernel === "wendland2"
+                  ? -20 * t ** 3
+                  : -(56 / 3) * (5 * q + 1) * t ** 5),
+              wx = factor * rx,
+              wy = factor * ry;
+            weightGradients![2 * j] += wx;
+            weightGradients![2 * j + 1] += wy;
+            gradientSums![4 * j] += ux * wx;
+            gradientSums![4 * j + 1] += ux * wy;
+            gradientSums![4 * j + 2] += uy * wx;
+            gradientSums![4 * j + 3] += uy * wy;
           }
-        else badV[j] = 1;
+        } else badV[j] = 1;
       }
   }
   const values = new Float32Array(count).fill(NaN),
@@ -216,7 +263,7 @@ export function reconstructGrid(
     velocityValid = new Uint8Array(count);
   for (let i = 0; i < count; i++) {
     if (weights[i] < settings.minCoverage) continue;
-    if (!bad[i]) {
+    if (!derived && !bad[i]) {
       let value = 0;
       if (components === 1) value = sums[i] / weights[i];
       else if (mapping === "magnitude") {
@@ -227,8 +274,27 @@ export function reconstructGrid(
       if (Number.isFinite(value)) values[i] = value;
     }
     if (!badV[i]) {
-      velocity[2 * i] = velocitySums[2 * i] / weights[i];
-      velocity[2 * i + 1] = velocitySums[2 * i + 1] / weights[i];
+      const ux = velocitySums[2 * i] / weights[i],
+        uy = velocitySums[2 * i + 1] / weights[i];
+      velocity[2 * i] = anchor![0] + ux;
+      velocity[2 * i + 1] = anchor![1] + uy;
+      if (derived) {
+        const gx = weightGradients![2 * i],
+          gy = weightGradients![2 * i + 1];
+        const value =
+          settings.quantity === "divergence"
+            ? (gradientSums![4 * i] -
+                ux * gx +
+                gradientSums![4 * i + 3] -
+                uy * gy) /
+              weights[i]
+            : (gradientSums![4 * i + 2] -
+                uy * gx -
+                gradientSums![4 * i + 1] +
+                ux * gy) /
+              weights[i];
+        if (Number.isFinite(value)) values[i] = value;
+      }
       if (
         Number.isFinite(velocity[2 * i]) &&
         Number.isFinite(velocity[2 * i + 1])
@@ -237,6 +303,7 @@ export function reconstructGrid(
     }
   }
   return {
+    quantity: settings.quantity ?? "field",
     index,
     time,
     width,
@@ -361,4 +428,20 @@ export interface FieldResult {
   field: string;
   mapping: Mapping;
   sourceId: string;
+}
+
+/** Validate a completed grid against the current particle presentation. */
+export function matchesFieldResult(
+  result: FieldResult | null,
+  sourceId: string | undefined,
+  index: number | undefined,
+  field: string,
+  mapping: Mapping | undefined,
+  mode: "particles" | "grid" | "both",
+) {
+  if (!result || result.sourceId !== sourceId || result.grid.index !== index)
+    return false;
+  if (derivativeQuantity(result.grid.quantity) || mode === "particles")
+    return result.field === "velocities" && result.mapping === "magnitude";
+  return result.field === field && result.mapping === mapping;
 }

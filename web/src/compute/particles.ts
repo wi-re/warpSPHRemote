@@ -127,5 +127,11 @@ export function prepareParticles(
   pf[12] = settings.minCoverage;
   pu[13] = components;
   pu[14] = mapping === "magnitude" ? 4 : { x: 0, y: 1, z: 2 }[mapping];
+  pu[15] =
+    settings.quantity === "divergence"
+      ? 1
+      : settings.quantity === "vorticity"
+        ? 2
+        : 0;
   return { data, params, layout, bins, excluded, valid, candidates };
 }

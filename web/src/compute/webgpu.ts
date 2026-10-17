@@ -46,13 +46,18 @@ export class GPUGrid {
             .join("; "),
         );
       const pipelines = await Promise.all(
-        ["clear", "countParticles", "scatterParticles", "reconstruct"].map(
-          (entryPoint) =>
-            device.createComputePipelineAsync({
-              label: entryPoint,
-              layout: "auto",
-              compute: { module, entryPoint },
-            }),
+        [
+          "clear",
+          "countParticles",
+          "scatterParticles",
+          "reconstruct",
+          "differentiate",
+        ].map((entryPoint) =>
+          device.createComputePipelineAsync({
+            label: entryPoint,
+            layout: "auto",
+            compute: { module, entryPoint },
+          }),
         ),
       );
       const scan = await GPUScan.create(device);
@@ -181,6 +186,8 @@ export class GPUGrid {
       });
       // Separate passes establish the required global ordering between index writes and traversal.
       for (const [i, pipeline] of this.pipelines.entries()) {
+        if (i === 4 && (!settings.quantity || settings.quantity === "field"))
+          continue;
         if (i === 2)
           this.scan.encode(
             encoder,
@@ -232,7 +239,10 @@ export class GPUGrid {
           throw new Error("GPU coverage overflowed f32 precision.");
         if (flags & 1) {
           let value = f[off];
-          if (g.components > 1) {
+          if (
+            (!settings.quantity || settings.quantity === "field") &&
+            g.components > 1
+          ) {
             if (mapping === "magnitude") {
               value = 0;
               for (let c = 0; c < g.components; c++) value += f[off + c] ** 2;
@@ -251,6 +261,7 @@ export class GPUGrid {
         }
       }
       return {
+        quantity: settings.quantity ?? "field",
         index,
         time,
         width: g.width,

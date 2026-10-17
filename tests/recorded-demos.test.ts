@@ -84,8 +84,8 @@ test("failed, incomplete, corrupt and cancelled demo downloads cannot open as re
   );
 });
 test("shipped demo catalogue matches the committed HDF5 files and checksums", () => {
-  assert.equal(recordedDemos.length, 2);
-  assert.equal(new Set(recordedDemos.map((d) => d.id)).size, 2);
+  assert.equal(recordedDemos.length, 3);
+  assert.equal(new Set(recordedDemos.map((d) => d.id)).size, 3);
   for (const demo of recordedDemos) {
     assert.ok(demo.id.startsWith("demo-"));
     assert.match(demo.file, /^[a-z0-9-]+\.h5$/);
@@ -96,7 +96,46 @@ test("shipped demo catalogue matches the committed HDF5 files and checksums", ()
     assert.equal(createHash("sha256").update(data).digest("hex"), demo.sha256);
     assert.deepEqual(data.subarray(0, 8), Buffer.from(bytes));
     assert.ok(
-      demo.frames >= 50 && demo.particles >= 10000 && demo.duration >= 5,
+      demo.frames >= 40 && demo.particles >= 10000 && demo.duration >= 3.9,
     );
+  }
+});
+
+test("the shipped KHH example opens with periodic domain, exact identities and recorded internal/total energies", async () => {
+  const h5 = await import("h5wasm/node");
+  await h5.ready;
+  const { HDF5Source } = await import("../web/src/sources/hdf5");
+  const demo = recordedDemos.find((d) => d.id === "demo-khh-crksph-256")!;
+  const file = new h5.File(
+    new URL(`../web/public/demos/${demo.file}`, import.meta.url).pathname,
+    "r",
+  );
+  const source = new HDF5Source(demo.id, demo.name, file, h5);
+  try {
+    const metadata = await source.metadata();
+    assert.equal(metadata.frames, demo.frames);
+    assert.equal(metadata.frames, 41);
+    assert.equal(metadata.times.at(-1), demo.duration);
+    assert.equal(metadata.dimension, 2);
+    assert.equal(metadata.identity, "UIDs");
+    assert.equal(metadata.internalEnergyAvailable, true);
+    assert.deepEqual(metadata.domain?.periodic, [true, true]);
+    for (const index of [0, 20, 40]) {
+      const raw = await source.read(index, "velocities");
+      assert.equal(raw.positions.shape[0], 65536);
+      assert.equal(new Set(Array.from(raw.UIDs.data, String)).size, 65536);
+      const diagnostic = source.recordedDiagnostic(index)!;
+      assert.ok(Number.isFinite(diagnostic.internalEnergy));
+      assert.ok(Number.isFinite(diagnostic.totalEnergy));
+      assert.ok(
+        Math.abs(
+          diagnostic.totalEnergy! -
+            diagnostic.internalEnergy! -
+            diagnostic.kineticEnergy!,
+        ) < 1e-8,
+      );
+    }
+  } finally {
+    source.close();
   }
 });

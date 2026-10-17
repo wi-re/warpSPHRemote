@@ -2,7 +2,7 @@ import { GPUScan } from "./scan";
 import { reconstructGrid, initialGrid, type GridData } from "../sources/grid";
 import { GPUGrid } from "./webgpu";
 
-import { fixture } from "./fixtures";
+import { fixture, velocityFixture, velocityDomain } from "./fixtures";
 export function compare(a: GridData, b: GridData) {
   let worst = 0,
     cells = 0;
@@ -18,7 +18,13 @@ export function compare(a: GridData, b: GridData) {
       const error = Math.abs(x - y) / (1 + Math.abs(y));
       worst = Math.max(worst, error);
       cells++;
-      if (error > 8e-5)
+      if (
+        error >
+        (key === "values" &&
+        (a.quantity === "divergence" || a.quantity === "vorticity")
+          ? 3e-4
+          : 8e-5)
+      )
         throw new Error(
           `${key}[${i}]: relative-to-(1+|reference|) error ${error}`,
         );
@@ -168,6 +174,115 @@ export async function runChecks(report: (row: string) => void) {
       report(
         `PASS ${scenario}: max scaled error ${result.worst.toExponential(2)}`,
       );
+    }
+    for (const kernel of ["wendland2", "wendland4"] as const) {
+      for (const resolution of [128, 256, 512] as const)
+        for (const quantity of ["divergence", "vorticity"] as const) {
+          const raw = fixture(),
+            source = {
+              domain: { min: [0, 0], max: [1, 1], periodic: [true, true] },
+            },
+            settings = { ...initialGrid, kernel, resolution, quantity };
+          const cpu = reconstructGrid(
+              raw,
+              source,
+              "velocities",
+              "magnitude",
+              settings,
+            ),
+            actual = await gpu.reconstruct(
+              raw,
+              source,
+              "velocities",
+              "magnitude",
+              settings,
+            ),
+            result = compare(actual, cpu);
+          passed++;
+          report(
+            `PASS ${kernel} ${resolution}² ${quantity}: max scaled error ${result.worst.toExponential(2)}`,
+          );
+        }
+      for (const [name, velocity, div, curl] of [
+        ["translation", () => [1e6, -2e6], 0, 0],
+        ["expansion", (x: number, y: number) => [2 * x, 3 * y], 5, 0],
+        ["rotation", (x: number, y: number) => [-2 * y, 2 * x], 0, 4],
+        ["shear", (_x: number, y: number) => [y, 0], 0, -1],
+      ] as const)
+        for (const [quantity, expected] of [
+          ["divergence", div],
+          ["vorticity", curl],
+        ] as const) {
+          const raw = velocityFixture(velocity),
+            settings = {
+              ...initialGrid,
+              resolution: 128 as const,
+              kernel,
+              quantity,
+            },
+            cpu = reconstructGrid(
+              raw,
+              velocityDomain,
+              "velocities",
+              "magnitude",
+              settings,
+            ),
+            actual = await gpu.reconstruct(
+              raw,
+              velocityDomain,
+              "velocities",
+              "magnitude",
+              settings,
+            ),
+            result = compare(actual, cpu);
+          for (let y = 40; y < 88; y++)
+            for (let x = 40; x < 88; x++)
+              if (
+                Math.abs(actual.values[y * 128 + x] - expected) >
+                (name === "translation" ? 1e-8 : 0.015)
+              )
+                throw new Error(`${name} analytic ${quantity} mismatch`);
+          passed++;
+          report(
+            `PASS ${kernel} ${name} ${quantity}: max scaled error ${result.worst.toExponential(2)}`,
+          );
+        }
+      for (const scenario of [
+        "invalid-velocity",
+        "invalid-field",
+        "partial-periodic",
+      ] as const)
+        for (const quantity of ["divergence", "vorticity"] as const) {
+          const raw = fixture(),
+            source = {
+              domain: {
+                min: [0, 0],
+                max: [1, 1],
+                periodic: [true, scenario !== "partial-periodic"],
+              },
+            };
+          if (scenario === "invalid-velocity") raw.velocities.data[2] = NaN;
+          if (scenario === "invalid-field") raw.test.data[2] = NaN;
+          const settings = {
+              ...initialGrid,
+              resolution: 128 as const,
+              kernel,
+              quantity,
+            },
+            cpu = reconstructGrid(raw, source, "test", "magnitude", settings),
+            actual = await gpu.reconstruct(
+              raw,
+              source,
+              "test",
+              "magnitude",
+              settings,
+            ),
+            result = compare(actual, cpu);
+          passed++;
+          report(
+            `PASS ${kernel} ${scenario} ${quantity}: max scaled error ${result.worst.toExponential(2)}`,
+          );
+        }
     }
     report(`COMPLETE: ${passed} GPU/CPU parity cases passed.`);
   } finally {

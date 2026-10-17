@@ -226,6 +226,7 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       flow: f.flow === true,
       settings: {
         backend: oneOf(g.backend, ["auto", "webgpu", "cpu"] as const, "auto"),
+        quantity: oneOf(g.quantity, ["field", "divergence", "vorticity"] as const, "field"),
         resolution: oneOf(
           g.resolution,
           [128, 256, 512] as const,

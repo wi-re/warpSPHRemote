@@ -124,13 +124,25 @@ outside the checkout, e.g. `../warpSPHDevelopment/remote/webgpu-grid-20261017/`.
 This run's raw logs and browser captures live there; disposable staging evidence
 is under `/tmp/warpsph-gpu-evidence-20261017/`.
 
+## Velocity-derivative and UI follow-up
+
+Normalized velocity divergence and 2D vorticity are now implemented on both CPU
+and WebGPU, with an additional pass over the same compact cell ranges. See
+[VELOCITY_DERIVATIVES.md](VELOCITY_DERIVATIVES.md) for formulas, tolerances, analytic
+checks and real-recording timings. The original grid interpolation measurements
+above remain historical evidence from that first milestone.
+
+Backend selection moved to **Viewer settings** alongside wrapping/theme/retention.
+Frame metrics are left, visualization controls right, charts/probe tools below,
+and picking/trace controls are on the plot. [UI contract](VIEWER_UI.md).
+
 ## Remaining work
 
 The current renderer is WebGL2. Readback and a second texture upload remain, and
 instantaneous streamline integration is still CPU. This is the first compute
 milestone, not a fully GPU-resident renderer. A common WebGPU compute/render device,
 general point-query buffers, reusable CSR adjacency when multiple operators need
-it, gradients/divergence/curl and their core parity fixtures, 3D sparse indexing,
+it, general particle operators/gradients and their core parity fixtures, 3D sparse indexing,
 LIC, temporal flow maps and FTLE/LCS remain on the roadmap. A sparse occupied-cell
 hash index becomes useful when the dense table is wasteful, especially in 3D.
 

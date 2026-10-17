@@ -14,16 +14,15 @@ recording, or select NPZ snapshots. Data is read on your device; recording conte
 are not uploaded. **Remember last recording** retains one browser-local copy
 and restores its frame, field, colormap, range, appearance, grid/streamline
 settings, diagnostic tab and playback preferences on refresh. Playback resumes paused. You can disable this or
-choose **Forget saved recording** in the open dialog. Reopen the original file
+choose **Forget saved recording** in Viewer settings. Reopen the original file
 to read later changes; browser quota, private-session and eviction rules apply.
-The sidebar also offers **Decaying random flow · WCSPH** (16,384 particles,
-61 frames, 15.7 MiB) and **Sloshing tank** (71 frames, 7.5 MiB). Click either
-under **Try a solver recording** to download and open it directly; no file
-exchange or simulator setup is needed. The downloaded recording can also be
-remembered across refresh. Each demo download is also kept in its own IndexedDB
-cache: both stay available as **Saved on this device**, even when another file is
-selected or last-recording restoration is disabled. The 2D/3D analytical examples
-need no download.
+**Open trajectory → Example recordings** offers **Decaying random flow · WCSPH**
+(16,384 particles, 61 frames, 15.7 MiB), **Sloshing tank** (71 frames, 7.5 MiB),
+and **Kelvin–Helmholtz · CRKSPH** (65,536 particles, 41 frames, 46.7 MiB).
+Choose one to download and open it directly; no file exchange or simulator setup
+is needed. Each download has its own IndexedDB cache and stays available under
+**On this device**, even when another file is selected or last-recording
+restoration is disabled. Analytical 2D/3D demos need no download.
 See [demo provenance and regeneration](reports/RECORDED_DEMOS.md).
 
 The static app needs no Python, Torch, Warp, Jupyter, or simulator installation.
@@ -121,7 +120,8 @@ are explicitly identified as such; particle selection is confined to one frame.
   Sampling uses fixed stored coordinates; no tank-motion transform is inferred.
   Periodic domains use minimum-image distances. Probes and histories are session-local; live acquisition and history export remain future work.
 - Optional per-particle UID trace with separate past/future recorded-frame windows.
-  Enable **Show trace for picked UID**, then click a particle. Past and future
+  Activate the plot's **Pick a particle (P)** tool, select a particle, and enable
+  **Trace** in its bottom-right card. Past and future
   segments use different colors; missing identities and periodic seam crossings
   break the line. The target UID persists when stepping or seeking.
 - Viewer-side periodic coordinate mapping from explicit domain metadata. Toggle
@@ -160,8 +160,28 @@ first frame's particle extent, not a reconstructed physical domain. Camera state
 is retained through ordinary frame changes; **Fit** fits the current frame.
 
 Keyboard: **Space** play/pause, **← / →** step, **F** fit. In 2D, left drag pans;
-in 3D, left drag orbits and right drag pans. Scroll zooms; click probes a particle.
-Controls are also available in the in-app help dialog.
+in 3D, left drag orbits and right drag pans. Scroll zooms; activate the plot's picker to inspect a particle.
+Use **P** to arm the particle picker and **Esc** to clear selection. The picked
+particle card follows exact UIDs across frames and exposes its past/future trace
+window. Controls are also available in the in-app help dialog.
+
+## Viewer layout
+
+Frame information and numerical diagnostics are on the left, visualization controls
+on the right, and linked diagnostic charts along the bottom. Pressure-probe creation
+and history generation live under the bottom **Pressure probes** tab. Pick a particle
+from the plot toolbar to open its floating information/trace card.
+
+The current trajectory appears at the top right. **Open trajectory** has separate
+sections for example recordings (WCSPH, sloshing, KHH), analytical demos, files already
+on this device, and local files/folders. Downloads are cached independently.
+**Viewer settings** contains wrapping, backend selection, theme and file retention.
+Theme/backend/wrapping preferences also persist without an open recording.
+
+**Field view → Grid quantity** offers velocity divergence and signed 2D vorticity.
+These are analytic derivatives of the normalized SPH velocity reconstruction, with
+coverage masks and zero-centered automatic ranges. They are distinct from solver
+operators; see [numerical contract](reports/VELOCITY_DERIVATIVES.md).
 
 ## Checks and dependencies
 
@@ -178,7 +198,7 @@ the National Institute of Standards and Technology, in a dedicated worker using
 Emscripten WORKERFS. NPZ decompression uses fflate. Bundled notices are shipped
 under `licenses/`. No external fonts or CDN runtime dependencies are used.
 WebGPU compute reconstructs 2D grids in the file worker using compact cell ranges
-and device-side prefix scans. **FIELD VIEW → Compute backend** defaults to Auto,
+and device-side prefix scans. **Viewer settings → Compute backend** defaults to Auto,
 with explicit WebGPU and CPU reference choices. The selected backend is saved
 with visualization settings. Auto reports any CPU fallback. Drawing still uses
 WebGL2, so this first compute layer reads completed grids back for rendering and

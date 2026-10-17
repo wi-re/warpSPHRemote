@@ -137,12 +137,12 @@ export function PressureControls({
       <div className="section-heading">
         PRESSURE PROBES{" "}
         <button
-          className="small-icon"
+          className="text-button add-probe"
           onClick={c.add}
           disabled={!c.supported || c.probes.length >= 4}
           aria-label="Add pressure probe"
         >
-          +
+          + Add probe
         </button>
       </div>
       {!c.supported ? (

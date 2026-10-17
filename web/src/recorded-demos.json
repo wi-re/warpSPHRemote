@@ -20,5 +20,16 @@
     "particles": 10660,
     "frames": 71,
     "duration": 7.000099999997024
+  },
+  {
+    "id": "demo-khh-crksph-256",
+    "name": "Kelvin–Helmholtz · CRKSPH",
+    "description": "Periodic compressible CRKSPH shear instability. 65,536 particles, unwrapped coordinates and recorded energy diagnostics; 41 saved states through t ≈ 4.",
+    "file": "khh-crksph-256.h5",
+    "bytes": 48963114,
+    "sha256": "3bdaaa14ec3ad802307e4318b024682dbd37b9d324a6484b8590b4ffbf89c87c",
+    "particles": 65536,
+    "frames": 41,
+    "duration": 3.9991815090179443
   }
 ]

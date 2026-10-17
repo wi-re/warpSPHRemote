@@ -29,11 +29,13 @@ const fixture = (id: string, text: string) => ({
   } satisfies RecordedDemo,
   file: new File([text], `${id}.h5`, { lastModified: 0 }),
 });
-test("both demos reopen from persistent slots with zero downloads after the last recording changes or is forgotten", async () => {
+test("all three demos reopen from persistent slots with zero downloads after the last recording changes or is forgotten", async () => {
   const a = fixture("random", "random bytes"),
-    b = fixture("sloshing", "sloshing bytes");
+    b = fixture("sloshing", "sloshing bytes"),
+    c = fixture("khh", "khh bytes");
   await forgetDemo(a.demo.id);
   await forgetDemo(b.demo.id);
+  await forgetDemo(c.demo.id);
   let downloads = 0,
     cached = 0;
   const stages: DemoStage[] = [];
@@ -42,7 +44,7 @@ test("both demos reopen from persistent slots with zero downloads after the last
     cached: () => cached++,
     storageIssue: (message: string) => assert.fail(message),
   };
-  for (const item of [a, b]) {
+  for (const item of [a, b, c]) {
     await loadDemoFile(
       item.demo,
       new AbortController().signal,
@@ -54,12 +56,12 @@ test("both demos reopen from persistent slots with zero downloads after the last
     );
     await rememberFiles([item.file]);
   }
-  assert.equal(downloads, 2);
+  assert.equal(downloads, 3);
   assert.ok(stages.includes("saving"));
   await rememberFiles([new File(["unrelated local file"], "other.h5")]);
-  await forgetFiles(); // disabling last-file restoration must not evict either demo
+  await forgetFiles(); // disabling last-file restoration must not evict any demo
   stages.length = 0;
-  for (const item of [a, b]) {
+  for (const item of [a, b, c]) {
     const file = await loadDemoFile(
       item.demo,
       new AbortController().signal,
@@ -70,13 +72,22 @@ test("both demos reopen from persistent slots with zero downloads after the last
     );
     assert.equal(await file.text(), await item.file.text());
   }
-  assert.equal(downloads, 2);
-  assert.equal(cached, 4);
-  assert.deepEqual(stages, ["checking", "opening", "checking", "opening"]);
+  assert.equal(downloads, 3);
+  assert.equal(cached, 6);
+  assert.deepEqual(stages, [
+    "checking",
+    "opening",
+    "checking",
+    "opening",
+    "checking",
+    "opening",
+  ]);
   await forgetDemo(a.demo.id);
   assert.equal(await recallDemo(a.demo), null);
   assert.ok(await recallDemo(b.demo));
+  assert.ok(await recallDemo(c.demo));
   await forgetDemo(b.demo.id);
+  await forgetDemo(c.demo.id);
 });
 test("catalogue revisions invalidate saved demos, while invalid bytes never replace a good cached version", async () => {
   const old = fixture("versioned", "version one"),

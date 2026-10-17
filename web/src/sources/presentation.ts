@@ -27,7 +27,7 @@ export async function loadPresentation(
   signal: AbortSignal,
 ): Promise<Presentation> {
   signal.throwIfAborted();
-  if (query && categoricalField(field))
+  if (query && categoricalField(query.field))
     throw new Error(
       "Select a continuous scalar or vector quantity for reconstruction.",
     );
