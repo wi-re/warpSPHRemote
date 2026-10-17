@@ -132,6 +132,24 @@ export function FieldControls({
           </label>
           {(v.mode !== "particles" || v.flow) && (
             <>
+              <label className="control-label" htmlFor="grid-backend">
+                Compute backend
+              </label>
+              <div className="select-wrap">
+                <select
+                  id="grid-backend"
+                  value={v.settings.backend ?? "auto"}
+                  onChange={(e) =>
+                    update({
+                      backend: e.target.value as GridSettings["backend"],
+                    })
+                  }
+                >
+                  <option value="auto">Auto · prefer WebGPU</option>
+                  <option value="webgpu">WebGPU</option>
+                  <option value="cpu">CPU reference</option>
+                </select>
+              </div>
               <label className="control-label" htmlFor="grid-resolution">
                 Grid resolution · longest side
               </label>
@@ -245,6 +263,22 @@ export function FieldControls({
           )}
           {v.result && (
             <p className="subtle-note">
+              {v.result.grid.compute && (
+                <span title={v.result.grid.compute.adapter}>
+                  {v.result.grid.compute.backend === "webgpu"
+                    ? "WebGPU"
+                    : "CPU"}{" "}
+                  · {v.result.grid.compute.milliseconds.toFixed(1)} ms
+                  reconstruction
+                  <br />
+                </span>
+              )}
+              {v.result.grid.compute?.reason && (
+                <span>
+                  CPU fallback: {v.result.grid.compute.reason}
+                  <br />
+                </span>
+              )}
               {v.result.grid.width} × {v.result.grid.height} cells ·{" "}
               {v.result.lines.length / 6} streamline segments
               {v.result.grid.excluded

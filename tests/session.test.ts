@@ -66,6 +66,7 @@ test("saved visualization settings round-trip with the recording and forget toge
         flow: true,
         settings: {
           ...initialGrid,
+          backend: "cpu" as const,
           resolution: 128 as const,
           minCoverage: 0.3,
         },
@@ -122,6 +123,7 @@ test("old saved views remain usable; corrupt, unsupported and nonfinite settings
   assert.equal(view.options!.range, "frame");
   assert.equal(view.options!.size, 1);
   assert.equal(view.fieldView!.settings.resolution, 256);
+  assert.equal(view.fieldView!.settings.backend, "auto");
   assert.equal(view.fieldView!.seeds, 8);
   assert.equal(view.fieldView!.seedMode, "regular");
 });

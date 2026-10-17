@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test": "node --import tsx --test --test-isolation=none tests/*.test.ts"
+    "test": "node --import tsx --test --test-isolation=none tests/*.test.ts",
+    "test:gpu": "node examples/check-webgpu.mjs",
+    "bench:gpu": "node examples/check-webgpu.mjs --recordings"
   },
   "dependencies": {
     "fflate": "^0.8.3",
@@ -22,11 +24,14 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/three": "^0.180.0",
+    "@webgpu/types": "^0.1.74",
+    "esbuild": "^0.28.2",
     "fake-indexeddb": "^6.2.6",
     "prettier": "^3.9.10",
     "tsx": "^4.20.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.10"
+    "vite": "^7.1.10",
+    "webgpu": "^0.6.2"
   },
   "engines": {
     "node": ">=22.12.0"

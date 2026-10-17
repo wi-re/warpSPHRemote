@@ -169,14 +169,24 @@ supply gradients/tangent state or whether reconstruction error is acceptable.
 5. FTLE fields and LCS overlays, with measured compute/memory costs.
 6. More advanced Lyapunov/LCS methods and live acquisition requirements.
 
-## WebGPU compute foundation (proposed, not implemented)
+## WebGPU compute foundation (first grid milestone implemented)
 
 Use warpSPHCore as the numerical specification for a **selected forward-operator
 subset**. Implement WGSL kernels with a shared typed browser API and parity
 fixtures; do not introduce Python/Warp runtime dependencies or promise a literal
 translation of its dispatch, autograd, JVP/HVP and simulator machinery.
 
-The first WebGPU milestone should precede expensive LIC/FTLE field work:
+The first grid milestone is implemented and measured; see [WEBGPU.md](WEBGPU.md).
+It supplies packed local-coordinate buffers, GPU cell counting, hierarchical
+exclusive scans, contiguous particle reordering, direct cell traversal and masked
+Wendland C2/C4 grid interpolation. Auto/explicit backends work in the reader worker.
+No linked lists or fixed neighbour capacity remain. The bounded dense 2D cell table
+is not a literal port of the core's sparse occupied-cell hash table.
+
+The following remains the broader operator roadmap. CSR adjacency, general point
+queries, gradients/divergence/curl/Laplacians, correction variants, LIC/FTLE and a
+shared WebGPU renderer are **not implemented by the initial grid milestone**:
+
 
 1. Define buffer/parameter contracts: SoA positions, supports, mass/density,
    field values, kind masks, query/reference sets, domain and support conventions.

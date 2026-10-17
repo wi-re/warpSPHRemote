@@ -1,9 +1,5 @@
-import {
-  reconstructGrid,
-  streamlines,
-  type FieldQuery,
-  type FieldResult,
-} from "./grid";
+import { GridBackend } from "../compute/backend";
+import { streamlines, type FieldQuery, type FieldResult } from "./grid";
 import { tracePosition, type TraceSample } from "./traces";
 import {
   samplePressures,
@@ -170,6 +166,7 @@ export class BrowserSource implements TrajectorySource {
   }
 }
 export class ServiceSource implements TrajectorySource {
+  private gridBackend = new GridBackend();
   constructor(public metadata: Source) {}
   async frame(index: number, field: string, signal?: AbortSignal) {
     const r = await fetch(
@@ -231,7 +228,7 @@ export class ServiceSource implements TrajectorySource {
       frame.arrays.velocities = (
         await this.frame(query.index, "velocities", signal)
       ).arrays.velocities;
-    const grid = reconstructGrid(
+    const grid = await this.gridBackend.reconstruct(
       frame.arrays,
       this.metadata,
       query.field,
@@ -239,6 +236,7 @@ export class ServiceSource implements TrajectorySource {
       query.settings,
       query.index,
       frame.time,
+      signal,
     );
     return {
       grid,
@@ -254,5 +252,7 @@ export class ServiceSource implements TrajectorySource {
         : new Float32Array(),
     };
   }
-  close() {}
+  close() {
+    void this.gridBackend.close();
+  }
 }

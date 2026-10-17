@@ -79,3 +79,7 @@ python examples/prepare_demo_recording.py /path/to/raw/trajectory.h5 \
 
 This finalization needs only NumPy and h5py. Periodic coordinate mapping belongs
 to the visualizer; recordings intentionally keep unwrapped positions.
+
+Real WebGPU checks and recording benchmarks use `npm run test:gpu` and
+`npm run bench:gpu`; see [WebGPU validation](WEBGPU.md) for device requirements,
+current limits and timing definitions. Write their logs outside Git as well.

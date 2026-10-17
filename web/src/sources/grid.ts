@@ -7,12 +7,14 @@ export interface GridSettings {
   kernel: "wendland2" | "wendland4";
   minCoverage: number;
   wrapPeriodic: boolean;
+  backend?: "auto" | "webgpu" | "cpu";
 }
 export const initialGrid: GridSettings = {
   resolution: 256,
   kernel: "wendland2",
   minCoverage: 0.2,
   wrapPeriodic: true,
+  backend: "auto",
 };
 export interface GridData {
   index: number;
@@ -26,19 +28,23 @@ export interface GridData {
   coverage: Float32Array;
   velocityValid: Uint8Array;
   excluded: number;
+  compute?: {
+    backend: "webgpu" | "cpu";
+    milliseconds: number;
+    reason?: string;
+    adapter?: string;
+  };
 }
 export const categoricalField = (name: string) =>
   ["kinds", "UIDs", "materials"].includes(name);
-/** Shepard-normalized SPH reconstruction. supports are compact cutoff radii. */
-export function reconstructGrid(
+/** Shared geometry/validation for the f64 CPU and f32 GPU implementations. */
+export function gridLayout(
   raw: RawFrame,
   source: Pick<Source, "domain">,
   field: string,
   mapping: Mapping,
   settings: GridSettings,
-  index = 0,
-  time = 0,
-): GridData {
+) {
   validateRaw(raw);
   if (raw.positions.shape[1] !== 2)
     throw new Error("Grid reconstruction currently supports 2D recordings.");
@@ -102,6 +108,29 @@ export function reconstructGrid(
     );
   if (!Number.isFinite(span) || span <= 0)
     throw new Error("Grid bounds are not finite.");
+  return { n, components, component, lo, hi, periodic, domain, width, height };
+}
+/** Shepard-normalized SPH reconstruction. supports are compact cutoff radii. */
+export function reconstructGrid(
+  raw: RawFrame,
+  source: Pick<Source, "domain">,
+  field: string,
+  mapping: Mapping,
+  settings: GridSettings,
+  index = 0,
+  time = 0,
+): GridData {
+  const { n, components, component, lo, hi, periodic, domain, width, height } =
+    gridLayout(raw, source, field, mapping, settings);
+  const {
+      positions: p,
+      masses: m,
+      densities: rho,
+      supports: h,
+      kinds: k,
+    } = raw,
+    f = raw[field],
+    v = raw.velocities;
   const dx = (hi[0] - lo[0]) / width,
     dy = (hi[1] - lo[1]) / height,
     count = width * height;

@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { reconstructGrid, streamlines, type GridData } from "./grid";
+import { streamlines, type GridData } from "./grid";
 import { tracePosition } from "./traces";
 import {
   DemoSource,
@@ -12,6 +12,8 @@ import { samplePressures } from "./probes";
 import { NPZSource } from "./npz";
 import { HDF5Source } from "./hdf5";
 
+import { GridBackend } from "../compute/backend";
+const gridBackend = new GridBackend();
 let source: RawSource | undefined;
 let hasSpecificEnergy = false,
   hasVelocity = false;
@@ -170,7 +172,7 @@ self.onmessage = async (event: MessageEvent) => {
             ...raw,
             velocities: (await read(args.index, "velocities")).velocities,
           };
-        grid = reconstructGrid(
+        grid = await gridBackend.reconstruct(
           raw,
           source,
           args.field,

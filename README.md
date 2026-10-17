@@ -177,7 +177,22 @@ charts. HDF5 decoding uses [h5wasm](https://github.com/usnistgov/h5wasm), develo
 the National Institute of Standards and Technology, in a dedicated worker using
 Emscripten WORKERFS. NPZ decompression uses fflate. Bundled notices are shipped
 under `licenses/`. No external fonts or CDN runtime dependencies are used.
-The renderer currently uses WebGL2; WebGPU is future work.
+WebGPU compute reconstructs 2D grids in the file worker using compact cell ranges
+and device-side prefix scans. **FIELD VIEW → Compute backend** defaults to Auto,
+with explicit WebGPU and CPU reference choices. The selected backend is saved
+with visualization settings. Auto reports any CPU fallback. Drawing still uses
+WebGL2, so this first compute layer reads completed grids back for rendering and
+CPU streamline integration. See [WebGPU implementation and timings](reports/WEBGPU.md).
+
+Optional real-GPU checks (Dawn, a supported GPU/driver required):
+
+```bash
+npm run test:gpu
+npm run bench:gpu
+```
+
+The browser also provides `?gpu-check=1` to run the numerical suite in a worker
+on the client's adapter. No simulator, Python, or application server is required.
 
 [Roadmap: LIC, material tracks, FTLE/LCS and WebGPU operators](reports/ROADMAP.md),
 [architecture and scope](reports/ARCHITECTURE.md),

@@ -225,6 +225,7 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       mode: oneOf(f.mode, ["particles", "grid", "both"] as const, "particles"),
       flow: f.flow === true,
       settings: {
+        backend: oneOf(g.backend, ["auto", "webgpu", "cpu"] as const, "auto"),
         resolution: oneOf(
           g.resolution,
           [128, 256, 512] as const,
