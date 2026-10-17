@@ -68,3 +68,11 @@ only the recorded global energies, not an inferred per-particle distribution.
 python examples/add_recorded_energies.py /path/to/khh.h5 \
   /path/to/same-run/diagnostics.json /path/to/new-energy-copy.h5
 ```
+
+## Shipped colleague demos
+
+The new periodic 128² random WCSPH run and a smaller lossless selection of the
+existing sloshing run are now shipped in the static app as explicitly requested
+product data. See [RECORDED_DEMOS.md](RECORDED_DEMOS.md) for their exact parameters,
+sizes, hashes, storage exception, checks and regeneration commands. The full KHH
+recording and all raw evidence remain external.

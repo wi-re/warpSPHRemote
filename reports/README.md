@@ -1,8 +1,11 @@
 # Evidence storage
 
 Written findings, known limitations, and regeneration instructions belong here.
-Generated recordings, screenshots, profiles, measurements, logs, and built bundles
-do not belong in Git. Use `../warpSPHDevelopment/remote/<distinct-run>/`, or
+Generated screenshots, profiles, measurements, logs, and built bundles do not
+belong in Git. The user explicitly requested two small shipped trajectory assets
+in `web/public/demos/`; those catalogue entries are the product-data exception.
+Their source runs and intermediate recordings still remain outside Git. See
+[provenance and regeneration](RECORDED_DEMOS.md). Use `../warpSPHDevelopment/remote/<distinct-run>/`, or
 `$WARPSPH_DEVELOPMENT_ROOT/remote/<distinct-run>/`. Disposable checks can use `/tmp`.
 
 The initial browser verification used

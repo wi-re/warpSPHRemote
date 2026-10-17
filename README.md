@@ -16,7 +16,12 @@ and restores its frame, field, colormap, range, appearance, grid/streamline
 settings, diagnostic tab and playback preferences on refresh. Playback resumes paused. You can disable this or
 choose **Forget saved recording** in the open dialog. Reopen the original file
 to read later changes; browser quota, private-session and eviction rules apply.
-The built-in 2D/3D analytical examples require no files.
+The sidebar also offers **Decaying random flow · WCSPH** (16,384 particles,
+61 frames, 15.7 MiB) and **Sloshing tank** (71 frames, 7.5 MiB). Click either
+under **Try a solver recording** to download and open it directly; no file
+exchange or simulator setup is needed. The downloaded recording can also be
+remembered across refresh. The 2D/3D analytical examples need no download.
+See [demo provenance and regeneration](reports/RECORDED_DEMOS.md).
 
 The static app needs no Python, Torch, Warp, Jupyter, or simulator installation.
 WebGL2 and WebAssembly must be available in the browser.

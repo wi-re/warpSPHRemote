@@ -262,7 +262,7 @@ svg {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-height: 205px;
+  max-height: 250px;
   overflow: auto;
 }
 .source-card {
@@ -312,6 +312,46 @@ svg {
 }
 .source-card small {
   color: #99aebb;
+  font-size: 10px;
+}
+.recorded-demo-library {
+  margin-top: 16px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border);
+}
+.recorded-demo-library > .section-heading {
+  margin: 0 4px 6px;
+}
+.recorded-demo-library > .subtle-note {
+  margin: 0 4px 7px;
+}
+.recorded-demo-card {
+  border-color: #30414c;
+  margin: 5px 0;
+}
+.recorded-demo-card:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.recorded-demo-card small {
+  white-space: normal;
+  line-height: 1.5;
+}
+.demo-download {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10px;
+  padding: 3px 9px 10px;
+  color: #99aebb;
+}
+.demo-download progress {
+  width: 100%;
+  height: 5px;
+  accent-color: var(--mint);
+}
+.demo-download button {
+  margin-left: auto;
   font-size: 10px;
 }
 .selected-dot {

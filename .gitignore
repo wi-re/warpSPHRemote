@@ -7,6 +7,8 @@ __pycache__/
 *.pyc
 output/
 *.h5
+!web/public/demos/random-wcsph-128.h5
+!web/public/demos/sloshing-200.h5
 *.hdf5
 *.npz
 *.png

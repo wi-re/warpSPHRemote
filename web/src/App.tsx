@@ -1,4 +1,10 @@
 import { useFieldView, FieldControls } from "./FieldView";
+import {
+  recordedDemos,
+  downloadDemo,
+  demoSize,
+  type RecordedDemo,
+} from "./recordedDemos";
 import { loadPresentation, type Presentation } from "./sources/presentation";
 import {
   rememberFiles,
@@ -149,6 +155,17 @@ export default function App() {
     interactions = useRef(0),
     saveSequence = useRef(0);
   const [activeFileKey, setActiveFileKey] = useState("");
+  const demoAbort = useRef<AbortController | null>(null);
+  const [demoDownload, setDemoDownload] = useState<{
+    id: string;
+    received: number;
+  } | null>(null);
+  const [demoError, setDemoError] = useState("");
+  const cancelDemo = () => {
+    demoAbort.current?.abort();
+    demoAbort.current = null;
+    setDemoDownload(null);
+  };
   const persistFiles = (files: File[]) => {
     if (!rememberRef.current) return;
     const sequence = ++saveSequence.current;
@@ -231,6 +248,8 @@ export default function App() {
   playingRef.current = playing;
   const chooseSource = (s: Source, automatic = false) => {
     if (!automatic) interactions.current++;
+    cancelDemo();
+    setDemoError("");
     const files = localFiles.current.get(s.id);
     setActiveFileKey(files ? fileKey(files) : "");
     if (files && !automatic) persistFiles(files);
@@ -287,7 +306,24 @@ export default function App() {
               rememberRef.current
             ) {
               setStorageStatus("Restoring last recording…");
-              const reader = await BrowserSource.open(saved.files);
+              const demo = recordedDemos.find(
+                (d) =>
+                  saved.files.length === 1 &&
+                  saved.files[0].name === d.file &&
+                  saved.files[0].size === d.bytes &&
+                  saved.files[0].lastModified === 0,
+              );
+              const reader = await BrowserSource.open(
+                saved.files,
+                undefined,
+                demo?.id,
+              );
+              if (demo)
+                reader.metadata = {
+                  ...reader.metadata,
+                  name: demo.name,
+                  format: "Recorded demo",
+                };
               if (
                 disposed ||
                 interactions.current !== 0 ||
@@ -350,6 +386,7 @@ export default function App() {
     folderInput.current?.setAttribute("webkitdirectory", "");
     return () => {
       disposed = true;
+      demoAbort.current?.abort();
       for (const reader of registry.current.values()) reader.close();
       registry.current.clear();
     };
@@ -604,8 +641,51 @@ export default function App() {
       setOpening(false);
     }
   };
+  const openRecordedDemo = async (demo: RecordedDemo) => {
+    interactions.current++;
+    cancelDemo();
+    setDemoError("");
+    const existing = registry.current.get(demo.id);
+    if (existing) {
+      chooseSource(existing.metadata);
+      return;
+    }
+    const abort = new AbortController();
+    demoAbort.current = abort;
+    setDemoDownload({ id: demo.id, received: 0 });
+    try {
+      const file = await downloadDemo(demo, abort.signal, (received) => {
+        if (!abort.signal.aborted) setDemoDownload({ id: demo.id, received });
+      });
+      const reader = await BrowserSource.open([file], undefined, demo.id);
+      if (abort.signal.aborted) {
+        reader.close();
+        return;
+      }
+      reader.metadata = {
+        ...reader.metadata,
+        name: demo.name,
+        format: "Recorded demo",
+      };
+      registry.current.set(demo.id, reader);
+      localFiles.current.set(demo.id, [file]);
+      setSources((old) => [...old, reader.metadata]);
+      demoAbort.current = null;
+      setDemoDownload(null);
+      chooseSource(reader.metadata);
+    } catch (e) {
+      if (!abort.signal.aborted)
+        setDemoError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (demoAbort.current === abort) {
+        demoAbort.current = null;
+        setDemoDownload(null);
+      }
+    }
+  };
   const openFiles = async (files: File[]) => {
     interactions.current++;
+    cancelDemo();
     if (openingRef.current) return;
     if (!files.length) return;
     openingRef.current = true;
@@ -834,7 +914,7 @@ export default function App() {
                     <strong>{friendlyName(s)}</strong>
                     <small>
                       {s.dimension}D · {s.frames} frames
-                      {s.format === "Analytical demo" ? " · demo" : ""}
+                      {s.format.endsWith("demo") ? " · demo" : ""}
                     </small>
                   </span>
                   {s.id === sourceId && <span className="selected-dot" />}
@@ -844,6 +924,70 @@ export default function App() {
                 <p className="muted">Drop a local recording to get started.</p>
               )}
             </div>
+            {!serviceMode &&
+              recordedDemos.some(
+                (d) => !sources.some((s) => s.id === d.id),
+              ) && (
+                <div className="recorded-demo-library">
+                  <div className="section-heading">TRY A SOLVER RECORDING</div>
+                  <p className="subtle-note">
+                    Real simulations · no local file needed
+                  </p>
+                  {recordedDemos
+                    .filter((d) => !sources.some((s) => s.id === d.id))
+                    .map((demo) => (
+                      <div key={demo.id}>
+                        <button
+                          className="source-card recorded-demo-card"
+                          disabled={opening || demoDownload?.id === demo.id}
+                          onClick={() => void openRecordedDemo(demo)}
+                          title={demo.description}
+                          aria-label={`Load demo: ${demo.name}`}
+                        >
+                          <span className="source-icon">
+                            {demoDownload?.id === demo.id ? (
+                              <LoaderCircle size={17} className="spin" />
+                            ) : (
+                              <ArrowDownToLine size={17} />
+                            )}
+                          </span>
+                          <span className="source-card-text">
+                            <strong>{demo.name}</strong>
+                            <small>
+                              {demo.particles.toLocaleString()} particles ·{" "}
+                              {demo.frames} frames · {demoSize(demo.bytes)}
+                            </small>
+                          </span>
+                        </button>
+                        {demoDownload?.id === demo.id && (
+                          <div className="demo-download" role="status">
+                            <progress
+                              aria-label={`Downloading ${demo.name}`}
+                              max={demo.bytes}
+                              value={demoDownload.received}
+                            />
+                            <span>
+                              {demoDownload.received >= demo.bytes
+                                ? "Opening recording…"
+                                : `${Math.round((100 * demoDownload.received) / demo.bytes)}% downloaded`}
+                            </span>
+                            <button
+                              className="text-button"
+                              onClick={cancelDemo}
+                            >
+                              Cancel download
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  {demoError && (
+                    <p className="inline-error" role="alert">
+                      {demoError}
+                    </p>
+                  )}
+                </div>
+              )}
           </section>
           <button
             className="mobile-settings secondary-button"
@@ -1095,11 +1239,13 @@ export default function App() {
               </h1>
             </div>
             <div className="viewport-heading-actions">
-              {source && !source.id.startsWith("demo-") && (
-                <IconButton label="Close trajectory" onClick={closeCurrent}>
-                  <X size={16} />
-                </IconButton>
-              )}
+              {source &&
+                (source.format === "Recorded demo" ||
+                  !source.id.startsWith("demo-")) && (
+                  <IconButton label="Close trajectory" onClick={closeCurrent}>
+                    <X size={16} />
+                  </IconButton>
+                )}
               <span className="dimension-badge">
                 {source?.dimension ?? "—"}D PARTICLES
               </span>

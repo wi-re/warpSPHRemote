@@ -13,9 +13,12 @@ from pathlib import Path
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--case', choices=['khh', 'sloshing'], required=True)
+    p.add_argument('--case', choices=['khh', 'sloshing', 'random'], required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--duration', type=float)
+    p.add_argument('--nx', type=int, help='particles per axis (case default otherwise)')
+    p.add_argument('--seed', type=int, default=20261017, help='random-flow noise seed')
+    p.add_argument('--viscosity', type=float, default=0.005, help='random-flow kinematic viscosity')
     p.add_argument('--interval', type=float, default=0.025)
     args = p.parse_args()
     if args.interval <= 0:
@@ -29,9 +32,15 @@ def main():
     if args.case == 'khh':
         from warpSPH.cases.compressible.kelvinHelmholtz import kelvinHelmholtzCase as case
         nx, duration = 256, 4.0
-    else:
+    elif args.case == 'sloshing':
         from warpSPH.cases.freeSurface.sloshingTank import sloshingTankCase as case
         nx, duration = 200, 7.0
+    else:
+        from warpSPH.cases.periodic.randomFlow import randomFlowCase as case
+        nx, duration = 128, 6.0
+    nx = args.nx if args.nx is not None else nx
+    if nx < 2 or args.viscosity < 0:
+        p.error('nx must be >= 2 and viscosity nonnegative')
     duration = args.duration if args.duration is not None else duration
     old_step = case.postStep
     output = h5py.File(args.output / 'trajectory.h5', 'w')
@@ -114,10 +123,17 @@ def main():
             print(json.dumps(dict(case=args.case, step=step, time=float(state.t), frames=count)), flush=True)
             last_progress = now
 
+    params = dict(seed=args.seed, bounded=False, obstacle=False,
+                  inviscid=False, nu=args.viscosity) if args.case == 'random' else {}
+    if args.case == 'random':
+        output.attrs.update(seed=args.seed, kinematicViscosity=args.viscosity,
+                            initialVelocity='tileable divergence-free Perlin potential; max speed 1',
+                            description='Periodic 2D decaying random WCSPH (deltaSPH), no forcing')
     try:
-        result = run(replace(case, postStep=post_step), nx=nx, tLimit=duration,
+        recorded_case = replace(case, postStep=post_step)
+        result = run(recorded_case, nx=nx, tLimit=duration,
                      plot=False, store=False, show=False, holdPlot=False, progress=False,
-                     device='cuda', stallDtSteps=500, stallProgress=1e-5)
+                     device='cuda', params=params, stallDtSteps=500, stallProgress=1e-5)
         capture(result.ctx, result.state, force=True)
         result.ctx.spec.save(str(args.output / 'caseSpec.json'))
         summary = dict(case=case.name, scheme=str(result.ctx.scheme), nx=nx,
@@ -125,7 +141,10 @@ def main():
                        requestedDuration=duration, exportInterval=args.interval,
                        wallSeconds=result.wallTime, diverged=result.diverged,
                        stopReason=result.stopReason, velocityAlarms=result.velocityAlarms,
-                       pressureUnits='stored solver units', firstFrameIsAfterFirstStep=True)
+                       pressureUnits='stored solver units', firstFrameIsAfterFirstStep=True,
+                       seed=args.seed if args.case == 'random' else None,
+                       kinematicViscosity=args.viscosity if args.case == 'random' else None,
+                       fixedSoundSpeed=float(result.ctx.schemeConfig.fluid.fixedSoundSpeed) if args.case == 'random' else None)
         output.attrs.update(completed=not result.diverged and result.stopReason is None,
                             steps=result.nSteps, wallSeconds=result.wallTime)
         (args.output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')

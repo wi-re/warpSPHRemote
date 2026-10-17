@@ -185,3 +185,18 @@ seed policy/count/fixed position, diagnostic tab, playback speed and loop. Legac
 frame/field-only records remain readable. Unsupported/nonfinite stored settings
 fall back safely. Playback restores paused; camera, pressure probes and temporal
 UID selections/windows are not persisted yet. Forget removes both file and view.
+
+## Shipped solver recordings
+
+The static demo catalogue has two explicit downloads: seeded decaying WCSPH
+random flow and the sloshing tank. The UI shows particle/frame counts and size
+before download. They use the same HDF5 worker, rendering and diagnostics paths
+as local files. Downloads honor the configured Pages base path and support
+progress, cancellation, size checks and SHA-256 verification. No trajectories
+are prefetched on first visit. A selected demo can be retained as the one local
+copy when remembering is enabled; refresh uses that copy and restores settings
+without downloading again. Closing a recorded demo releases its worker and
+returns its download card. Analytical demos remain always available.
+
+These two curated product data files are intentionally committed; full solver
+outputs remain outside Git. See [their provenance](RECORDED_DEMOS.md).

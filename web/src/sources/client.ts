@@ -70,14 +70,14 @@ export class BrowserSource implements TrajectorySource {
       this.fail(new Error(event.message || "The file reader worker failed."));
     };
   }
-  static async open(files: File[], demo?: 2 | 3): Promise<BrowserSource> {
+  static async open(
+    files: File[],
+    demo?: 2 | 3,
+    sourceId: string = crypto.randomUUID(),
+  ): Promise<BrowserSource> {
     const source = new BrowserSource();
     try {
-      source.metadata = await source.call(
-        "open",
-        { files, demo, sourceId: crypto.randomUUID() },
-        0,
-      );
+      source.metadata = await source.call("open", { files, demo, sourceId }, 0);
       return source;
     } catch (e) {
       source.close();
