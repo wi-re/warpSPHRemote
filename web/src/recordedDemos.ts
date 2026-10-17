@@ -1,4 +1,5 @@
 import catalogue from "./recorded-demos.json";
+import { cacheDemo, recallDemo } from "./session";
 
 export interface RecordedDemo {
   id: string;
@@ -14,6 +15,52 @@ export interface RecordedDemo {
 export const recordedDemos = catalogue as RecordedDemo[];
 export const demoSize = (bytes: number) =>
   `${(bytes / 1048576).toFixed(1)} MiB`;
+
+export type DemoStage = "checking" | "downloading" | "saving" | "opening";
+/** Reopen a previously verified demo without making any network request. */
+export async function loadDemoFile(
+  demo: RecordedDemo,
+  signal: AbortSignal,
+  events: {
+    stage: (stage: DemoStage, received?: number) => void;
+    cached: () => void;
+    storageIssue: (message: string) => void;
+  },
+  transport: typeof downloadDemo = downloadDemo,
+): Promise<File> {
+  signal.throwIfAborted();
+  events.stage("checking");
+  let file: File | null = null;
+  try {
+    file = await recallDemo(demo);
+  } catch {
+    events.storageIssue(
+      "Browser storage is unavailable; this demo may need downloading again after refresh.",
+    );
+  }
+  signal.throwIfAborted();
+  if (file) events.cached();
+  else {
+    events.stage("downloading", 0);
+    file = await transport(demo, signal, (received) =>
+      events.stage("downloading", received),
+    );
+    signal.throwIfAborted();
+    events.stage("saving", demo.bytes);
+    try {
+      await cacheDemo(demo, file);
+      if (!signal.aborted) events.cached();
+    } catch (e) {
+      if (!signal.aborted)
+        events.storageIssue(
+          `Could not save this demo on the device: ${e instanceof Error ? e.message : String(e)}. It can still be viewed.`,
+        );
+    }
+  }
+  signal.throwIfAborted();
+  events.stage("opening", demo.bytes);
+  return file;
+}
 
 /** Download explicitly selected product data; never fetch trajectories at startup.
  * Use the deployed base path, including GitHub Pages repository subdirectories.

@@ -102,3 +102,12 @@ checks loaded both through their demo buttons without a file picker, reconstruct
 grids/streamlines and read their diagnostic histories. Random-flow refresh
 restored t=3, grid mode and streamline settings with one source entry and no
 duplicate download card. No browser warnings/errors were returned.
+
+## Persistent download cache follow-up
+
+The original implementation retained only the last selected file. Both demo
+downloads now have separate, catalogue-versioned IndexedDB entries. Retaining
+these is independent of the last-file checkbox and does not depend on HTTP cache
+headers. See [the browser storage contract](BROWSER_FILES.md) and the concrete
+no-network verification in [VERIFICATION.md](VERIFICATION.md). The recording
+assets themselves and their hashes are unchanged.

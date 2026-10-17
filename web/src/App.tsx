@@ -1,9 +1,10 @@
 import { useFieldView, FieldControls } from "./FieldView";
 import {
   recordedDemos,
-  downloadDemo,
+  loadDemoFile,
   demoSize,
   type RecordedDemo,
+  type DemoStage,
 } from "./recordedDemos";
 import { loadPresentation, type Presentation } from "./sources/presentation";
 import {
@@ -15,6 +16,8 @@ import {
   fileKey,
   recallView,
   saveView,
+  cacheDemo,
+  recallDemo,
 } from "./session";
 import type { DiagnosticMetric } from "./types";
 import { useParticleTrace, TraceControls } from "./ParticleTrace";
@@ -159,8 +162,13 @@ export default function App() {
   const [demoDownload, setDemoDownload] = useState<{
     id: string;
     received: number;
+    stage: DemoStage;
   } | null>(null);
   const [demoError, setDemoError] = useState("");
+  const [cachedDemos, setCachedDemos] = useState<Set<string>>(() => new Set());
+  const [demoCacheError, setDemoCacheError] = useState("");
+  const markDemoCached = (id: string) =>
+    setCachedDemos((old) => new Set([...old, id]));
   const cancelDemo = () => {
     demoAbort.current?.abort();
     demoAbort.current = null;
@@ -252,6 +260,7 @@ export default function App() {
     setDemoError("");
     const files = localFiles.current.get(s.id);
     setActiveFileKey(files ? fileKey(files) : "");
+    if (!rememberRef.current || !files) setStorageStatus("");
     if (files && !automatic) persistFiles(files);
     setPlaying(false);
     setSourceId(s.id);
@@ -273,6 +282,33 @@ export default function App() {
       mapping: "magnitude",
     }));
   };
+  useEffect(() => {
+    let disposed = false;
+    Promise.all(
+      recordedDemos.map(async (demo) =>
+        (await recallDemo(demo)) ? demo.id : null,
+      ),
+    )
+      .then((ids) => {
+        if (!disposed)
+          setCachedDemos(
+            (old) =>
+              new Set([
+                ...old,
+                ...ids.filter((id): id is string => id !== null),
+              ]),
+          );
+      })
+      .catch(() => {
+        if (!disposed)
+          setDemoCacheError(
+            "Browser storage is unavailable; demo downloads may not survive refresh.",
+          );
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
   useEffect(() => {
     let disposed = false;
     const add = (reader: TrajectorySource) => {
@@ -306,15 +342,32 @@ export default function App() {
               rememberRef.current
             ) {
               setStorageStatus("Restoring last recording…");
-              const demo = recordedDemos.find(
+              let restoreFiles = saved.files;
+              let demo = recordedDemos.find(
                 (d) =>
                   saved.files.length === 1 &&
                   saved.files[0].name === d.file &&
                   saved.files[0].size === d.bytes &&
                   saved.files[0].lastModified === 0,
               );
+              // Migrate the previous last-file copy, or prefer a current cached
+              // version. A stale copy remains openable as an ordinary local file.
+              if (demo) {
+                try {
+                  const cached = await recallDemo(demo);
+                  if (cached) restoreFiles = [cached];
+                  else await cacheDemo(demo, saved.files[0]);
+                  if (!disposed) markDemoCached(demo.id);
+                } catch (e) {
+                  demo = undefined;
+                  if (!disposed)
+                    setDemoCacheError(
+                      `Could not retain the demo download: ${e instanceof Error ? e.message : String(e)}`,
+                    );
+                }
+              }
               const reader = await BrowserSource.open(
-                saved.files,
+                restoreFiles,
                 undefined,
                 demo?.id,
               );
@@ -332,7 +385,7 @@ export default function App() {
                 reader.close();
                 return;
               }
-              localFiles.current.set(reader.metadata.id, saved.files);
+              localFiles.current.set(reader.metadata.id, restoreFiles);
               add(reader);
               chooseSource(reader.metadata, true);
               const view = recallView(saved.key);
@@ -645,6 +698,7 @@ export default function App() {
     interactions.current++;
     cancelDemo();
     setDemoError("");
+    setDemoCacheError("");
     const existing = registry.current.get(demo.id);
     if (existing) {
       chooseSource(existing.metadata);
@@ -652,10 +706,19 @@ export default function App() {
     }
     const abort = new AbortController();
     demoAbort.current = abort;
-    setDemoDownload({ id: demo.id, received: 0 });
+    setDemoDownload({ id: demo.id, received: 0, stage: "checking" });
     try {
-      const file = await downloadDemo(demo, abort.signal, (received) => {
-        if (!abort.signal.aborted) setDemoDownload({ id: demo.id, received });
+      const file = await loadDemoFile(demo, abort.signal, {
+        stage: (stage, received = 0) => {
+          if (!abort.signal.aborted)
+            setDemoDownload({ id: demo.id, received, stage });
+        },
+        cached: () => {
+          if (!abort.signal.aborted) markDemoCached(demo.id);
+        },
+        storageIssue: (message) => {
+          if (!abort.signal.aborted) setDemoCacheError(message);
+        },
       });
       const reader = await BrowserSource.open([file], undefined, demo.id);
       if (abort.signal.aborted) {
@@ -915,6 +978,7 @@ export default function App() {
                     <small>
                       {s.dimension}D · {s.frames} frames
                       {s.format.endsWith("demo") ? " · demo" : ""}
+                      {cachedDemos.has(s.id) ? " · saved locally" : ""}
                     </small>
                   </span>
                   {s.id === sourceId && <span className="selected-dot" />}
@@ -942,11 +1006,13 @@ export default function App() {
                           disabled={opening || demoDownload?.id === demo.id}
                           onClick={() => void openRecordedDemo(demo)}
                           title={demo.description}
-                          aria-label={`Load demo: ${demo.name}`}
+                          aria-label={`${cachedDemos.has(demo.id) ? "Open saved demo" : "Load demo"}: ${demo.name}`}
                         >
                           <span className="source-icon">
                             {demoDownload?.id === demo.id ? (
                               <LoaderCircle size={17} className="spin" />
+                            ) : cachedDemos.has(demo.id) ? (
+                              <FolderOpen size={17} />
                             ) : (
                               <ArrowDownToLine size={17} />
                             )}
@@ -956,26 +1022,37 @@ export default function App() {
                             <small>
                               {demo.particles.toLocaleString()} particles ·{" "}
                               {demo.frames} frames · {demoSize(demo.bytes)}
+                              {cachedDemos.has(demo.id) && (
+                                <span className="cached-demo-label">
+                                  Saved on this device
+                                </span>
+                              )}
                             </small>
                           </span>
                         </button>
                         {demoDownload?.id === demo.id && (
                           <div className="demo-download" role="status">
-                            <progress
-                              aria-label={`Downloading ${demo.name}`}
-                              max={demo.bytes}
-                              value={demoDownload.received}
-                            />
+                            {demoDownload.stage === "downloading" && (
+                              <progress
+                                aria-label={`Downloading ${demo.name}`}
+                                max={demo.bytes}
+                                value={demoDownload.received}
+                              />
+                            )}
                             <span>
-                              {demoDownload.received >= demo.bytes
-                                ? "Opening recording…"
-                                : `${Math.round((100 * demoDownload.received) / demo.bytes)}% downloaded`}
+                              {demoDownload.stage === "checking"
+                                ? "Checking saved download…"
+                                : demoDownload.stage === "saving"
+                                  ? "Saving on this device…"
+                                  : demoDownload.stage === "opening"
+                                    ? "Opening recording…"
+                                    : `${Math.round((100 * demoDownload.received) / demo.bytes)}% downloaded`}
                             </span>
                             <button
                               className="text-button"
                               onClick={cancelDemo}
                             >
-                              Cancel download
+                              Cancel loading demo
                             </button>
                           </div>
                         )}
@@ -988,6 +1065,11 @@ export default function App() {
                   )}
                 </div>
               )}
+            {demoCacheError && (
+              <p className="inline-error" role="status">
+                {demoCacheError}
+              </p>
+            )}
           </section>
           <button
             className="mobile-settings secondary-button"
@@ -1854,6 +1936,10 @@ export default function App() {
               Stores one browser-local copy and visualization settings for
               refresh. Reopen the original to read changes. Browser storage
               limits apply.
+            </p>
+            <p className="subtle-note">
+              Downloaded demos are saved separately on this device. This
+              checkbox controls reopening the last recording automatically.
             </p>
             {storageStatus && (
               <p className="subtle-note" role="status">

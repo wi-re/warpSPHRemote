@@ -193,10 +193,20 @@ random flow and the sloshing tank. The UI shows particle/frame counts and size
 before download. They use the same HDF5 worker, rendering and diagnostics paths
 as local files. Downloads honor the configured Pages base path and support
 progress, cancellation, size checks and SHA-256 verification. No trajectories
-are prefetched on first visit. A selected demo can be retained as the one local
-copy when remembering is enabled; refresh uses that copy and restores settings
-without downloading again. Closing a recorded demo releases its worker and
-returns its download card. Analytical demos remain always available.
+are prefetched on first visit. Each verified demo download has its own persistent
+IndexedDB slot, independent of the last-recording copy. Both demos survive
+selecting another file, closing a demo, disabling last-recording restoration and
+refresh. Cards show **Saved on this device** / **Open saved demo** and reopen the
+Blob without fetching its URL. The catalogue hash, filename and size identify
+the cached version; a changed version downloads on demand and replaces that slot.
+Existing remembered demos migrate to the cache after byte/hash verification.
+
+Last-recording restoration separately controls automatic reopening and the saved
+visualization settings. Forgetting that last copy leaves the demo download cache
+intact. Browser storage denial/quota failures produce a visible notice and still
+allow viewing the downloaded file; browser data clearing/eviction can remove the
+cache. This does not make the application shell available offline. Closing a
+recorded demo releases its worker and returns its saved/download card. Analytical demos remain always available.
 
 These two curated product data files are intentionally committed; full solver
 outputs remain outside Git. See [their provenance](RECORDED_DEMOS.md).

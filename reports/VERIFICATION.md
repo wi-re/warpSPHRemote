@@ -188,3 +188,26 @@ equivalent). Reproduce with `npm ci && npm test && npm run build`, serve `dist`
 at the configured base path, choose the energy-enabled KHH demo, select a grid,
 play/pause, change the above settings, scrub and refresh. WebGPU grid mapping
 during scrubbing is still the planned compute milestone, not part of this fix.
+
+## Persistent cache for both demo downloads
+
+Production build, Chromium, repository subpath on a static localhost server:
+
+1. Disabled **Remember last recording**, then loaded random WCSPH and sloshing
+   through their download buttons. The server logged two HDF5 GETs in total.
+2. Temporarily moved the preview server's demo directory out of the serving path.
+3. Refreshed. Both demo cards showed **Saved on this device** and **Open saved demo**.
+4. Opened each again. Both HDF5 recordings rendered, with no additional HDF5
+   requests (server count remained two), even though their download paths were
+   unavailable. No console warnings/errors were returned. Restored the preview
+   assets after the check.
+
+This verifies independent per-demo retention, rather than only the most recently
+selected file or an HTTP revalidation shortcut. Evidence is external under
+`warpSPHDevelopment/remote/demo-cache-20261017/` (disposable `/tmp` equivalent
+during development). Unit tests additionally verify that replacing/forgetting
+the last local file leaves both demo slots intact, fresh reads never call the
+download transport, catalogue hash changes invalidate a slot, invalid bytes do
+not replace a good version, and replacing one version leaves other slots alone.
+All 34 frontend/data tests and the TypeScript/production build pass. These checks
+do not establish indefinite retention against browser eviction or data clearing.

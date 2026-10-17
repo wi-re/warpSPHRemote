@@ -6,6 +6,7 @@ import {
 import { palettes } from "./palettes";
 import { initialGrid } from "./sources/grid";
 import type { FieldPreferences } from "./FieldView";
+import type { RecordedDemo } from "./recordedDemos";
 /** One browser-local snapshot, replacing the previous recording atomically. */
 export interface RememberedRecording {
   files: { blob: Blob; name: string; type: string; lastModified: number }[];
@@ -86,6 +87,51 @@ export async function forgetFiles() {
   try {
     localStorage.removeItem("warpsph-last-view");
   } catch {}
+}
+type DemoIdentity = Pick<RecordedDemo, "id" | "file" | "bytes" | "sha256">;
+interface CachedDemo {
+  sha256: string;
+  file: string;
+  blob: Blob;
+}
+/** Separate immutable demo slots: selecting another recording never replaces them. */
+export async function cacheDemo(demo: DemoIdentity, file: File) {
+  if (file.name !== demo.file || file.size !== demo.bytes)
+    throw new Error("The recording does not match the demo catalogue.");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    await file.arrayBuffer(),
+  );
+  const hash = Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+  if (hash !== demo.sha256)
+    throw new Error("The recording does not match this demo version.");
+  await transaction("readwrite", (store) =>
+    store.put(
+      { sha256: demo.sha256, file: demo.file, blob: file } satisfies CachedDemo,
+      `demo:${demo.id}`,
+    ),
+  );
+}
+export async function recallDemo(demo: DemoIdentity): Promise<File | null> {
+  const saved = await transaction<CachedDemo | undefined>("readonly", (store) =>
+    store.get(`demo:${demo.id}`),
+  );
+  if (
+    !saved ||
+    saved.sha256 !== demo.sha256 ||
+    saved.file !== demo.file ||
+    saved.blob?.size !== demo.bytes
+  )
+    return null;
+  return new File([saved.blob], demo.file, {
+    type: "application/x-hdf5",
+    lastModified: 0,
+  });
+}
+export async function forgetDemo(id: string) {
+  await transaction("readwrite", (store) => store.delete(`demo:${id}`));
 }
 export function rememberEnabled() {
   try {

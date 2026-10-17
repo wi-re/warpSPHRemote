@@ -337,6 +337,10 @@ svg {
   white-space: normal;
   line-height: 1.5;
 }
+.cached-demo-label {
+  display: block;
+  color: var(--mint);
+}
 .demo-download {
   display: flex;
   flex-wrap: wrap;
