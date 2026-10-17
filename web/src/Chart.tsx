@@ -57,14 +57,19 @@ export function DiagnosticChart({
     let cancelled = false;
     loadPlotly().then((P) => {
       if (cancelled || !ref.current) return;
-      const series = diagnosticSeries(source.times, rows, metric),
-        current = rows.find((r) => r.index === index),
-        t = source.times[index];
+      const times = source.live ? rows.map((r) => r.time) : source.times,
+        series = source.live
+          ? rows.map((r) => r[metric] ?? null)
+          : diagnosticSeries(times, rows, metric),
+        current = source.live
+          ? rows.at(-1)
+          : rows.find((r) => r.index === index),
+        t = source.live ? current?.time : times[index];
       P.react(
         ref.current,
         [
           {
-            x: source.times,
+            x: times,
             y: series,
             connectgaps: false,
             type: "scatter",
@@ -110,10 +115,8 @@ export function DiagnosticChart({
             gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
             zeroline: false,
             range: [
-              source.times[0],
-              source.times.at(-1) === source.times[0]
-                ? source.times[0] + 1
-                : source.times.at(-1),
+              times[0],
+              times.at(-1) === times[0] ? times[0] + 1 : times.at(-1),
             ],
             fixedrange: false,
           },
@@ -193,13 +196,16 @@ export function PressureChart({
     loadPlotly().then(async (P) => {
       if (cancelled || !ref.current) return;
       const element = ref.current,
-        byIndex = new Map(rows.map((r) => [r.index, r]));
+        byIndex = new Map(rows.map((r) => [r.index, r])),
+        times = source.live ? rows.map((r) => r.time) : source.times;
       await P.react(
         element,
         probes.map((p, c) => ({
-          x: source.times,
-          y: source.times.map((_, i) => byIndex.get(i)?.values[p.id] ?? null),
-          customdata: source.times.map((_, i) => i),
+          x: times,
+          y: source.live
+            ? rows.map((r) => r.values[p.id] ?? null)
+            : times.map((_, i) => byIndex.get(i)?.values[p.id] ?? null),
+          customdata: source.live ? [] : times.map((_, i) => i),
           name: p.name,
           mode: "lines+markers",
           type: "scatter",
@@ -235,7 +241,7 @@ export function PressureChart({
             },
             gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
             zeroline: false,
-            range: [source.times[0], source.times.at(-1) || 1],
+            range: [times[0], times.at(-1) || 1],
           },
           yaxis: {
             gridcolor: theme === "light" ? "#cbd7df" : "#26313b",
@@ -247,8 +253,8 @@ export function PressureChart({
               type: "line",
               xref: "x",
               yref: "paper",
-              x0: source.times[index],
-              x1: source.times[index],
+              x0: source.live ? rows.at(-1)?.time : source.times[index],
+              x1: source.live ? rows.at(-1)?.time : source.times[index],
               y0: 0,
               y1: 1,
               line: { color: "#8b9bac", width: 1, dash: "dot" },
@@ -262,6 +268,7 @@ export function PressureChart({
       const graph = element as any;
       graph.removeAllListeners("plotly_click");
       graph.on("plotly_click", (event: any) => {
+        if (source.live) return;
         const frame = clickedFrame(event, source.frames);
         if (frame !== null) seek.current(frame);
       });

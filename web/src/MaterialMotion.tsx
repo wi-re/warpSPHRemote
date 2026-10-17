@@ -53,7 +53,7 @@ export function useMaterialMotion(
     setError("");
   };
   const capture = async (index: number, uid: string) => {
-    if (!reader || !source || !uid) return;
+    if (!reader || !source || !uid || source.live) return;
     const token = ++generation.current;
     active.current?.abort();
     const abort = new AbortController();

@@ -86,6 +86,7 @@ function SpectrumImage({ result }: { result: Spectrum }) {
 }
 export function QuantityAnalysis({
   reader,
+  revision,
   index,
   field,
   mapping,
@@ -98,6 +99,7 @@ export function QuantityAnalysis({
   onSettings,
 }: {
   reader: TrajectorySource;
+  revision?: number;
   index: number;
   field: string;
   mapping: Mapping;
@@ -162,7 +164,7 @@ export function QuantityAnalysis({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [reader, key, playing]);
+  }, [reader, key, playing, revision]);
   useEffect(() => {
     const el = plot.current!;
     let stopped = false,

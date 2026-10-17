@@ -231,3 +231,10 @@ mapped-quantity histograms/spatial FFTs are described in
 also offers [high-resolution solver snapshots](reports/SNAPSHOT_GALLERY.md) with
 direct HDF5 downloads. A reproducible KHH starting view is
 [the density preset at t≈2.6](https://fluids.dev/warpSPHRemote/?demo=demo-khh-crksph-256&preset=khh).
+
+## Local simulations
+
+The optional Linux companion discovers running simulations, launches installed
+case presets and attaches one live browser viewer using token-authenticated
+loopback HTTP. Recorded-file viewing remains independent of Python/warpSPH.
+See [installation, integration and limitations](reports/LOCAL_COMPANION.md).

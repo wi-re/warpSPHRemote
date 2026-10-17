@@ -267,3 +267,13 @@ LCS methods remain separate milestones.
 - Completed: independent right-column scalar statistics, guided material capture
   and untracking, labelled FTLE/fit-quality layers and renderer-side LIC texture
   animation. See MATERIAL_ANALYSIS_UX.md for semantics and verification.
+
+## Local companion milestone
+
+Delivered: Linux singleton loopback daemon; metadata-only simulation registration;
+explicit token pairing and XDG handoff; allowlisted preset process launcher;
+single-viewer resident manager; pull/render/acknowledge live WPR1 snapshots with
+static-array revisions; existing browser rendering/compute plus bounded live
+diagnostics and pressure probe samples. See [setup and protocol](LOCAL_COMPANION.md).
+Remote TLS/listening, restart recovery, retained live trajectory/recording,
+platform installers and arbitrary simulation editing remain future work.

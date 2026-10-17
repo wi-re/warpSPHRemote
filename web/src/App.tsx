@@ -1,3 +1,6 @@
+import { CompanionPanel } from "./CompanionPanel";
+import { LiveSource } from "./companion";
+import { reduceDiagnostic } from "./sources/core";
 import { NumberControl } from "./NumberControl";
 import { defaultAnalysis, type AnalysisPreferences } from "./sources/analysis";
 import { QuantityAnalysis } from "./QuantityAnalysis";
@@ -154,6 +157,7 @@ const friendlyName = (source: Source) =>
     .replace(/^sod$/, "Sod shock tube");
 
 export default function App() {
+  const [companionOpen, setCompanionOpen] = useState(false);
   const [sources, setSources] = useState<Source[]>([]),
     [sourceId, setSourceId] = useState("");
   const source = sources.find((s) => s.id === sourceId);
@@ -326,6 +330,7 @@ export default function App() {
       : "particles";
   const presentationKey = JSON.stringify([
     sourceId,
+    source?.liveRevision,
     index,
     field,
     displayMode,
@@ -392,6 +397,7 @@ export default function App() {
     setTraceUid("");
     setError("");
     setRows([]);
+    if (s.live) setMetric("kineticEnergy");
     setField(
       s.fields.find((f) => f.name === "velocities")?.name ??
         s.fields[0]?.name ??
@@ -742,6 +748,11 @@ export default function App() {
       setRange([...e.range]);
       setValidRange(e.validRange);
       setEngineError("");
+      const reader = registry.current.get(source.id);
+      if (reader instanceof LiveSource)
+        void reader
+          .displayed(frame.liveRevision)
+          .catch((e) => setEngineError(`Live capture paused: ${e.message}`));
     } catch (e) {
       setEngineError(String(e));
     }
@@ -767,6 +778,7 @@ export default function App() {
     const abort = new AbortController();
     setRows([]);
     setDiagnosticError("");
+    if (source.live) return;
     const load = async () => {
       for (let start = 0; start < source.frames; start += 1) {
         const batch = await registry.current
@@ -783,7 +795,21 @@ export default function App() {
     return () => abort.abort();
   }, [sourceId]);
   useEffect(() => {
-    if (!frame || !source || rows.some((r) => r.index === frame.index)) return;
+    if (!frame || !source) return;
+    if (source.live) {
+      const row = reduceDiagnostic(
+        frame.arrays,
+        frame.liveRevision ?? 0,
+        frame.time,
+      );
+      setRows((old) =>
+        old.some((r) => r.index === row.index)
+          ? old
+          : [...old, row].slice(-600),
+      );
+      return;
+    }
+    if (rows.some((r) => r.index === frame.index)) return;
     const abort = new AbortController();
     registry.current
       .get(source.id)!
@@ -1065,7 +1091,9 @@ export default function App() {
   ]);
   const currentField = source?.fields.find((f) => f.name === field),
     isVector = (currentField?.components ?? 1) > 1;
-  const current = rows.find((r) => r.index === frame?.index);
+  const current = source?.live
+    ? rows.at(-1)
+    : rows.find((r) => r.index === frame?.index);
   const shownDerivative =
     presentation?.mode !== "particles" &&
     derivativeQuantity(presentation?.result?.grid.quantity);
@@ -1227,7 +1255,9 @@ export default function App() {
               </strong>
               <small>
                 {source
-                  ? `${source.dimension}D · ${source.frames} frames`
+                  ? source.live
+                    ? `${source.dimension}D · ${source.liveConnected ? "live" : "detached snapshot"}`
+                    : `${source.dimension}D · ${source.frames} frames`
                   : "Examples, saved files and uploads"}
               </small>
             </span>
@@ -1244,6 +1274,13 @@ export default function App() {
           >
             <FolderOpen size={15} />
             Open trajectory
+          </button>
+          <button
+            className="secondary-button"
+            onClick={() => setCompanionOpen(true)}
+            aria-label="Local simulations"
+          >
+            <Activity size={15} /> Local simulations
           </button>
           <IconButton label="Viewer settings" onClick={showSettings}>
             <Settings2 size={18} />
@@ -1394,9 +1431,15 @@ export default function App() {
           <div className="inspector-bottom">
             <Eye size={14} />
             <span>
-              Viewing recorded data
+              {source?.live
+                ? source.liveConnected
+                  ? "Live snapshot"
+                  : "Detached snapshot"
+                : "Viewing recorded data"}
               <br />
-              <strong>Simulator disconnected</strong>
+              <button onClick={() => setCompanionOpen(true)}>
+                {source?.live ? "Simulation manager" : "Connect a simulation"}
+              </button>
             </span>
           </div>
         </aside>
@@ -1404,9 +1447,11 @@ export default function App() {
           <div className="viewport-heading">
             <div>
               <div className="eyebrow">
-                {source?.format === "Analytical demo"
-                  ? "ANALYTICAL FIELD"
-                  : "RECORDED TRAJECTORY"}
+                {source?.live
+                  ? `${source.liveConnected ? "LIVE SIMULATION" : "DETACHED SNAPSHOT"} · STEP ${frame?.step ?? source.liveStep ?? "—"}`
+                  : source?.format === "Analytical demo"
+                    ? "ANALYTICAL FIELD"
+                    : "RECORDED TRAJECTORY"}
               </div>
               <h1>
                 {source ? friendlyName(source) : "Your simulation, in view."}
@@ -1536,7 +1581,7 @@ export default function App() {
                         type="checkbox"
                         aria-label="Show particle trace"
                         checked={trace.enabled}
-                        disabled={source?.identity !== "UIDs"}
+                        disabled={source?.identity !== "UIDs" || !!source?.live}
                         onChange={(e) => trace.setEnabled(e.target.checked)}
                       />
                       Trace
@@ -1577,17 +1622,23 @@ export default function App() {
                     <TraceControls
                       trace={trace}
                       uid={traceUid}
-                      supported={source?.identity === "UIDs"}
+                      supported={source?.identity === "UIDs" && !source.live}
                       onClear={clearSelection}
                       compact
                       hideToggle
                     />
                   )}
+                  {source?.live && (
+                    <p className="subtle-note">
+                      Live snapshots update without retaining particle history.
+                      Traces, material tracking and FTLE require a recording.
+                    </p>
+                  )}
                   <MaterialCapture
                     motion={material}
                     index={displayedIndex}
                     uid={traceUid}
-                    supported={source?.identity === "UIDs"}
+                    supported={source?.identity === "UIDs" && !source.live}
                     onOpen={() => {
                       setMetric("material");
                       setChartsExpanded(true);
@@ -1709,14 +1760,19 @@ export default function App() {
             <div className="scrubber">
               <div className="scrubber-info">
                 <span>
-                  FRAME{" "}
-                  <strong>{String(displayedIndex + 1).padStart(3, "0")}</strong>
+                  {source?.live ? "LIVE SNAPSHOT " : "FRAME "}
+                  <strong>
+                    {source?.live
+                      ? (frame?.liveRevision ?? source.liveRevision)
+                      : String(displayedIndex + 1).padStart(3, "0")}
+                  </strong>
                   {index !== displayedIndex && (
                     <span className="muted"> → {index + 1}</span>
                   )}
                   <span className="muted">
                     {" "}
-                    / {String(source?.frames ?? 0).padStart(3, "0")}
+                    {!source?.live &&
+                      `/ ${String(source?.frames ?? 0).padStart(3, "0")}`}
                   </span>
                 </span>
                 <span>
@@ -1724,7 +1780,10 @@ export default function App() {
                     ? "SIMULATION TIME"
                     : "FRAME INDEX"}{" "}
                   <strong>
-                    {formatNumber(source?.times[displayedIndex] ?? 0, 5)}
+                    {formatNumber(
+                      frame?.time ?? source?.times[displayedIndex] ?? 0,
+                      5,
+                    )}
                   </strong>
                 </span>
               </div>
@@ -1735,7 +1794,7 @@ export default function App() {
                 min="0"
                 max={Math.max(0, (source?.frames ?? 1) - 1)}
                 value={index}
-                disabled={!source}
+                disabled={!source || source.live}
                 onChange={(e) => seek(+e.target.value)}
               />
             </div>
@@ -1785,6 +1844,7 @@ export default function App() {
                     key={id}
                     className={metric === id ? "selected" : ""}
                     aria-pressed={metric === id}
+                    disabled={!!source?.live && id === "material"}
                     onClick={() => {
                       setMetric(id);
                       setChartsExpanded(true);
@@ -1817,7 +1877,7 @@ export default function App() {
                       <MaterialTools
                         motion={material}
                         uid={traceUid}
-                        supported={source?.identity === "UIDs"}
+                        supported={source?.identity === "UIDs" && !source.live}
                         onPickSeed={() => {
                           setPlaying(false);
                           setPicking(true);
@@ -1862,7 +1922,9 @@ export default function App() {
                     ))}
                 </div>
                 <div className="chart-note">
-                  {metric === "material" ? (
+                  {source?.live ? (
+                    "Live diagnostics and probes sample displayed snapshots only (last 600). Skipped simulation steps and particle history are not retained."
+                  ) : metric === "material" ? (
                     "Frozen UID set; seed-time periodic branch plus original unwrapped motion. 2D FTLE masks fits above relative residual 0.25. The ellipse is the fitted image of the seed RMS circle; sparse exports and particle shifting affect interpretation. Click a chart sample to seek."
                   ) : metric === "pressure" ? (
                     pressure.probes.length ? (
@@ -2266,6 +2328,7 @@ export default function App() {
                   <QuantityAnalysis
                     key={sourceId + quantityAnalysis}
                     reader={registry.current.get(sourceId)!}
+                    revision={source.liveRevision}
                     index={displayedIndex}
                     field={presentation?.field ?? field}
                     mapping={options.mapping}
@@ -2377,6 +2440,37 @@ export default function App() {
           </button>
         </span>
       </footer>
+      <CompanionPanel
+        open={companionOpen}
+        onOpen={() => setCompanionOpen(true)}
+        onClose={() => setCompanionOpen(false)}
+        sourceId={sourceId}
+        onFrame={(reader, first) => {
+          const metadata = reader.metadata;
+          if (first) {
+            registry.current.get(metadata.id)?.close();
+            registry.current.set(metadata.id, reader);
+          }
+          setSources((old) => [
+            ...old.filter((s) => s.id !== metadata.id),
+            metadata,
+          ]);
+          if (first && sourceId !== metadata.id) chooseSource(metadata);
+        }}
+        onDetached={(id) =>
+          setSources((old) =>
+            old.map((s) =>
+              s.id === id
+                ? {
+                    ...s,
+                    liveConnected: false,
+                    format: "Detached live snapshot",
+                  }
+                : s,
+            ),
+          )
+        }
+      />
       {open && (
         <TrajectoryPicker
           sources={sources}

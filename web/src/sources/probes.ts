@@ -93,3 +93,17 @@ export function clickedFrame(
     ? i
     : null;
 }
+
+/** Recordings retain their entire history; live sampling may request a bound. */
+export function mergeProbeSamples(
+  previous: ProbeSample[],
+  incoming: ProbeSample[],
+  limit?: number,
+): ProbeSample[] {
+  const rows = [
+    ...new Map(
+      [...previous, ...incoming].map((row) => [row.index, row]),
+    ).values(),
+  ].sort((a, b) => a.index - b.index);
+  return limit === undefined ? rows : rows.slice(-limit);
+}

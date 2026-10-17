@@ -19,7 +19,7 @@ export function useParticleTrace(
     setRows([]);
     setBusy(false);
     setError("");
-    if (!enabled || !uid || !reader || !source) return;
+    if (!enabled || !uid || !reader || !source || source.live) return;
     const abort = new AbortController(),
       start = Math.max(0, index - past),
       end = Math.min(source.frames - 1, index + future);

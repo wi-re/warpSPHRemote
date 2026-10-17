@@ -2,7 +2,11 @@ import { NumberControl } from "./NumberControl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Source } from "./types";
 import type { TrajectorySource } from "./sources/client";
-import type { PressureProbe, ProbeSample } from "./sources/probes";
+import {
+  mergeProbeSamples,
+  type PressureProbe,
+  type ProbeSample,
+} from "./sources/probes";
 import { formatNumber } from "./data";
 
 export function usePressureProbes(
@@ -21,12 +25,7 @@ export function usePressureProbes(
     (f) => f.name === "pressures" && f.components === 1,
   );
   const merge = useCallback(
-    (rows: ProbeSample[]) =>
-      setSamples((old) =>
-        [...new Map([...old, ...rows].map((r) => [r.index, r])).values()].sort(
-          (a, b) => a.index - b.index,
-        ),
-      ),
+    (rows: ProbeSample[]) => setSamples((old) => mergeProbeSamples(old, rows)),
     [],
   );
   useEffect(() => {
@@ -49,14 +48,25 @@ export function usePressureProbes(
     const abort = new AbortController();
     reader
       .probes(index, 1, probes, abort.signal)
-      .then(merge)
+      .then((rows) => {
+        if (abort.signal.aborted) return;
+        if (source?.live)
+          setSamples((old) =>
+            mergeProbeSamples(
+              old,
+              rows.map((r) => ({ ...r, index: source.liveRevision ?? 0 })),
+              600,
+            ),
+          );
+        else merge(rows);
+      })
       .catch((e) => {
         if (!abort.signal.aborted) setError(e.message);
       });
     return () => abort.abort();
-  }, [reader, supported, index, probes, merge]);
+  }, [reader, supported, index, probes, merge, source?.liveRevision]);
   const generate = async () => {
-    if (!reader || !source || !probes.length) return;
+    if (!reader || !source || !probes.length || source.live) return;
     scan.current?.abort();
     const controller = new AbortController();
     scan.current = controller;
@@ -121,7 +131,10 @@ export function usePressureProbes(
       setProbes((old) => old.filter((p) => p.id !== active));
       setActive(probes.find((p) => p.id !== active)?.id ?? "");
     },
-    current: samples.find((s) => s.index === index),
+    live: !!source?.live,
+    current: source?.live
+      ? samples.at(-1)
+      : samples.find((s) => s.index === index),
   };
 }
 export type ProbeController = ReturnType<typeof usePressureProbes>;
@@ -237,12 +250,19 @@ export function PressureControls({
             <dt>History frames</dt>
             <dd>{c.samples.length.toLocaleString()}</dd>
           </dl>
-          <button
-            className="secondary-button"
-            onClick={c.busy ? c.cancel : c.generate}
-          >
-            {c.busy ? "Cancel history scan" : "Generate pressure histories"}
-          </button>
+          {c.live ? (
+            <p className="subtle-note">
+              Logging each displayed live snapshot (last 600 samples).
+              Uncaptured simulation steps are not retained.
+            </p>
+          ) : (
+            <button
+              className="secondary-button"
+              onClick={c.busy ? c.cancel : c.generate}
+            >
+              {c.busy ? "Cancel history scan" : "Generate pressure histories"}
+            </button>
+          )}
           <p className="subtle-note">
             Fixed in recorded coordinates. Fluid only; stored pressure units.
             Dry regions leave gaps. IDW is approximate, not an SPH kernel.

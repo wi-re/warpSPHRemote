@@ -1,0 +1,372 @@
+"""Companion boundaries and the one-buffer producer/viewer handshake."""
+
+from functools import partial
+from http.server import ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import stat
+import struct
+import threading
+import time
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+import numpy as np
+import pytest
+
+from warpsph_remote.catalogue import CATALOGUE, validate_launch
+from warpsph_remote.daemon import Conflict, Handler, Manager, descriptor, runtime_dir
+from warpsph_remote.launcher import handoff, install_xdg
+from warpsph_remote.publisher import SimulationPublisher
+from warpsph_remote.protocol import encode_frame
+
+
+@pytest.fixture
+def api(tmp_path):
+    m = Manager(tmp_path / "private")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, manager=m))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}"
+
+    def call(path, data=None, token=None, headers=None, method=None):
+        raw = (
+            data
+            if isinstance(data, bytes)
+            else json.dumps(data).encode() if data is not None else None
+        )
+        h = {
+            "Authorization": "Bearer " + (token or m.token),
+            "Content-Type": "application/json",
+            **(headers or {}),
+        }
+        return urlopen(
+            Request(endpoint + path, data=raw, headers=h, method=method), timeout=3
+        )
+
+    yield m, call, endpoint
+    m.shutdown()
+    server.shutdown()
+    server.server_close()
+    thread.join()
+
+
+def arrays():
+    return dict(
+        positions=np.array([[0.0, 0.0], [0.5, 0.5]], dtype=np.float32),
+        UIDs=np.array([2**54 + 1, 9], dtype=np.int64),
+        kinds=np.zeros(2, dtype=np.int32),
+        masses=np.ones(2),
+        densities=np.ones(2),
+        supports=np.ones(2) * 0.2,
+        velocities=np.ones((2, 2)),
+    )
+
+
+def test_authentication_and_browser_producer_separation(api):
+    m, call, _ = api
+    for path, token in [
+        ("/v1/session", "bad"),
+        ("/v1/runs", m.producer_token),
+        ("/producer/runs", m.token),
+    ]:
+        with pytest.raises(HTTPError) as e:
+            call(path, {"name": "test"} if "producer" in path else None, token)
+        assert e.value.code == 401
+    assert json.load(call("/v1/session"))["loopbackOnly"]
+    assert json.load(call("/producer/runs", {"name": "test"}, m.producer_token))["id"]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Origin": "https://untrusted.example"},
+        {"Host": "evil.example:8766"},
+        {"Host": "127.0.0.1:bad"},
+        {"Host": "127.0.0.1:1"},
+        {"Host": "user@localhost:8766"},
+    ],
+)
+def test_origin_and_host_allowlists(api, headers):
+    _, call, _ = api
+    with pytest.raises(HTTPError) as e:
+        call("/v1/session", headers=headers)
+    assert e.value.code == 403
+
+
+def test_cors_preflight_and_no_store(api):
+    _, call, _ = api
+    with call(
+        "/v1/session", headers={"Origin": "https://fluids.dev"}, method="OPTIONS"
+    ) as r:
+        assert r.status == 204
+        assert r.headers["Access-Control-Allow-Origin"] == "https://fluids.dev"
+        assert r.headers["Access-Control-Allow-Private-Network"] == "true"
+    with call("/v1/session") as r:
+        assert r.headers["Cache-Control"] == "no-store"
+
+
+def test_metadata_only_until_attached_and_single_viewer(api):
+    m, _, _ = api
+    key = m.register({"name": "existing simulation", "pid": 123})
+    response = m.status(
+        key, dict(step=100, time=2.0, dt=0.001, particles=16384, status="running")
+    )
+    assert not response["capture"] and m.runs[key]["snapshot"] is None
+    m.attach(key, "viewer-aaaaaaaaaaaa")
+    assert m.status(key, {})["capture"]
+    with pytest.raises(Conflict):
+        m.attach(key, "viewer-bbbbbbbbbbbb")
+    assert m.public(m.runs[key])["particles"] == 16384
+
+
+def test_handshake_static_reuse_exact_ids_and_detach_reattach(api, tmp_path):
+    m, call, endpoint = api
+    info = dict(endpoint=endpoint, producerToken=m.producer_token, token=m.token)
+    (m.root / "daemon.json").write_text(json.dumps(info))
+    (m.root / "daemon.json").chmod(0o600)
+    publisher = SimulationPublisher(
+        "fixture", runtime=m.root, autostart=False, interval=0.01
+    )
+    viewer = "viewer-aaaaaaaaaaaa"
+    h = {"X-Viewer-Id": viewer}
+    try:
+        assert not publisher.wants_snapshot
+        m.attach(publisher.id, viewer)
+        until = time.monotonic() + 2
+        while not publisher.wants_snapshot and time.monotonic() < until:
+            time.sleep(0.01)
+        assert publisher.snapshot(arrays(), step=10, time_value=0.1)
+        until = time.monotonic() + 2
+        while m.runs[publisher.id]["snapshot"] is None and time.monotonic() < until:
+            time.sleep(0.01)
+        run = m.runs[publisher.id]
+        static = run["static"]
+        sequence = run["sequence"]
+        with call(f"/v1/runs/{publisher.id}/snapshot", headers=h) as r:
+            assert r.read()[:4] == b"WPR1"
+            assert int(r.headers["X-Snapshot-Sequence"]) == sequence
+        # No full state is requested while the previous one awaits acknowledgement.
+        assert not m.status(publisher.id, {})["capture"]
+        assert not publisher.snapshot(arrays(), step=11, time_value=0.11)
+        call(f"/v1/runs/{publisher.id}/ack", {"sequence": sequence}, headers=h).close()
+        with pytest.raises(HTTPError):
+            call(f"/v1/runs/{publisher.id}/ack", {"sequence": sequence}, headers=h)
+        until = time.monotonic() + 2
+        while not publisher.wants_snapshot and time.monotonic() < until:
+            time.sleep(0.01)
+        publisher.snapshot(arrays(), step=12, time_value=0.12)
+        until = time.monotonic() + 2
+        while run["snapshot"] is None and time.monotonic() < until:
+            time.sleep(0.01)
+        assert run["static"] is static  # zero new static packet / resident allocation
+        size = struct.unpack("<I", static[4:8])[0]
+        header = json.loads(static[8 : 8 + size])
+        base = 8 + (size + 7) // 8 * 8
+        uid = header["arrays"]["UIDs"]
+        assert (
+            np.frombuffer(static, dtype="<i8", offset=base + uid["offset"], count=2)[0]
+            == 2**54 + 1
+        )
+        old_generation = run["captureGeneration"]
+        call(f"/v1/runs/{publisher.id}/detach", {}, headers=h).close()
+        assert run["snapshot"] is None and run["static"] is None
+        m.attach(publisher.id, viewer)
+        assert run["captureGeneration"] > old_generation
+        until = time.monotonic() + 2
+        while not publisher.wants_snapshot and time.monotonic() < until:
+            time.sleep(0.01)
+        assert publisher.snapshot(arrays(), step=14, time_value=0.14)
+        until = time.monotonic() + 2
+        while run["snapshot"] is None and time.monotonic() < until:
+            time.sleep(0.01)
+        assert run["snapshot"] is not None and run["static"] is not None
+    finally:
+        publisher.close()
+
+
+def test_expired_viewer_frees_particle_buffers(api):
+    m, _, _ = api
+    key = m.register({"name": "test"})
+    m.attach(key, "viewer-aaaaaaaaaaaa")
+    m.runs[key].update(
+        leaseAt=time.monotonic() - 21, snapshot=b"large", static=b"large"
+    )
+    assert not m.status(key, {})["capture"]
+    assert m.runs[key]["snapshot"] is None and m.runs[key]["static"] is None
+
+
+def test_stale_capture_generation_cannot_cross_leases(api):
+    m, _, _ = api
+    key = m.register({"name": "test"})
+    m.attach(key, "viewer-aaaaaaaaaaaa")
+    generation = m.runs[key]["captureGeneration"]
+    static = encode_frame({"UIDs": np.array([1])}, index=0, time=0.0)
+    dynamic = encode_frame({"positions": np.zeros((1, 2))}, index=0, time=0.0)
+    packet = struct.pack("<II", len(static), len(dynamic)) + static + dynamic
+    m.runs[key]["lease"] = None
+    m.attach(key, "viewer-bbbbbbbbbbbb")
+    with pytest.raises(Conflict):
+        m.upload(key, packet, {}, "r", generation)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"preset": "../../os"},
+        {"preset": "gresho", "command": "rm"},
+        {"preset": "gresho", "scheme": "PESPH"},
+        {"preset": "rt", "scheme": "MFM"},
+        {"preset": "gresho", "nx": True},
+        {"preset": "gresho", "nx": 513},
+        {"preset": "gresho", "duration": float("nan")},
+        {"preset": "gresho", "steps": -1},
+    ],
+)
+def test_browser_launch_is_bounded_and_allowlisted(spec):
+    with pytest.raises(ValueError):
+        validate_launch(spec)
+
+
+def test_all_catalogue_defaults_validate():
+    for case in CATALOGUE:
+        assert validate_launch({"preset": case["id"]})["nx"] == case["nx"]
+
+
+def test_private_runtime_and_descriptor(tmp_path):
+    p = tmp_path / "owned"
+    runtime_dir(p)
+    assert stat.S_IMODE(p.stat().st_mode) == 0o700
+    f = p / "daemon.json"
+    f.write_text("{}")
+    f.chmod(0o644)
+    with pytest.raises(ValueError):
+        descriptor(p)
+    f.chmod(0o600)
+    assert descriptor(p) == {}
+    p.chmod(0o755)
+    with pytest.raises(ValueError):
+        runtime_dir(p)
+
+
+def test_desktop_handler_and_secret_fragment(tmp_path):
+    entry = install_xdg(tmp_path, register=False).read_text()
+    assert "x-scheme-handler/warpsph" in entry and " %u" in entry
+    url = handoff(dict(endpoint="http://127.0.0.1:8766", token="secret"))
+    from urllib.parse import urlsplit, parse_qs
+
+    assert not urlsplit(url).query
+    assert parse_qs(urlsplit(url).fragment)["pair"] == ["secret"]
+
+
+def test_concurrent_simulation_starts_reuse_one_loopback_daemon(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from warpsph_remote.daemon import ensure_daemon
+    import signal
+
+    root = tmp_path / "singleton"
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(lambda _: ensure_daemon(root, port=0), range(3)))
+        assert len({r["pid"] for r in results}) == 1
+        assert len({r["token"] for r in results}) == 1
+        assert results[0]["endpoint"].startswith("http://127.0.0.1:")
+        assert len(results[0]["token"]) >= 40
+        assert stat.S_IMODE((root / "daemon.json").stat().st_mode) == 0o600
+        assert "Pairing token:" not in (root / "daemon.log").read_text()
+    finally:
+        if (root / "daemon.json").exists():
+            os.kill(descriptor(root)["pid"], signal.SIGTERM)
+            until = time.monotonic() + 3
+            while (root / "daemon.json").exists() and time.monotonic() < until:
+                time.sleep(0.05)
+
+
+def test_malformed_snapshot_is_rejected_before_replacing_current(api):
+    m, _, _ = api
+    key = m.register({"name": "test"})
+    m.attach(key, "viewer-aaaaaaaaaaaa")
+    with pytest.raises(ValueError):
+        m.upload(
+            key,
+            struct.pack("<II", 4, 4) + b"WPR1WPR1",
+            {},
+            "r",
+            m.runs[key]["captureGeneration"],
+        )
+    assert m.runs[key]["snapshot"] is None and m.runs[key]["capture"]
+
+
+def test_managed_launcher_uses_fixed_worker_and_stops_only_owned_process(
+    api, monkeypatch
+):
+    import signal
+    import warpsph_remote.daemon as module
+
+    m, _, _ = api
+    commands = []
+    signals = []
+
+    class Process:
+        pid = 999999
+
+        def poll(self):
+            return None
+
+    class DeferredThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "Popen",
+        lambda command, **kwargs: commands.append((command, kwargs)) or Process(),
+    )
+    monkeypatch.setattr(module.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(
+        module.os, "killpg", lambda pid, sig: signals.append((pid, sig))
+    )
+    run = m.launch({"preset": "gresho", "nx": 32})
+    command, options = commands[0]
+    assert command[:3] == [m.python, "-m", "warpsph_remote.simulation_worker"]
+    assert options.get("shell", False) is False and options["start_new_session"] is True
+    assert json.loads(Path(command[3]).read_text())["nx"] == 32
+    with pytest.raises(Conflict):
+        m.launch({"preset": "tgv"})
+    m.stop(run["id"])
+    assert signals == [(999999, signal.SIGTERM)]
+    external = m.register({"name": "external", "pid": 999998})
+    m.stop(external)
+    assert len(signals) == 1 and m.status(external, {})["stop"]
+    # Teardown does not operate on the fake PID after monkeypatch restoration.
+    m.runs[run["id"]].pop("process")
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [("/producer/runs", 5), ("/v1/runs", []), ("/producer/runs", {"name": ""})],
+)
+def test_invalid_control_objects_return_client_errors(api, path, value):
+    m, call, _ = api
+    with pytest.raises(HTTPError) as e:
+        call(path, value, m.producer_token if path.startswith("/producer") else m.token)
+    assert e.value.code == 400
+
+
+def test_failed_bind_releases_singleton_lock(api):
+    import fcntl
+    from urllib.parse import urlsplit
+    from warpsph_remote.daemon import serve
+
+    m, _, endpoint = api
+    with pytest.raises(OSError):
+        serve(m.root, port=urlsplit(endpoint).port, incidental=True)
+    fd = os.open(m.root / "daemon.lock", os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(fd)

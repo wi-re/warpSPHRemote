@@ -18,9 +18,15 @@ export interface Source {
   identity: string;
   domain?: Domain;
   internalEnergyAvailable?: boolean;
+  live?: boolean;
+  liveConnected?: boolean;
+  liveRevision?: number;
+  liveStep?: number;
 }
 export interface Frame {
   index: number;
+  step?: number;
+  liveRevision?: number;
   time: number;
   arrays: Record<string, { data: NumericArray; shape: number[] }>;
   bytes: number;

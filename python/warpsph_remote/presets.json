@@ -1,0 +1,146 @@
+[
+  {
+    "id": "gresho",
+    "name": "Gresho\u2013Chan vortex",
+    "description": "Pressure-balanced rotating vortex; standard and smoothed cusp.",
+    "module": "compressible.greshoVortex",
+    "factory": "greshoVortexCase",
+    "schemes": [
+      "CRKSPH",
+      "CompSPH",
+      "Monaghan",
+      "GSPH",
+      "InutsukaGSPH",
+      "MFM",
+      "MFV"
+    ],
+    "nx": 128,
+    "duration": 3,
+    "variants": {
+      "standard": {},
+      "smooth": {
+        "cuspWidth": 0.02
+      }
+    },
+    "image": "gresho",
+    "maxNx": 512
+  },
+  {
+    "id": "rt",
+    "name": "Rayleigh\u2013Taylor",
+    "description": "Gravity-driven heavy/light interface instability.",
+    "module": "compressible.rayleighTaylor",
+    "factory": "rayleighTaylorCase",
+    "schemes": ["CRKSPH", "CompSPH", "Monaghan", "GSPH", "InutsukaGSPH"],
+    "nx": 128,
+    "duration": 10,
+    "variants": {
+      "standard": {}
+    },
+    "image": "rt",
+    "maxNx": 256
+  },
+  {
+    "id": "tgv-wc",
+    "name": "Taylor\u2013Green \u00b7 weakly compressible",
+    "description": "Periodic decaying vortices with recorded velocity, pressure and density.",
+    "module": "periodic.tgvWeaklyCompressible",
+    "factory": "tgvWeaklyCompressibleCase",
+    "schemes": ["deltaSPH", "sun2017DeltaSPH", "artificialCompressible"],
+    "nx": 128,
+    "duration": 2,
+    "variants": {
+      "standard": {},
+      "inviscid": {
+        "inviscid": true
+      },
+      "initial-pressure": {
+        "initialPressure": true,
+        "machTarget": 0.1,
+        "referenceVelocity": 1
+      }
+    },
+    "image": "tgv",
+    "maxNx": 512
+  },
+  {
+    "id": "tgv",
+    "name": "Taylor\u2013Green \u00b7 incompressible",
+    "description": "Periodic vortices with projection-based incompressible solvers.",
+    "module": "periodic.tgv",
+    "factory": "tgvCase",
+    "schemes": [
+      "divergenceFree",
+      "dfsphReference",
+      "iisph",
+      "omniIncompressible",
+      "band2018pb"
+    ],
+    "nx": 128,
+    "duration": 2,
+    "variants": {
+      "standard": {}
+    },
+    "image": "tgv",
+    "maxNx": 512
+  },
+  {
+    "id": "khh",
+    "name": "Kelvin\u2013Helmholtz",
+    "description": "Periodic compressible shear-layer instability.",
+    "module": "compressible.kelvinHelmholtz",
+    "factory": "kelvinHelmholtzCase",
+    "schemes": [
+      "CRKSPH",
+      "CompSPH",
+      "Monaghan",
+      "GSPH",
+      "InutsukaGSPH",
+      "MFM",
+      "MFV"
+    ],
+    "nx": 128,
+    "duration": 4,
+    "variants": {
+      "standard": {}
+    },
+    "image": "khh",
+    "maxNx": 512
+  },
+  {
+    "id": "random",
+    "name": "Decaying random flow",
+    "description": "Seeded unforced periodic WCSPH velocity field.",
+    "module": "periodic.randomFlow",
+    "factory": "randomFlowCase",
+    "schemes": ["deltaSPH", "sun2017DeltaSPH", "artificialCompressible"],
+    "nx": 128,
+    "duration": 6,
+    "variants": {
+      "standard": {
+        "bounded": false,
+        "obstacle": false,
+        "inviscid": false,
+        "nu": 0.005,
+        "seed": 20261017
+      }
+    },
+    "image": "random",
+    "maxNx": 512
+  },
+  {
+    "id": "sloshing",
+    "name": "Sloshing tank",
+    "description": "Moving tank with free surface and pressure probes.",
+    "module": "freeSurface.sloshingTank",
+    "factory": "sloshingTankCase",
+    "schemes": ["deltaSPH", "sun2017DeltaSPH", "artificialCompressible"],
+    "nx": 128,
+    "duration": 7,
+    "variants": {
+      "standard": {}
+    },
+    "image": "sloshing",
+    "maxNx": 384
+  }
+]

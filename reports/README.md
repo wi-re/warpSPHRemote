@@ -86,3 +86,6 @@ current limits and timing definitions. Write their logs outside Git as well.
 
 See [compact controls and scalar analysis](VIEW_PRESETS_AND_ANALYSIS.md) and
 [high-resolution snapshot provenance](SNAPSHOT_GALLERY.md) for the next iteration.
+
+See [local companion setup and protocol](LOCAL_COMPANION.md) for optional live
+simulation discovery, preset execution and browser attachment.

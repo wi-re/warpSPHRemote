@@ -1,7 +1,7 @@
 import type { DiagnosticMetric } from "./types";
 import type { Diagnostic, Frame, Mapping, NumericArray } from "./types";
 
-export function decodeFrame(buffer: ArrayBuffer): Frame {
+export function decodeFrame(buffer: ArrayBuffer, allowPartial = false): Frame {
   const view = new DataView(buffer);
   if (buffer.byteLength < 8 || view.getUint32(0, true) !== 0x31525057)
     throw new Error("Invalid WPR1 frame signature.");
@@ -44,7 +44,10 @@ export function decodeFrame(buffer: ArrayBuffer): Frame {
     arrays[name] = { data, shape: spec.shape };
   }
   const p = arrays.positions;
-  if (!p || p.shape.length !== 2 || ![2, 3].includes(p.shape[1]))
+  if (
+    !allowPartial &&
+    (!p || p.shape.length !== 2 || ![2, 3].includes(p.shape[1]))
+  )
     throw new Error("Frame is missing N×2 or N×3 positions.");
   return {
     index: header.index,

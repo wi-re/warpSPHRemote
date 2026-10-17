@@ -15,6 +15,11 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 warpsph-remote = "warpsph_remote.server:main"
+warpsph-companion = "warpsph_remote.daemon:main"
+warpsph-remote-open = "warpsph_remote.launcher:main"
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+[tool.setuptools.package-data]
+warpsph_remote = ["presets.json"]
