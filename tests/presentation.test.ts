@@ -151,3 +151,44 @@ test("a derived velocity grid can accompany categorical particle coloring withou
   assert.equal(p.field, "UIDs");
   assert.equal(p.result, result);
 });
+
+test("picked streamlines wait without blocking the field or LIC, then resume with a selected seed", async () => {
+  const requests: FieldQuery[] = [];
+  const reader = {
+    metadata: { id: "recording" },
+    frame: async () => frame,
+    grid: async (request: FieldQuery) => {
+      requests.push(request);
+      return result;
+    },
+  };
+  const picked: FieldQuery = {
+    ...query,
+    streams: { seeds: 8, steps: 400 },
+    seed: [],
+    lic: { steps: 16, contrast: 1.8, seed: 1 },
+  };
+  const show = (request: FieldQuery) =>
+    loadPresentation(
+      reader,
+      7,
+      "densities",
+      "grid",
+      request,
+      JSON.stringify(request),
+      new AbortController().signal,
+    );
+  const waiting = await show(picked);
+  assert.equal(waiting.frame, frame);
+  assert.equal(waiting.result, result);
+  assert.equal(waiting.mode, "grid");
+  assert.equal(requests[0].streams, null);
+  assert.equal(requests[0].seed, undefined);
+  assert.deepEqual(requests[0].lic, picked.lic);
+  assert.deepEqual(picked.seed, []); // retain the user's pending picked-seed mode
+  await show({ ...picked, seed: [0.25, 0.5] });
+  assert.deepEqual(requests[1].seed, [0.25, 0.5]);
+  assert.deepEqual(requests[1].streams, picked.streams);
+  await show({ ...picked, seed: undefined });
+  assert.deepEqual(requests[2].streams, picked.streams); // regular seeds still work
+});

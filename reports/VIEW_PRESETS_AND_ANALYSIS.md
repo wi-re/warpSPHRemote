@@ -117,3 +117,20 @@ against CPU references; see the snapshot provenance report.
 Run `npm test`, `npm run build`, `npm run dev`. For new recorded fixtures:
 `npm run bench:gpu -- --snapshots --derivatives`. Evidence lives outside Git under
 `../warpSPHDevelopment/remote/view-analysis-gallery-20261017/`.
+
+## Picked-position streamline waiting state
+
+Selecting picked-position seeds before a particle has been picked is an expected
+interaction, not a frame error. The presentation keeps the scalar/particle field
+and any LIC visible while suppressing only the unseeded streamline. It does not
+fall back to regular seeds. The controls display a nonblocking waiting note and
+activate the plot's particle picker; **Pick a seed** reactivates it after Escape.
+Once a particle is selected, its fixed spatial seed is used immediately. Switching
+back to regular seeds still generates the usual seed grid.
+
+A regression test covers loading the field/LIC with no seed, then a valid picked
+seed and regular seeds. Browser verification selected picked mode with no prior
+selection on the 512² TGV, confirmed an unobstructed plot and active picker, then
+clicked a particle and obtained 800 streamline segments without an error overlay.
+Run `npm test`, `npm run build`, `npm run dev` to reproduce. Evidence is outside
+Git under `../warpSPHDevelopment/remote/picked-streamline-waiting-20261017/`.

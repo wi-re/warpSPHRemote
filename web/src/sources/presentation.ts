@@ -31,15 +31,20 @@ export async function loadPresentation(
     throw new Error(
       "Select a continuous scalar or vector quantity for reconstruction.",
     );
-  if (query?.seed && query.seed.length !== 2)
-    throw new Error(
-      "Pick a particle to seed an instantaneous streamline, or choose regular seeds.",
-    );
+  // Picked-position mode can be enabled before a particle is selected. Keep
+  // rendering the field (and LIC), but do not substitute regular streamlines.
+  const reconstruction =
+    query?.seed &&
+    (query.seed.length !== 2 || !query.seed.every(Number.isFinite))
+      ? { ...query, streams: null, seed: undefined }
+      : query;
   // Enqueue together so low-priority history work cannot slip between the
   // particle read and reconstruction. The worker reuses its raw-frame cache.
   const [frame, result] = await Promise.all([
     reader.frame(index, field, signal),
-    query ? reader.grid(query, signal) : Promise.resolve(null),
+    reconstruction
+      ? reader.grid(reconstruction, signal)
+      : Promise.resolve(null),
   ]);
   signal.throwIfAborted();
   return { sourceId: reader.metadata.id, frame, field, mode, result, key };

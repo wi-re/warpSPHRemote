@@ -93,6 +93,7 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
     setSeeds,
     seedMode,
     setSeedMode,
+    waitingForSeed: flow && seedMode === "picked" && fixedSeed.length !== 2,
     active,
     preferences,
     restore,
@@ -129,6 +130,7 @@ export function FieldControls({
   view: v,
   dimension,
   hasVelocity,
+  onRequestSeed,
 }: {
   view: ReturnType<typeof useFieldView> & {
     result: FieldResult | null;
@@ -137,6 +139,7 @@ export function FieldControls({
   };
   dimension: number | undefined;
   hasVelocity: boolean;
+  onRequestSeed: () => void;
   onQuantityChange?: (quantity: GridQuantity) => void;
 }) {
   const [gridOpen, setGridOpen] = useState(false),
@@ -246,6 +249,12 @@ export function FieldControls({
               onChange={(e) => {
                 v.setFlow(e.target.checked);
                 setStreamsOpen(e.target.checked);
+                if (
+                  e.target.checked &&
+                  v.seedMode === "picked" &&
+                  !v.preferences.seed
+                )
+                  onRequestSeed();
               }}
             />
             Streamlines
@@ -258,9 +267,11 @@ export function FieldControls({
         <select
           id="stream-seed-mode"
           value={v.seedMode}
-          onChange={(e) =>
-            v.setSeedMode(e.target.value as "regular" | "picked")
-          }
+          onChange={(e) => {
+            v.setSeedMode(e.target.value as "regular" | "picked");
+            if (e.target.value === "picked" && v.flow && !v.preferences.seed)
+              onRequestSeed();
+          }}
         >
           <option value="regular">Regular seed grid</option>
           <option value="picked">Picked position · fixed seed</option>
@@ -282,9 +293,19 @@ export function FieldControls({
             />
           </>
         ) : (
-          <p className="subtle-note">
-            Pick a particle to set a fixed spatial seed.
-          </p>
+          <div>
+            <p
+              className="subtle-note"
+              role={v.waitingForSeed ? "status" : undefined}
+            >
+              {v.waitingForSeed
+                ? "Waiting for a seed. Click a particle in the plot to start the streamline."
+                : "Pick a particle to set a fixed spatial seed."}
+            </p>
+            <button className="secondary-button" onClick={onRequestSeed}>
+              {v.waitingForSeed ? "Pick a seed" : "Change seed"}
+            </button>
+          </div>
         )}
         <p className="subtle-note">
           One frozen velocity frame. Use material tracks for temporal paths.

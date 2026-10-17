@@ -1451,7 +1451,9 @@ export default function App() {
             )}
             {picking && !selection && (
               <div className="pick-hint" role="status">
-                Click a particle to inspect · drag to pan
+                {fieldView.waitingForSeed
+                  ? "Click a particle to seed the streamline · drag to pan"
+                  : "Click a particle to inspect · drag to pan"}
               </div>
             )}
             {selection?.sourceId === sourceId &&
@@ -2163,6 +2165,10 @@ export default function App() {
               )}
             </details>
             <FieldControls
+              onRequestSeed={() => {
+                setPlaying(false);
+                setPicking(true);
+              }}
               view={{
                 ...fieldView,
                 result: presentation?.result ?? null,
