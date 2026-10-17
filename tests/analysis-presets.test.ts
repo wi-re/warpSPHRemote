@@ -194,6 +194,18 @@ test("share URLs round-trip view parameters and reject corrupt options", () => {
   assert.equal(parsed.view.lic?.seed, 7);
   assert.equal(parsed.options.palette, "coolwarm");
   assert.deepEqual(parsed.metrics, ["totalEnergy", "totalMomentum"]);
+  const noWrapURL = buildViewURL(
+    "https://fluids.dev/warpSPHRemote/",
+    source,
+    2,
+    "UIDs",
+    { ...initialOptions, normalization: "cyclic", colorPeriod: 0 },
+    { ...view, mode: "particles" },
+    [],
+    "light",
+  );
+  assert.equal(new URL(noWrapURL).searchParams.get("period"), "0");
+  assert.equal(parseViewLink(new URL(noWrapURL).search).options.colorPeriod, 0);
   const bad = parseViewLink(
     "?palette=evil&resolution=99999&coverage=NaN&lic=1&licSteps=4.5&noiseSeed=-1&metrics=unknown,totalMass,totalMass",
   );

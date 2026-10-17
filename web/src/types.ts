@@ -71,7 +71,7 @@ export interface ViewOptions {
   palette: string;
   mapping: Mapping;
   normalization: "linear" | "log" | "symlog" | "cyclic";
-  colorPeriod: number;
+  colorPeriod: number; // 0 disables periodic color wrapping.
   range: "frame" | "fixed";
   min: number;
   max: number;
@@ -89,7 +89,7 @@ export const initialOptions: ViewOptions = {
   palette: "viridis",
   mapping: "magnitude",
   normalization: "linear",
-  colorPeriod: 256,
+  colorPeriod: 0,
   range: "frame",
   min: 0,
   max: 1,

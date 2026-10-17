@@ -17,7 +17,7 @@ test("periodic UID colors repeat without losing exact large integer identities",
   assert.equal(link.field, "UIDs");
   assert.equal(link.options.normalization, "cyclic");
   assert.equal(link.options.palette, "twilight");
-  assert.equal(link.options.colorPeriod, 256);
+  assert.equal(link.options.colorPeriod, 0);
   assert.ok(colorPresets.some((p) => p.id === "uid-cyclic"));
   assert.equal(
     sanitizeView(
@@ -25,6 +25,22 @@ test("periodic UID colors repeat without losing exact large integer identities",
       "ids",
     )?.options?.colorPeriod,
     1024,
+  );
+});
+
+test("zero disables color wrapping in presets, URL overrides and saved settings", () => {
+  assert.equal(parseViewLink("?scale=cyclic&period=0").options.colorPeriod, 0);
+  assert.equal(
+    parseViewLink("?colorPreset=uid-cyclic&period=1024").options.colorPeriod,
+    1024,
+  );
+  assert.equal(parseViewLink("?period=-1").options.colorPeriod, undefined);
+  assert.equal(
+    sanitizeView(
+      { key: "ids", options: { normalization: "cyclic", colorPeriod: 0 } },
+      "ids",
+    )?.options?.colorPeriod,
+    0,
   );
 });
 

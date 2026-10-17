@@ -27,13 +27,13 @@ export interface ColorPreset {
 export const colorPresets: ColorPreset[] = [
   {
     id: "uid-cyclic",
-    label: "UIDs · periodic colors",
+    label: "UIDs · full-range colors",
     field: "UIDs",
     quantity: "field",
     palette: "twilight",
     normalization: "cyclic",
     mapping: "magnitude",
-    colorPeriod: 256,
+    colorPeriod: 0,
   },
   {
     id: "density",
@@ -144,7 +144,7 @@ export function parseViewLink(search: string): ViewLink {
       normalization: color.normalization,
       mapping: color.mapping,
       range: "frame",
-      ...(color.colorPeriod ? { colorPeriod: color.colorPeriod } : {}),
+      ...(color.colorPeriod != null ? { colorPeriod: color.colorPeriod } : {}),
     };
     out.view.settings = { quantity: color.quantity };
     if (color.quantity !== "field") out.view.mode = "grid";
@@ -159,7 +159,7 @@ export function parseViewLink(search: string): ViewLink {
   const normalization = one("scale", ["linear", "log", "symlog", "cyclic"]);
   if (normalization)
     out.options.normalization = normalization as ViewOptions["normalization"];
-  const colorPeriod = number(p, "period", 1, 1e9);
+  const colorPeriod = number(p, "period", 0, 1e9);
   if (colorPeriod != null && Number.isInteger(colorPeriod))
     out.options.colorPeriod = colorPeriod;
   const mapping = one("component", ["magnitude", "x", "y", "z"]);

@@ -1663,7 +1663,8 @@ export default function App() {
                 <div className="color-legend">
                   <div className="legend-title">
                     {scalarTitle}
-                    {options.normalization === "cyclic"
+                    {options.normalization === "cyclic" &&
+                    options.colorPeriod > 0
                       ? ` · modulo ${options.colorPeriod}`
                       : ""}
                   </div>
@@ -2184,24 +2185,24 @@ export default function App() {
                   <option value="linear">Linear</option>
                   <option value="log">Logarithmic</option>
                   <option value="symlog">Symmetric log · threshold 1</option>
-                  <option value="cyclic">Periodic · repeat colors</option>
+                  <option value="cyclic">Periodic · 0 disables wrapping</option>
                 </select>
                 <ChevronDown size={13} />
               </div>
-              {options.normalization === "cyclic" ? (
+              {options.normalization === "cyclic" && (
                 <>
                   <label className="control-label">
                     Color period
                     <NumberControl
                       aria-label="Color period"
-                      min={1}
+                      min={0}
                       max={1e9}
                       step={1}
                       value={options.colorPeriod}
                       onValueChange={(value) => {
                         if (
                           Number.isInteger(value) &&
-                          value >= 1 &&
+                          value >= 0 &&
                           value <= 1e9
                         )
                           setOption("colorPeriod", value);
@@ -2209,11 +2210,14 @@ export default function App() {
                     />
                   </label>
                   <p className="subtle-note">
-                    Colors repeat every {options.colorPeriod} units; IDs retain
-                    the same color across frames.
+                    {options.colorPeriod === 0
+                      ? "No wrapping: colors span the full value range. Set a positive period to repeat colors."
+                      : `Colors repeat every ${options.colorPeriod} units. Set 0 for no wrapping.`}
                   </p>
                 </>
-              ) : (
+              )}
+              {(options.normalization !== "cyclic" ||
+                options.colorPeriod === 0) && (
                 <>
                   <div className="label-row">
                     <span>Color range</span>

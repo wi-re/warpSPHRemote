@@ -68,14 +68,24 @@ particle presentation; optional streamlines reconstruct velocity independently.
 Selecting a continuous quantity re-enables grid display. Categorical values are
 never silently averaged into fake IDs.
 
-The **UIDs · periodic colors** mapping preset selects UIDs, Twilight and periodic
-normalization. Colors repeat modulo 256 by default; **Color period** accepts an
-integer period 1..1e9. `colorPreset=uid-cyclic` opens the preset, while `scale=cyclic`
-and `period=...` serialize custom settings. Integer UID modulo is computed before
+The **UIDs · full-range colors** mapping preset selects UIDs and Twilight with
+**Color period = 0**: no wrapping, using the full fluid UID range with linear
+normalization. A positive integer period (up to 1e9) repeats colors; setting it
+back to zero restores the automatic or fixed range controls. The same behavior
+applies to particle and grid shading. `colorPreset=uid-cyclic` remains compatible;
+`scale=cyclic&period=0` explicitly disables wrapping in a shared URL. Saved settings
+preserve zero and existing explicit positive periods. Applying the preset resets
+the period to zero. With a positive period, integer UID modulo is computed before
 float32 upload, including exact bigint UIDs above 2^53. This changes color only;
 selection/identity and scalar analysis retain the original recorded arrays.
 Tests include huge integer UIDs, periodic repeats, safe categorical presentation,
-velocity overlays and settings. The final test count is 81; GPU reconstruction
+velocity overlays and settings. Initial verification passed 81 tests; GPU reconstruction
 coverage remains 74 cases plus six exact prefix scans. Browser verification
 switched density grid → UID periodic preset without alerts and confirmed that
 continuous grid choices become unavailable while the particle scene stays usable.
+
+The no-wrapping follow-up passed 88 TypeScript tests and the production build.
+Browser verification on the 65,536-particle KHH recording switched the period
+0 → 256 → 0, checking the full 0..65,535 range, explicit modulo range and restored
+range controls without console errors. Evidence is retained outside the checkout
+in `../warpSPHDevelopment/remote/uid-color-period-20261017/`.

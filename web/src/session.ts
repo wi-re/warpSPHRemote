@@ -208,8 +208,8 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
     );
     options.range = oneOf(o.range, ["frame", "fixed"] as const, "frame");
     options.colorPeriod = Number.isInteger(o.colorPeriod)
-      ? finite(o.colorPeriod, 256, 1, 1e9)
-      : 256;
+      ? finite(o.colorPeriod, 0, 0, 1e9)
+      : 0;
     options.min = finite(o.min, 0);
     options.max = finite(o.max, 1);
     if (

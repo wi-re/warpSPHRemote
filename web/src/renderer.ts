@@ -787,7 +787,7 @@ export class ParticleRenderer {
       const rawColors =
         this.field === "UIDs" ? this.frame.arrays.UIDs.data : this.values;
       const colorValues =
-        options.normalization === "cyclic"
+        options.normalization === "cyclic" && options.colorPeriod > 0
           ? Float32Array.from({ length: rawColors.length }, (_, i) =>
               periodicColorValue(rawColors[i], options.colorPeriod),
             )
@@ -821,7 +821,7 @@ export class ParticleRenderer {
         options.max > options.min &&
         (options.normalization !== "log" || options.min > 0);
       this.range =
-        options.normalization === "cyclic"
+        options.normalization === "cyclic" && options.colorPeriod > 0
           ? [0, options.colorPeriod]
           : fixed
             ? [options.min, options.max]
@@ -839,9 +839,11 @@ export class ParticleRenderer {
     const u = this.material.uniforms;
     u.uMin.value = this.range[0];
     u.uMax.value = this.range[1];
-    u.uNorm.value = { linear: 0, log: 1, symlog: 2, cyclic: 3 }[
-      options.normalization
-    ];
+    // A disabled period uses the ordinary linear range in both particle and grid shaders.
+    u.uNorm.value =
+      options.normalization === "cyclic" && options.colorPeriod === 0
+        ? 0
+        : { linear: 0, log: 1, symlog: 2, cyclic: 3 }[options.normalization];
     u.uColorPeriod.value = options.colorPeriod;
     u.uScale.value = options.size;
     u.uPhysical.value = +options.physical;
