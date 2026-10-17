@@ -13,13 +13,15 @@ export const gridQuantityLabel = (quantity?: GridQuantity) =>
       ? "Vorticity · ∂v/∂x − ∂u/∂y"
       : "Recorded quantity";
 export interface GridSettings {
-  resolution: 128 | 256 | 512;
+  resolution: number;
   kernel: "wendland2" | "wendland4";
   minCoverage: number;
   wrapPeriodic: boolean;
   backend?: "auto" | "webgpu" | "cpu";
   quantity?: GridQuantity;
 }
+export const validGridResolution = (value: number) =>
+  Number.isInteger(value) && value >= 8 && value <= 2048;
 export const initialGrid: GridSettings = {
   resolution: 256,
   kernel: "wendland2",
@@ -66,7 +68,7 @@ export function gridLayout(
       "Choose a continuous scalar or vector field for grid reconstruction.",
     );
   if (
-    ![128, 256, 512].includes(settings.resolution) ||
+    !validGridResolution(settings.resolution) ||
     !["wendland2", "wendland4"].includes(settings.kernel) ||
     !["field", "divergence", "vorticity"].includes(
       settings.quantity ?? "field",

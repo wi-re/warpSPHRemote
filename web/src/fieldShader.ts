@@ -3,7 +3,7 @@
  * This visual animation never changes particle positions or simulation time. */
 export const fieldFragment = `
 uniform sampler2D uLIC, uVelocity, uField, uPalette;
-uniform float uHasLIC, uLICAnimate, uLICTime, uLICSpeed, uMin, uMax, uNorm;
+uniform float uHasLIC, uLICAnimate, uLICTime, uLICSpeed, uMin, uMax, uNorm, uColorPeriod;
 uniform vec2 uGridSize, uDomainSize, uPeriodic;
 varying vec2 vUv;
 float transformValue(float v){if(uNorm<0.5)return v;if(uNorm<1.5)return log(max(v,1.e-30));float a=abs(v);return sign(v)*(a<0.01?a*(1.0-a*(0.5-a/3.0)):log(1.0+a));}
@@ -44,7 +44,7 @@ float advectedNoise(float phase, float fallback){
 void main(){
  float v=texture2D(uField,vUv).r;if(v!=v||abs(v)>3.4e38)discard;
  if(uNorm>0.5&&uNorm<1.5&&v<=0.0){gl_FragColor=vec4(0.5,0.5,0.5,1.0);return;}
- float t=clamp((transformValue(v)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);
+ float t=uNorm>2.5?fract(v/uColorPeriod):clamp((transformValue(v)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);
  vec3 color=texture2D(uPalette,vec2(t,0.5)).rgb;
  if(uHasLIC>0.5){
    float n=texture2D(uLIC,vUv).r;if(n!=n)discard;

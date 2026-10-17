@@ -7,7 +7,11 @@ import {
   type ViewOptions,
   type DiagnosticMetric,
 } from "./types";
-import { initialGrid, type GridSettings } from "./sources/grid";
+import {
+  initialGrid,
+  validGridResolution,
+  type GridSettings,
+} from "./sources/grid";
 import type { FieldPreferences } from "./FieldView";
 import { sanitizeMetrics, defaultMetrics } from "./metrics";
 export interface ColorPreset {
@@ -18,8 +22,19 @@ export interface ColorPreset {
   palette: string;
   normalization: ViewOptions["normalization"];
   mapping: ViewOptions["mapping"];
+  colorPeriod?: number;
 }
 export const colorPresets: ColorPreset[] = [
+  {
+    id: "uid-cyclic",
+    label: "UIDs · periodic colors",
+    field: "UIDs",
+    quantity: "field",
+    palette: "twilight",
+    normalization: "cyclic",
+    mapping: "magnitude",
+    colorPeriod: 256,
+  },
   {
     id: "density",
     label: "Density · linear contrast",
@@ -129,6 +144,7 @@ export function parseViewLink(search: string): ViewLink {
       normalization: color.normalization,
       mapping: color.mapping,
       range: "frame",
+      ...(color.colorPeriod ? { colorPeriod: color.colorPeriod } : {}),
     };
     out.view.settings = { quantity: color.quantity };
     if (color.quantity !== "field") out.view.mode = "grid";
@@ -140,9 +156,12 @@ export function parseViewLink(search: string): ViewLink {
   };
   const palette = one("palette", Object.keys(palettes));
   if (palette) out.options.palette = palette;
-  const normalization = one("scale", ["linear", "log", "symlog"]);
+  const normalization = one("scale", ["linear", "log", "symlog", "cyclic"]);
   if (normalization)
     out.options.normalization = normalization as ViewOptions["normalization"];
+  const colorPeriod = number(p, "period", 1, 1e9);
+  if (colorPeriod != null && Number.isInteger(colorPeriod))
+    out.options.colorPeriod = colorPeriod;
   const mapping = one("component", ["magnitude", "x", "y", "z"]);
   if (mapping) out.options.mapping = mapping as ViewOptions["mapping"];
   const display = one("display", ["particles", "grid", "both"]);
@@ -180,11 +199,9 @@ export function parseViewLink(search: string): ViewLink {
     const n = number(p, key);
     if (
       n != null &&
-      (key === "resolution"
-        ? values.includes(n as never)
-        : n >= 0.05 && n <= 0.95)
+      (key === "resolution" ? validGridResolution(n) : n >= 0.05 && n <= 0.95)
     ) {
-      if (key === "resolution") settings.resolution = n as 128 | 256 | 512;
+      if (key === "resolution") settings.resolution = n;
       else settings.minCoverage = n;
       changed = true;
     }
@@ -350,6 +367,8 @@ export function buildViewURL(
   p.set("component", options.mapping);
   p.set("palette", options.palette);
   p.set("scale", options.normalization);
+  if (options.normalization === "cyclic")
+    p.set("period", String(options.colorPeriod));
   p.set("display", view.mode);
   p.set("resolution", String(view.settings.resolution));
   p.set("kernel", view.settings.kernel);

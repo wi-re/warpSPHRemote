@@ -9,8 +9,8 @@ unchanged.
 Open **Material motion → Pick a particle**, click a fluid particle in the scene,
 then **Track neighbourhood** in that tab or the particle card. This captures a
 fixed set of exact UIDs at the displayed frame and reads their recorded positions
-within the past/future frame window. Selecting a particle by itself does not
-capture a material set. An empty panel now explains this workflow instead of
+within the past/future frame window. Before tracking starts, selecting a particle by itself does not
+capture a material set. Once active, tracking follows new picks automatically. An empty panel now explains this workflow instead of
 showing an empty graph. **Untrack** beside Track cancels pending work, removes
 the captured tracks/ellipse and clears the curve. The selected particle remains.
 
@@ -84,3 +84,6 @@ check, not an animation-performance benchmark.
 
 Generated screenshots and logs live outside Git in
 `../warpSPHDevelopment/remote/material-analysis-ux-20261017/`.
+
+Particle repicking, the FTLE action placement, custom grid dimensions and numeric
+drag handles are detailed in [INTERACTION_CONTROLS.md](INTERACTION_CONTROLS.md).

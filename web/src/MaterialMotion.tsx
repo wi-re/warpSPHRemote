@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TrajectorySource } from "./sources/client";
 import type { Source } from "./types";
@@ -249,11 +250,17 @@ export function MaterialTools({
     <section className="material-tools" aria-label="Material motion controls">
       <div className="material-start">
         <strong>
-          {m.seed ? "Track a new neighbourhood" : "Start a material curve"}
+          {m.seed
+            ? "Tracking follows particle picks"
+            : m.busy
+              ? "Capturing neighbourhood…"
+              : "Start a material curve"}
         </strong>
         <p>
           {supported
-            ? "1. Pick a fluid particle. 2. Track its neighbourhood to generate the time curve."
+            ? m.seed || m.busy
+              ? "Click another fluid particle to retrack its neighbourhood. Untrack stops following new picks."
+              : "1. Pick a fluid particle. 2. Track its neighbourhood to generate the time curve."
             : "Material curves require a recording with stable particle UIDs."}
         </p>
         <div className="material-start-actions">
@@ -304,14 +311,13 @@ export function MaterialTools({
         </label>
         <label>
           Max. neighbours
-          <input
+          <NumberControl
             aria-label="Maximum material neighbours"
-            type="number"
             min="1"
             max="64"
             value={m.settings.count}
-            onChange={(e) => {
-              const n = +e.target.value;
+            onValueChange={(value) => {
+              const n = value;
               if (Number.isInteger(n) && n > 0 && n <= 64)
                 m.setSettings({ ...m.settings, count: n });
             }}
@@ -320,15 +326,13 @@ export function MaterialTools({
         {m.settings.mode === "radius" && (
           <label>
             Radius
-            <input
+            <NumberControl
               aria-label="Material radius"
-              type="number"
               min="0.000001"
               step="0.01"
               value={m.settings.radius}
-              onChange={(e) => {
-                if (+e.target.value > 0)
-                  m.setSettings({ ...m.settings, radius: +e.target.value });
+              onValueChange={(value) => {
+                if (value > 0) m.setSettings({ ...m.settings, radius: value });
               }}
             />
           </label>
@@ -336,14 +340,13 @@ export function MaterialTools({
         {(["past", "future"] as const).map((key) => (
           <label key={key}>
             {key === "past" ? "Past frames" : "Future frames"}
-            <input
+            <NumberControl
               aria-label={`Material ${key} frames`}
-              type="number"
               min="0"
               max="500"
               value={m[key]}
-              onChange={(e) => {
-                const n = +e.target.value;
+              onValueChange={(value) => {
+                const n = value;
                 if (Number.isInteger(n) && n >= 0 && n <= 500)
                   (key === "past" ? m.setPast : m.setFuture)(n);
               }}
@@ -391,7 +394,7 @@ export function MaterialTools({
       <div className="material-quality" role="status">
         {m.seed
           ? `Frozen UID ${m.seed.uids[0]} at frame ${m.seed.index + 1} · t=${m.seed.time.toPrecision(5)} · ${m.seed.uids.length} UIDs · ${m.rows.length} frames ${m.busy ? "· reading…" : ""} · ${available}/${m.seed.uids.length} present in current frame`
-          : "Pick a particle, then Track neighbourhood. Selection changes apply to the next capture."}
+          : "Pick a particle, then Track neighbourhood. Active tracking follows new particle picks."}
         {current && (
           <span>
             {" "}

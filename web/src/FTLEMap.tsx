@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 import { useEffect, useRef, useState } from "react";
 import type { Source } from "./types";
 import type { TrajectorySource } from "./sources/client";
@@ -247,14 +248,13 @@ export function FTLEMap({
         {(["start", "end"] as const).map((key) => (
           <label key={key}>
             {key === "start" ? "Initial frame" : "Final frame"}
-            <input
-              type="number"
+            <NumberControl
               aria-label={`FTLE ${key} frame`}
               min="1"
               max={source.frames}
               value={query[key] + 1}
-              onChange={(e) => {
-                const n = +e.target.value;
+              onValueChange={(value) => {
+                const n = value;
                 if (Number.isInteger(n) && n >= 1 && n <= source.frames)
                   setQuery({ ...query, [key]: n - 1 });
               }}
@@ -280,28 +280,25 @@ export function FTLEMap({
         </label>
         <label>
           Neighbour radius
-          <input
+          <NumberControl
             aria-label="FTLE radius"
-            type="number"
             min="0.000001"
             step="0.01"
             value={query.radius}
-            onChange={(e) => {
-              if (+e.target.value > 0)
-                setQuery({ ...query, radius: +e.target.value });
+            onValueChange={(value) => {
+              if (value > 0) setQuery({ ...query, radius: value });
             }}
           />
         </label>
         <label>
           Max. neighbours
-          <input
+          <NumberControl
             aria-label="FTLE neighbours"
-            type="number"
             min="3"
             max="64"
             value={query.neighbours}
-            onChange={(e) => {
-              const n = +e.target.value;
+            onValueChange={(value) => {
+              const n = value;
               if (Number.isInteger(n) && n >= 3 && n <= 64)
                 setQuery({ ...query, neighbours: n });
             }}
@@ -309,15 +306,14 @@ export function FTLEMap({
         </label>
         <label>
           Max. fit residual
-          <input
+          <NumberControl
             aria-label="FTLE residual limit"
-            type="number"
             min="0.01"
             max="1"
             step="0.05"
             value={query.maxResidual}
-            onChange={(e) => {
-              const n = +e.target.value;
+            onValueChange={(value) => {
+              const n = value;
               if (n > 0 && n <= 1) setQuery({ ...query, maxResidual: n });
             }}
           />
@@ -578,14 +574,12 @@ export function FTLEMap({
           {ridges && (
             <label>
               Minimum FTLE
-              <input
-                type="number"
+              <NumberControl
                 aria-label="FTLE ridge threshold"
                 step="0.1"
                 value={threshold}
-                onChange={(e) => {
-                  if (Number.isFinite(+e.target.value))
-                    setThreshold(+e.target.value);
+                onValueChange={(value) => {
+                  if (Number.isFinite(value)) setThreshold(value);
                 }}
               />
             </label>

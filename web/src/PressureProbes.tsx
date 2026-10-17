@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Source } from "./types";
 import type { TrajectorySource } from "./sources/client";
@@ -181,19 +182,15 @@ export function PressureControls({
             {p.position.map((v, i) => (
               <label key={i}>
                 {"XYZ"[i]}
-                <input
+                <NumberControl
                   aria-label={`Probe ${"XYZ"[i]}`}
-                  type="number"
                   step="any"
                   value={v}
-                  onChange={(e) => {
-                    if (
-                      e.target.value !== "" &&
-                      Number.isFinite(+e.target.value)
-                    )
+                  onValueChange={(value) => {
+                    if (Number.isFinite(value) && Number.isFinite(value))
                       c.update({
                         position: p.position.map((x, j) =>
-                          j === i ? +e.target.value : x,
+                          j === i ? value : x,
                         ),
                       });
                   }}
@@ -210,14 +207,13 @@ export function PressureControls({
           </button>
           <label className="probe-radius">
             Sampling radius
-            <input
+            <NumberControl
               aria-label="Probe radius"
-              type="number"
               min="0"
               step="any"
               value={p.radius}
-              onChange={(e) => {
-                if (+e.target.value > 0) c.update({ radius: +e.target.value });
+              onValueChange={(value) => {
+                if (value > 0) c.update({ radius: value });
               }}
             />
           </label>

@@ -64,7 +64,8 @@ export interface ViewOptions {
   wrapPeriodic: boolean;
   palette: string;
   mapping: Mapping;
-  normalization: "linear" | "log" | "symlog";
+  normalization: "linear" | "log" | "symlog" | "cyclic";
+  colorPeriod: number;
   range: "frame" | "fixed";
   min: number;
   max: number;
@@ -82,6 +83,7 @@ export const initialOptions: ViewOptions = {
   palette: "viridis",
   mapping: "magnitude",
   normalization: "linear",
+  colorPeriod: 256,
   range: "frame",
   min: 0,
   max: 1,

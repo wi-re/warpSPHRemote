@@ -97,7 +97,7 @@ export async function runChecks(report: (row: string) => void) {
   let passed = 0;
   try {
     for (const kernel of ["wendland2", "wendland4"] as const)
-      for (const resolution of [128, 256, 512] as const)
+      for (const resolution of [128, 173, 256, 512] as const)
         for (const field of ["test", "velocities"]) {
           const raw = fixture(),
             source = {
@@ -177,7 +177,7 @@ export async function runChecks(report: (row: string) => void) {
       );
     }
     for (const kernel of ["wendland2", "wendland4"] as const) {
-      for (const resolution of [128, 256, 512] as const)
+      for (const resolution of [128, 173, 256, 512] as const)
         for (const quantity of ["divergence", "vorticity"] as const) {
           const raw = fixture(),
             source = {

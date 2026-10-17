@@ -195,7 +195,7 @@ test("share URLs round-trip view parameters and reject corrupt options", () => {
   assert.equal(parsed.options.palette, "coolwarm");
   assert.deepEqual(parsed.metrics, ["totalEnergy", "totalMomentum"]);
   const bad = parseViewLink(
-    "?palette=evil&resolution=999&coverage=NaN&lic=1&licSteps=4.5&noiseSeed=-1&metrics=unknown,totalMass,totalMass",
+    "?palette=evil&resolution=99999&coverage=NaN&lic=1&licSteps=4.5&noiseSeed=-1&metrics=unknown,totalMass,totalMass",
   );
   assert.equal(bad.options.palette, undefined);
   assert.equal(bad.view.settings, undefined);

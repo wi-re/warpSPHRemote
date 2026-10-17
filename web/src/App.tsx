@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 import { defaultAnalysis, type AnalysisPreferences } from "./sources/analysis";
 import { QuantityAnalysis } from "./QuantityAnalysis";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
@@ -22,7 +23,11 @@ import {
   type SavedRecordingInfo,
 } from "./TrajectoryPicker";
 import { readPreferences, savePreferences } from "./preferences";
-import { derivativeQuantity, gridQuantityLabel } from "./sources/grid";
+import {
+  categoricalField,
+  derivativeQuantity,
+  gridQuantityLabel,
+} from "./sources/grid";
 import { useFieldView, FieldControls } from "./FieldView";
 import {
   recordedDemos,
@@ -264,6 +269,9 @@ export default function App() {
     [0, 1],
     [0, 0],
   ]);
+  const materialPick = useRef<
+    (uid: string, index: number, sourceId: string) => void
+  >(() => {});
   const host = useRef<HTMLDivElement>(null),
     engine = useRef<ParticleRenderer | null>(null),
     initialFocus = useRef<HTMLInputElement>(null);
@@ -293,13 +301,29 @@ export default function App() {
         )
       : [];
   const fieldView = useFieldView(source, selectedPosition);
-  const fieldQuery = fieldView.query(
+  const categoricalMapping =
+    categoricalField(field) && !derivativeQuantity(fieldView.settings.quantity);
+  const requestedFieldQuery = fieldView.query(
     index,
     field,
     options.mapping,
     options.wrapPeriodic,
   );
-  const displayMode = source?.dimension === 2 ? fieldView.mode : "particles";
+  const fieldQuery =
+    categoricalMapping && requestedFieldQuery
+      ? fieldView.flow
+        ? {
+            ...requestedFieldQuery,
+            field: "velocities",
+            mapping: "magnitude" as const,
+            lic: undefined,
+          }
+        : null
+      : requestedFieldQuery;
+  const displayMode =
+    source?.dimension === 2 && !categoricalMapping
+      ? fieldView.mode
+      : "particles";
   const presentationKey = JSON.stringify([
     sourceId,
     index,
@@ -646,6 +670,12 @@ export default function App() {
             ? String(e.frame.arrays.UIDs.data[i])
             : "",
         );
+        if (i >= 0 && e.frame?.arrays.UIDs && e.source)
+          materialPick.current(
+            String(e.frame.arrays.UIDs.data[i]),
+            e.frame.index,
+            e.source.id,
+          );
       };
       e.onRender = (ms) => {
         setRenderMs(ms);
@@ -1062,6 +1092,14 @@ export default function App() {
     displayedIndex,
   );
   const material = useMaterialMotion(registry.current.get(sourceId), source);
+  materialPick.current = (uid, frameIndex, pickedSource) => {
+    if (
+      pickedSource === sourceId &&
+      (material.seed || material.busy) &&
+      (material.seed?.uids[0] !== uid || material.seed?.index !== frameIndex)
+    )
+      void material.capture(frameIndex, uid);
+  };
   const trace = useParticleTrace(
     registry.current.get(sourceId),
     source,
@@ -1384,9 +1422,9 @@ export default function App() {
                 )}
               <span className="dimension-badge">
                 {source?.dimension ?? "—"}D{" "}
-                {fieldView.mode === "particles"
+                {displayMode === "particles"
                   ? "PARTICLES"
-                  : fieldView.mode === "both"
+                  : displayMode === "both"
                     ? "GRID + PARTICLES"
                     : "SCALAR GRID"}
               </span>
@@ -1572,7 +1610,12 @@ export default function App() {
                   </span>
                 </div>
                 <div className="color-legend">
-                  <div className="legend-title">{scalarTitle}</div>
+                  <div className="legend-title">
+                    {scalarTitle}
+                    {options.normalization === "cyclic"
+                      ? ` · modulo ${options.colorPeriod}`
+                      : ""}
+                  </div>
                   <div
                     className="legend-gradient"
                     style={{ background: gradient(options.palette) }}
@@ -1771,21 +1814,6 @@ export default function App() {
                 <div className="diagnostic-body">
                   {metric === "material" && (
                     <div className="material-tools-host">
-                      <button
-                        className="secondary-button"
-                        disabled={
-                          (source?.frames ?? 0) < 2 ||
-                          source?.dimension !== 2 ||
-                          source?.identity !== "UIDs" ||
-                          source?.timeKind !== "simulation"
-                        }
-                        onClick={() => {
-                          setPlaying(false);
-                          setFTLEOpen(true);
-                        }}
-                      >
-                        Spatial FTLE map
-                      </button>
                       <MaterialTools
                         motion={material}
                         uid={traceUid}
@@ -1952,10 +1980,15 @@ export default function App() {
                     quantity: preset.quantity,
                   }));
                   if (preset.quantity !== "field") fieldView.setMode("grid");
+                  if (categoricalField(preset.field)) {
+                    fieldView.setMode("particles");
+                    fieldView.setLIC(false);
+                  }
                   setOptions((old) => ({
                     ...old,
                     palette: preset.palette,
                     normalization: preset.normalization,
+                    colorPeriod: preset.colorPeriod ?? old.colorPeriod,
                     mapping: preset.mapping,
                     range: "frame",
                   }));
@@ -2089,65 +2122,93 @@ export default function App() {
                   <option value="linear">Linear</option>
                   <option value="log">Logarithmic</option>
                   <option value="symlog">Symmetric log · threshold 1</option>
+                  <option value="cyclic">Periodic · repeat colors</option>
                 </select>
                 <ChevronDown size={13} />
               </div>
-              <div className="label-row">
-                <span>Color range</span>
-                <button
-                  className="text-button"
-                  onClick={() =>
-                    setOptions((o) => ({
-                      ...o,
-                      range: o.range === "frame" ? "fixed" : "frame",
-                      min: range[0],
-                      max: range[1],
-                    }))
-                  }
-                >
-                  {options.range === "frame"
-                    ? "Auto · per frame"
-                    : "Fixed range"}
-                </button>
-              </div>
-              <div className="range-inputs">
-                <label>
-                  <span>MIN</span>
-                  <input
-                    aria-label="Minimum color value"
-                    type="number"
-                    step="any"
-                    disabled={options.range === "frame"}
-                    value={
-                      options.range === "frame"
-                        ? Number(range[0].toPrecision(5))
-                        : options.min
-                    }
-                    onChange={(e) => setOption("min", Number(e.target.value))}
-                  />
-                </label>
-                <span>—</span>
-                <label>
-                  <span>MAX</span>
-                  <input
-                    aria-label="Maximum color value"
-                    type="number"
-                    step="any"
-                    disabled={options.range === "frame"}
-                    value={
-                      options.range === "frame"
-                        ? Number(range[1].toPrecision(5))
-                        : options.max
-                    }
-                    onChange={(e) => setOption("max", Number(e.target.value))}
-                  />
-                </label>
-              </div>
-              {fixedError && (
-                <p className="inline-error">
-                  Maximum must exceed minimum; logarithmic bounds must be
-                  positive. Showing automatic range.
-                </p>
+              {options.normalization === "cyclic" ? (
+                <>
+                  <label className="control-label">
+                    Color period
+                    <NumberControl
+                      aria-label="Color period"
+                      min={1}
+                      max={1e9}
+                      step={1}
+                      value={options.colorPeriod}
+                      onValueChange={(value) => {
+                        if (
+                          Number.isInteger(value) &&
+                          value >= 1 &&
+                          value <= 1e9
+                        )
+                          setOption("colorPeriod", value);
+                      }}
+                    />
+                  </label>
+                  <p className="subtle-note">
+                    Colors repeat every {options.colorPeriod} units; IDs retain
+                    the same color across frames.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="label-row">
+                    <span>Color range</span>
+                    <button
+                      className="text-button"
+                      onClick={() =>
+                        setOptions((o) => ({
+                          ...o,
+                          range: o.range === "frame" ? "fixed" : "frame",
+                          min: range[0],
+                          max: range[1],
+                        }))
+                      }
+                    >
+                      {options.range === "frame"
+                        ? "Auto · per frame"
+                        : "Fixed range"}
+                    </button>
+                  </div>
+                  <div className="range-inputs">
+                    <label>
+                      <span>MIN</span>
+                      <NumberControl
+                        aria-label="Minimum color value"
+                        step="any"
+                        disabled={options.range === "frame"}
+                        value={
+                          options.range === "frame"
+                            ? Number(range[0].toPrecision(5))
+                            : options.min
+                        }
+                        onValueChange={(value) => setOption("min", value)}
+                      />
+                    </label>
+                    <span>—</span>
+                    <label>
+                      <span>MAX</span>
+                      <NumberControl
+                        aria-label="Maximum color value"
+                        step="any"
+                        disabled={options.range === "frame"}
+                        value={
+                          options.range === "frame"
+                            ? Number(range[1].toPrecision(5))
+                            : options.max
+                        }
+                        onValueChange={(value) => setOption("max", value)}
+                      />
+                    </label>
+                  </div>
+                  {fixedError && (
+                    <p className="inline-error">
+                      Maximum must exceed minimum; logarithmic bounds must be
+                      positive. Showing automatic range.
+                    </p>
+                  )}
+                </>
               )}
             </details>
             <section
@@ -2158,6 +2219,22 @@ export default function App() {
                 <Activity size={14} />
                 <span>QUANTITY ANALYSIS</span>
               </div>
+              <button
+                className="secondary-button"
+                disabled={
+                  (source?.frames ?? 0) < 2 ||
+                  source?.dimension !== 2 ||
+                  source?.identity !== "UIDs" ||
+                  source?.timeKind !== "simulation"
+                }
+                onClick={() => {
+                  setPlaying(false);
+                  setFTLEOpen(true);
+                }}
+              >
+                Spatial FTLE map
+              </button>
+
               <div
                 className="quantity-analysis-tabs"
                 role="group"
@@ -2230,6 +2307,7 @@ export default function App() {
               )}
             </section>
             <FieldControls
+              canReconstruct={!categoricalMapping}
               onRequestSeed={() => {
                 setPlaying(false);
                 setPicking(true);
@@ -2545,7 +2623,7 @@ export default function App() {
           key={sourceId}
           source={source}
           reader={registry.current.get(sourceId)!}
-          seedIndex={material.seed?.index ?? displayedIndex}
+          seedIndex={displayedIndex}
           endIndex={displayedIndex}
           radius={material.settings.radius}
           neighbours={material.settings.count}
@@ -2554,6 +2632,7 @@ export default function App() {
             seek(index);
             setSelection({ sourceId, frame: index, index: -1, uid });
             setTraceUid(uid);
+            materialPick.current(uid, index, sourceId);
           }}
         />
       )}

@@ -83,7 +83,7 @@ test("scrubbing cannot commit a late reconstruction after the target was cancell
   g.resolve(result);
   await assert.rejects(pending, { name: "AbortError" });
 });
-test("particle-only playback never requests reconstruction, and invalid grid choices fail explicitly", async () => {
+test("particle-only playback and categorical grid requests stay interactive without interpolation", async () => {
   let grids = 0,
     frames = 0;
   const reader = {
@@ -108,19 +108,19 @@ test("particle-only playback never requests reconstruction, and invalid grid cho
   );
   assert.equal(p.result, null);
   assert.equal(grids, 0);
-  await assert.rejects(
-    loadPresentation(
-      reader,
-      7,
-      "UIDs",
-      "grid",
-      { ...query, field: "UIDs" },
-      "invalid",
-      new AbortController().signal,
-    ),
-    /continuous/,
+  const categorical = await loadPresentation(
+    reader,
+    7,
+    "UIDs",
+    "grid",
+    { ...query, field: "UIDs" },
+    "ids",
+    new AbortController().signal,
   );
-  assert.equal(frames, 1);
+  assert.equal(categorical.mode, "particles");
+  assert.equal(categorical.result, null);
+  assert.equal(grids, 0);
+  assert.equal(frames, 2);
 });
 
 test("a derived velocity grid can accompany categorical particle coloring without changing its source/frame contract", async () => {

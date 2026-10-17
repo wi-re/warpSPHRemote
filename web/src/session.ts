@@ -6,7 +6,7 @@ import {
   type DiagnosticMetric,
 } from "./types";
 import { palettes } from "./palettes";
-import { initialGrid } from "./sources/grid";
+import { initialGrid, validGridResolution } from "./sources/grid";
 import type { FieldPreferences } from "./FieldView";
 import type { RecordedDemo } from "./recordedDemos";
 /** One browser-local snapshot, replacing the previous recording atomically. */
@@ -203,10 +203,13 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
     );
     options.normalization = oneOf(
       o.normalization,
-      ["linear", "log", "symlog"] as const,
+      ["linear", "log", "symlog", "cyclic"] as const,
       "linear",
     );
     options.range = oneOf(o.range, ["frame", "fixed"] as const, "frame");
+    options.colorPeriod = Number.isInteger(o.colorPeriod)
+      ? finite(o.colorPeriod, 256, 1, 1e9)
+      : 256;
     options.min = finite(o.min, 0);
     options.max = finite(o.max, 1);
     if (
@@ -237,11 +240,9 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
           ["field", "divergence", "vorticity"] as const,
           "field",
         ),
-        resolution: oneOf(
-          g.resolution,
-          [128, 256, 512] as const,
-          initialGrid.resolution,
-        ),
+        resolution: validGridResolution(g.resolution)
+          ? g.resolution
+          : initialGrid.resolution,
         kernel: oneOf(
           g.kernel,
           ["wendland2", "wendland4"] as const,

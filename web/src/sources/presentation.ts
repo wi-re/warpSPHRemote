@@ -27,17 +27,25 @@ export async function loadPresentation(
   signal: AbortSignal,
 ): Promise<Presentation> {
   signal.throwIfAborted();
-  if (query && categoricalField(query.field))
-    throw new Error(
-      "Select a continuous scalar or vector quantity for reconstruction.",
-    );
+  const categorical = !!query && categoricalField(query.field);
+  const continuousQuery = categorical
+    ? query!.streams
+      ? {
+          ...query!,
+          field: "velocities",
+          mapping: "magnitude" as const,
+          lic: undefined,
+        }
+      : null
+    : query;
   // Picked-position mode can be enabled before a particle is selected. Keep
   // rendering the field (and LIC), but do not substitute regular streamlines.
   const reconstruction =
-    query?.seed &&
-    (query.seed.length !== 2 || !query.seed.every(Number.isFinite))
-      ? { ...query, streams: null, seed: undefined }
-      : query;
+    continuousQuery?.seed &&
+    (continuousQuery.seed.length !== 2 ||
+      !continuousQuery.seed.every(Number.isFinite))
+      ? { ...continuousQuery, streams: null, seed: undefined }
+      : continuousQuery;
   // Enqueue together so low-priority history work cannot slip between the
   // particle read and reconstruction. The worker reuses its raw-frame cache.
   const [frame, result] = await Promise.all([
@@ -47,5 +55,12 @@ export async function loadPresentation(
       : Promise.resolve(null),
   ]);
   signal.throwIfAborted();
-  return { sourceId: reader.metadata.id, frame, field, mode, result, key };
+  return {
+    sourceId: reader.metadata.id,
+    frame,
+    field,
+    mode: categorical ? "particles" : mode,
+    result,
+    key,
+  };
 }

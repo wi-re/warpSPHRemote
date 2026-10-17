@@ -1,9 +1,11 @@
+import { NumberControl } from "./NumberControl";
 import { initialLIC, type LICSettings } from "./sources/lic";
 import { readPreferences } from "./preferences";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Mapping, Source } from "./types";
 import {
   initialGrid,
+  validGridResolution,
   derivativeQuantity,
   gridQuantityLabel,
   type GridQuantity,
@@ -142,6 +144,7 @@ export function FieldControls({
   dimension,
   hasVelocity,
   onRequestSeed,
+  canReconstruct = true,
 }: {
   view: ReturnType<typeof useFieldView> & {
     result: FieldResult | null;
@@ -151,11 +154,30 @@ export function FieldControls({
   dimension: number | undefined;
   hasVelocity: boolean;
   onRequestSeed: () => void;
+  canReconstruct?: boolean;
   onQuantityChange?: (quantity: GridQuantity) => void;
 }) {
   const [gridOpen, setGridOpen] = useState(false),
     [streamsOpen, setStreamsOpen] = useState(false),
-    [licOpen, setLICOpen] = useState(false);
+    [licOpen, setLICOpen] = useState(false),
+    [customResolution, setCustomResolution] = useState(false),
+    [resolutionDraft, setResolutionDraft] = useState(v.settings.resolution);
+  const resolutionHost = useRef<HTMLDivElement>(null);
+  const openCustom = () => {
+    setResolutionDraft(v.settings.resolution);
+    setCustomResolution(true);
+  };
+  useEffect(() => {
+    if (customResolution) {
+      const input = resolutionHost.current?.querySelector("input");
+      input?.focus();
+      input?.select();
+    }
+  }, [customResolution]);
+  const applyResolution = () => {
+    if (validGridResolution(resolutionDraft))
+      update({ resolution: resolutionDraft });
+  };
   const update = (patch: Partial<GridSettings>) =>
     v.setSettings((old) => ({ ...old, ...patch }));
   if (dimension !== 2)
@@ -174,16 +196,27 @@ export function FieldControls({
         </label>
         <select
           id="field-view"
-          value={v.mode}
+          value={canReconstruct ? v.mode : "particles"}
           onChange={(e) => {
             v.setMode(e.target.value as FieldMode);
             if (e.target.value === "particles") v.setLIC(false);
           }}
         >
           <option value="particles">Particles</option>
-          <option value="grid">Scalar grid</option>
-          <option value="both">Grid + particles</option>
+          <option value="grid" disabled={!canReconstruct}>
+            Scalar grid
+          </option>
+          <option value="both" disabled={!canReconstruct}>
+            Grid + particles
+          </option>
         </select>
+        {!canReconstruct && (
+          <p className="subtle-note" role="status">
+            Integer IDs and categories use particle display. Choose a continuous
+            quantity to interpolate a grid; velocity streamlines remain
+            available.
+          </p>
+        )}
       </section>
       <details
         className="control-disclosure control-section"
@@ -202,6 +235,19 @@ export function FieldControls({
         </label>
         <select
           id="grid-resolution"
+          title="Ctrl-click to enter a custom resolution"
+          onMouseDown={(e) => {
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              openCustom();
+            }
+          }}
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+              e.preventDefault();
+              openCustom();
+            }
+          }}
           value={v.settings.resolution}
           onChange={(e) =>
             update({
@@ -209,10 +255,64 @@ export function FieldControls({
             })
           }
         >
+          {![128, 256, 512].includes(v.settings.resolution) && (
+            <option value={v.settings.resolution}>
+              {v.settings.resolution} (custom)
+            </option>
+          )}
           {[128, 256, 512].map((n) => (
             <option key={n}>{n}</option>
           ))}
         </select>
+        <button
+          className="text-button custom-resolution-button"
+          onClick={() =>
+            customResolution ? setCustomResolution(false) : openCustom()
+          }
+        >
+          {customResolution
+            ? "Close custom input"
+            : "Custom… · Ctrl-click resolution"}
+        </button>
+        {customResolution && (
+          <div
+            className="custom-resolution"
+            ref={resolutionHost}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applyResolution();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setCustomResolution(false);
+              }
+            }}
+          >
+            <NumberControl
+              aria-label="Custom grid resolution"
+              value={resolutionDraft}
+              min={8}
+              max={2048}
+              step={1}
+              onValueChange={setResolutionDraft}
+            />
+            <button
+              className="secondary-button"
+              disabled={
+                !validGridResolution(resolutionDraft) ||
+                resolutionDraft === v.settings.resolution
+              }
+              onClick={applyResolution}
+            >
+              Apply
+            </button>
+            <p className="subtle-note">
+              8–2048 cells on the longest side, including non-power-of-two
+              values. Enter to apply.
+            </p>
+          </div>
+        )}
         <label className="control-label" htmlFor="grid-kernel">
           Reconstruction kernel
         </label>
@@ -332,8 +432,8 @@ export function FieldControls({
             <input
               type="checkbox"
               aria-label="Show LIC"
-              checked={v.lic}
-              disabled={!hasVelocity}
+              checked={v.lic && canReconstruct}
+              disabled={!hasVelocity || !canReconstruct}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => {
                 v.setLIC(e.target.checked);
@@ -406,14 +506,13 @@ export function FieldControls({
         <label className="control-label" htmlFor="lic-seed">
           LIC noise seed
         </label>
-        <input
+        <NumberControl
           id="lic-seed"
-          type="number"
           min="0"
           max="65535"
           value={v.licSettings.seed}
-          onChange={(e) => {
-            const n = +e.target.value;
+          onValueChange={(value) => {
+            const n = value;
             if (Number.isInteger(n) && n >= 0 && n <= 65535)
               v.setLICSettings({ ...v.licSettings, seed: n });
           }}

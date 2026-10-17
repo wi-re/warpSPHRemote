@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 import { useEffect, useState } from "react";
 import type { Source } from "./types";
 import type { TrajectorySource } from "./sources/client";
@@ -97,30 +98,28 @@ export function TraceControls({
           <div className="probe-coordinates">
             <label>
               Past frames
-              <input
-                type="number"
+              <NumberControl
                 aria-label="Trace past frames"
                 min="0"
                 max="1000"
                 step="1"
                 value={t.past}
-                onChange={(e) => {
-                  const n = +e.target.value;
+                onValueChange={(value) => {
+                  const n = value;
                   if (Number.isInteger(n) && n >= 0 && n <= 1000) t.setPast(n);
                 }}
               />
             </label>
             <label>
               Future frames
-              <input
-                type="number"
+              <NumberControl
                 aria-label="Trace future frames"
                 min="0"
                 max="1000"
                 step="1"
                 value={t.future}
-                onChange={(e) => {
-                  const n = +e.target.value;
+                onValueChange={(value) => {
+                  const n = value;
                   if (Number.isInteger(n) && n >= 0 && n <= 1000)
                     t.setFuture(n);
                 }}

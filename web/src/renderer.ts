@@ -1,3 +1,4 @@
+import { periodicColorValue } from "./periodicColor";
 import { fieldFragment } from "./fieldShader";
 import {
   deformation,
@@ -57,6 +58,7 @@ uniform sampler2D uPalette;
 uniform float uMin;
 uniform float uMax;
 uniform float uNorm;
+uniform float uColorPeriod;
 uniform float u3D;
 uniform float uLight;
 uniform float uNeutral;
@@ -72,7 +74,7 @@ void main(){
  float r2=dot(vUv,vUv);if(r2>1.0||vHidden>0.5)discard;
  float alpha=1.0-smoothstep(1.0-fwidth(r2)*1.5,1.0,r2);
  bool invalid=(vValue!=vValue)||abs(vValue)>3.4e38||(uNorm>0.5&&uNorm<1.5&&vValue<=0.0);
- float t=clamp((transformValue(vValue)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);
+ float t=uNorm>2.5?fract(vValue/uColorPeriod):clamp((transformValue(vValue)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);
  vec3 color=texture2D(uPalette,vec2(t,0.5)).rgb;
  if(invalid)color=vec3(0.5);
  if(vKind>0.5||uNeutral>0.5)color=uLight>0.5?vec3(0.45,0.50,0.55):vec3(0.43,0.51,0.59);
@@ -185,6 +187,7 @@ export class ParticleRenderer {
         uMin: { value: 0 },
         uMax: { value: 1 },
         uNorm: { value: 0 },
+        uColorPeriod: { value: 256 },
         uHeight: { value: 1 },
         uScale: { value: 1 },
         uPhysical: { value: 1 },
@@ -221,6 +224,7 @@ export class ParticleRenderer {
         uMin: this.material.uniforms.uMin,
         uMax: this.material.uniforms.uMax,
         uNorm: this.material.uniforms.uNorm,
+        uColorPeriod: this.material.uniforms.uColorPeriod,
       },
       vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
       fragmentShader: fieldFragment,
@@ -774,12 +778,21 @@ export class ParticleRenderer {
       (force ||
         old?.mapping !== options.mapping ||
         old?.normalization !== options.normalization ||
+        old?.colorPeriod !== options.colorPeriod ||
         old?.range !== options.range ||
         old?.min !== options.min ||
         old?.max !== options.max)
     ) {
       this.values = scalarValues(this.frame, this.field, options.mapping);
-      this.updateAttribute("aValue", this.values, 1);
+      const rawColors =
+        this.field === "UIDs" ? this.frame.arrays.UIDs.data : this.values;
+      const colorValues =
+        options.normalization === "cyclic"
+          ? Float32Array.from({ length: rawColors.length }, (_, i) =>
+              periodicColorValue(rawColors[i], options.colorPeriod),
+            )
+          : this.values;
+      this.updateAttribute("aValue", colorValues, 1);
       const matched = matchesFieldResult(
         this.fieldResult,
         this.source?.id,
@@ -807,14 +820,17 @@ export class ParticleRenderer {
         Number.isFinite(options.max) &&
         options.max > options.min &&
         (options.normalization !== "log" || options.min > 0);
-      this.range = fixed
-        ? [options.min, options.max]
-        : derived && auto && options.normalization !== "log"
-          ? [
-              -Math.max(Math.abs(auto[0]), Math.abs(auto[1])),
-              Math.max(Math.abs(auto[0]), Math.abs(auto[1])),
-            ]
-          : (auto ?? (options.normalization === "log" ? [0.1, 1] : [0, 1]));
+      this.range =
+        options.normalization === "cyclic"
+          ? [0, options.colorPeriod]
+          : fixed
+            ? [options.min, options.max]
+            : derived && auto && options.normalization !== "log"
+              ? [
+                  -Math.max(Math.abs(auto[0]), Math.abs(auto[1])),
+                  Math.max(Math.abs(auto[0]), Math.abs(auto[1])),
+                ]
+              : (auto ?? (options.normalization === "log" ? [0.1, 1] : [0, 1]));
     }
     if (old?.palette !== options.palette) {
       this.texture.image.data.set(paletteBytes(options.palette));
@@ -823,7 +839,10 @@ export class ParticleRenderer {
     const u = this.material.uniforms;
     u.uMin.value = this.range[0];
     u.uMax.value = this.range[1];
-    u.uNorm.value = { linear: 0, log: 1, symlog: 2 }[options.normalization];
+    u.uNorm.value = { linear: 0, log: 1, symlog: 2, cyclic: 3 }[
+      options.normalization
+    ];
+    u.uColorPeriod.value = options.colorPeriod;
     u.uScale.value = options.size;
     u.uPhysical.value = +options.physical;
     u.uBoundaries.value = +options.boundaries;
