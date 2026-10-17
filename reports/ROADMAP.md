@@ -27,6 +27,12 @@ to seeking, and one picked UID's past/future recorded particle trace. See
 [verification](VERIFICATION.md) for evidence rather than treating this plan as a
 completion claim.
 
+Delivered in the next iteration: frozen material neighbourhoods and extra seeds,
+cancellable cached temporal reads, linked separation/local-FTLE charts and fitted
+ellipses; CPU/WebGPU LIC; sampled material FTLE maps with quality masks, export,
+and explicitly limited scalar ridge candidates. See [material motion](MATERIAL_MOTION.md)
+and [LIC](LIC.md). These are not general LCS or GPU rendering completion claims.
+
 ## 1. Reconstructed fields and instantaneous flow
 
 ### Scalar grids and vector grids
@@ -164,12 +170,14 @@ supply gradients/tangent state or whether reconstruction error is acceptable.
 
 ## Suggested order
 
-1. Finish and deploy the current iteration; test real KHH and sloshing files.
-2. Particle-seeded multi-track views and local material neighbourhoods.
-3. WebGPU compute/operator parity foundation, then LIC using the validated
-   instantaneous velocity sampler; 3D slices as needed.
-4. Local deformation-gradient/FTLE estimator with analytic tests and quality UI.
-5. FTLE fields and LCS overlays, with measured compute/memory costs.
+1. Delivered: initial UI/derivatives/demos and real-recording validation.
+2. Delivered: frozen material sets, multiple tracks, local fit/FTLE and ellipse UI.
+3. Delivered: CPU/WebGPU LIC. Next: shared GPU render/compute data paths to remove
+   velocity re-upload and field readback; general CSR/operator parity as needed.
+4. Delivered: CPU sampled material FTLE fields and simple scalar ridge candidates.
+   Next: horizon/neighbour/sampling convergence, stronger ridge criteria and an
+   independent velocity-integrated flow-map estimator before full LCS claims.
+5. Add reusable analysis definitions/import/presets, then 3D slices as required.
 6. More advanced Lyapunov/LCS methods and live acquisition requirements.
 
 ## WebGPU compute foundation (grids and normalized velocity derivatives implemented)
@@ -189,7 +197,7 @@ No linked lists or fixed neighbour capacity remain. The bounded dense 2D cell ta
 is not a literal port of the core's sparse occupied-cell hash table.
 
 The following remains the broader operator roadmap. CSR adjacency, general point
-queries, general core particle gradients/divergence/curl/Laplacians, correction variants, LIC/FTLE and a
+queries, general core particle gradients/divergence/curl/Laplacians, correction variants, GPU FTLE and a
 shared WebGPU renderer are **not implemented by the initial grid milestone**:
 
 

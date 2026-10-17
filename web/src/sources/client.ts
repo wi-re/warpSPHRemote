@@ -1,3 +1,11 @@
+import { MaterialFTLE, type FTLEQuery, type FTLEBatch } from "./ftle";
+import {
+  seedMaterial,
+  materialPositions,
+  type MaterialSeed,
+  type MaterialSample,
+  type NeighbourSettings,
+} from "./material";
 import { GridBackend } from "../compute/backend";
 import { streamlines, type FieldQuery, type FieldResult } from "./grid";
 import { tracePosition, type TraceSample } from "./traces";
@@ -28,6 +36,25 @@ export interface TrajectorySource {
     uid: string,
     signal?: AbortSignal,
   ): Promise<TraceSample[]>;
+  materialSeed(
+    index: number,
+    uid: string,
+    settings: NeighbourSettings,
+    extra: string[],
+    signal?: AbortSignal,
+  ): Promise<MaterialSeed>;
+  material(
+    start: number,
+    count: number,
+    uids: string[],
+    signal?: AbortSignal,
+  ): Promise<MaterialSample[]>;
+  ftle(
+    query: FTLEQuery,
+    offset: number,
+    count: number,
+    signal?: AbortSignal,
+  ): Promise<FTLEBatch>;
   grid(query: FieldQuery, signal?: AbortSignal): Promise<FieldResult>;
   close(): void;
 }
@@ -158,6 +185,31 @@ export class BrowserSource implements TrajectorySource {
   trace(start: number, count: number, uid: string, signal?: AbortSignal) {
     return this.call<TraceSample[]>("trace", { start, count, uid }, 3, signal);
   }
+  materialSeed(
+    index: number,
+    uid: string,
+    settings: NeighbourSettings,
+    extra: string[],
+    signal?: AbortSignal,
+  ) {
+    return this.call<MaterialSeed>(
+      "materialSeed",
+      { index, uid, settings, extra },
+      1,
+      signal,
+    );
+  }
+  material(start: number, count: number, uids: string[], signal?: AbortSignal) {
+    return this.call<MaterialSample[]>(
+      "material",
+      { start, count, uids },
+      3,
+      signal,
+    );
+  }
+  ftle(query: FTLEQuery, offset: number, count: number, signal?: AbortSignal) {
+    return this.call<FTLEBatch>("ftle", { query, offset, count }, 3, signal);
+  }
   grid(query: FieldQuery, signal?: AbortSignal) {
     return this.call<FieldResult>("grid", query, 1, signal);
   }
@@ -167,6 +219,7 @@ export class BrowserSource implements TrajectorySource {
 }
 export class ServiceSource implements TrajectorySource {
   private gridBackend = new GridBackend();
+  private ftleCache?: { key: string; context: MaterialFTLE };
   constructor(public metadata: Source) {}
   async frame(index: number, field: string, signal?: AbortSignal) {
     const r = await fetch(
@@ -219,6 +272,73 @@ export class ServiceSource implements TrajectorySource {
     }
     return rows;
   }
+  async materialSeed(
+    index: number,
+    uid: string,
+    settings: NeighbourSettings,
+    extra: string[],
+    signal?: AbortSignal,
+  ) {
+    const frame = await this.frame(index, "UIDs", signal);
+    return seedMaterial(
+      frame.arrays,
+      uid,
+      settings,
+      index,
+      frame.time,
+      this.metadata.domain,
+      extra,
+    );
+  }
+  async material(
+    start: number,
+    count: number,
+    uids: string[],
+    signal?: AbortSignal,
+  ) {
+    const rows: MaterialSample[] = [];
+    for (
+      let index = start;
+      index < Math.min(start + count, this.metadata.frames);
+      index++
+    ) {
+      signal?.throwIfAborted();
+      const frame = await this.frame(index, "UIDs", signal);
+      rows.push({
+        index,
+        time: frame.time,
+        positions: materialPositions(frame.arrays, uids),
+      });
+    }
+    return rows;
+  }
+  async ftle(
+    query: FTLEQuery,
+    offset: number,
+    count: number,
+    signal?: AbortSignal,
+  ) {
+    if (this.metadata.timeKind !== "simulation")
+      throw new Error("FTLE requires recorded physical times.");
+    const key = JSON.stringify(query);
+    if (this.ftleCache?.key !== key) {
+      const a = await this.frame(query.start, "UIDs", signal),
+        b = await this.frame(query.end, "UIDs", signal);
+      signal?.throwIfAborted();
+      this.ftleCache = {
+        key,
+        context: new MaterialFTLE(
+          a.arrays,
+          b.arrays,
+          query,
+          a.time,
+          b.time,
+          this.metadata.domain,
+        ),
+      };
+    }
+    return this.ftleCache.context.batch(offset, count);
+  }
   async grid(query: FieldQuery, signal?: AbortSignal): Promise<FieldResult> {
     const frame = await this.frame(query.index, query.field, signal);
     if (
@@ -240,6 +360,9 @@ export class ServiceSource implements TrajectorySource {
     );
     return {
       grid,
+      lic: query.lic
+        ? await this.gridBackend.lic(grid, query.lic, query.settings.backend)
+        : undefined,
       field: query.field,
       mapping: query.mapping,
       sourceId: this.metadata.id,
@@ -253,6 +376,7 @@ export class ServiceSource implements TrajectorySource {
     };
   }
   close() {
+    this.ftleCache = undefined;
     void this.gridBackend.close();
   }
 }

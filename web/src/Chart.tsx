@@ -10,6 +10,18 @@ import { diagnosticSeries } from "./data";
 let plotlyPromise: Promise<any> | undefined;
 export const loadPlotly = () =>
   (plotlyPromise ??= import("plotly.js-basic-dist-min").then((m) => m.default));
+/** Plotly debounces resize internally; a tab may unmount before that promise settles. */
+export function resizeVisiblePlot(P: any, element: HTMLElement) {
+  if (
+    !element.isConnected ||
+    element.clientWidth === 0 ||
+    element.clientHeight === 0
+  )
+    return;
+  void P.Plots.resize(element).catch(() => {
+    /* A hidden/unmounted plot no longer needs resizing. */
+  });
+}
 export function DiagnosticChart({
   rows,
   source,
@@ -30,7 +42,9 @@ export function DiagnosticChart({
     let observer: ResizeObserver | undefined;
     loadPlotly().then((P) => {
       if (cancelled) return;
-      observer = new ResizeObserver(() => P.Plots.resize(element));
+      observer = new ResizeObserver(() => {
+        if (!cancelled) resizeVisiblePlot(P, element);
+      });
       observer.observe(element);
     });
     return () => {
@@ -163,7 +177,9 @@ export function PressureChart({
       observer: ResizeObserver | undefined;
     loadPlotly().then((P) => {
       if (cancelled) return;
-      observer = new ResizeObserver(() => P.Plots.resize(element));
+      observer = new ResizeObserver(() => {
+        if (!cancelled) resizeVisiblePlot(P, element);
+      });
       observer.observe(element);
     });
     return () => {

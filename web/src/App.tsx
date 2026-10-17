@@ -1,3 +1,10 @@
+import { FTLEMap } from "./FTLEMap";
+import {
+  useMaterialMotion,
+  MaterialCapture,
+  MaterialTools,
+  MaterialChart,
+} from "./MaterialMotion";
 import { selectionIndex, type ParticleSelection } from "./sources/selection";
 import {
   TrajectoryPicker,
@@ -220,9 +227,10 @@ export default function App() {
   };
   const [rows, setRows] = useState<Diagnostic[]>([]),
     [diagnosticError, setDiagnosticError] = useState(""),
-    [metric, setMetric] = useState<DiagnosticMetric | "pressure">(
+    [metric, setMetric] = useState<DiagnosticMetric | "pressure" | "material">(
       "kineticEnergy",
     );
+  const [ftleOpen, setFTLEOpen] = useState(false);
   const [traceUid, setTraceUid] = useState("");
   const [selection, setSelection] = useState<ParticleSelection | null>(null),
     [picking, setPicking] = useState(false),
@@ -699,7 +707,8 @@ export default function App() {
         ) ||
         open ||
         help ||
-        settingsOpen
+        settingsOpen ||
+        ftleOpen
       )
         return;
       if (e.code === "Space") {
@@ -725,7 +734,7 @@ export default function App() {
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [source, open, help, settingsOpen]);
+  }, [source, open, help, settingsOpen, ftleOpen]);
   useEffect(() => {
     if (!open && !help && !settingsOpen) return;
     const previous = document.activeElement as HTMLElement;
@@ -942,6 +951,7 @@ export default function App() {
     source,
     displayedIndex,
   );
+  const material = useMaterialMotion(registry.current.get(sourceId), source);
   const trace = useParticleTrace(
     registry.current.get(sourceId),
     source,
@@ -958,8 +968,28 @@ export default function App() {
     displayedIndex,
     options.wrapPeriodic,
   ]);
+  useEffect(() => {
+    engine.current?.setMaterial(
+      material.visible ? material.seed : null,
+      material.rows,
+      displayedIndex,
+      material.fade,
+      material.ellipse,
+    );
+  }, [
+    material.seed,
+    material.rows,
+    material.visible,
+    material.fade,
+    material.ellipse,
+    displayedIndex,
+    frame,
+    options.wrapPeriodic,
+  ]);
   const hasMetric =
-    metric !== "pressure" && rows.some((r) => r[metric] != null);
+    metric !== "material" &&
+    metric !== "pressure" &&
+    rows.some((r) => r[metric] != null);
   const fixedError =
     options.range === "fixed" &&
     (!(options.max > options.min) ||
@@ -1339,6 +1369,16 @@ export default function App() {
                       hideToggle
                     />
                   )}
+                  <MaterialCapture
+                    motion={material}
+                    index={displayedIndex}
+                    uid={traceUid}
+                    supported={source?.identity === "UIDs"}
+                    onOpen={() => {
+                      setMetric("material");
+                      setChartsExpanded(true);
+                    }}
+                  />
                 </section>
               )}
             {frame && (
@@ -1501,7 +1541,7 @@ export default function App() {
             </IconButton>
           </section>
           <section
-            className={`diagnostics ${metric === "pressure" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
+            className={`diagnostics ${metric === "pressure" || metric === "material" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
           >
             <div className="diagnostics-heading">
               <div className="section-heading">
@@ -1521,6 +1561,7 @@ export default function App() {
                     ["maxSpeed", "Max. speed"],
                     ["meanDensity", "Mean density"],
                     ["pressure", "Pressure probes"],
+                    ["material", "Material motion"],
                   ] as const
                 ).map(([id, label]) => (
                   <button
@@ -1554,6 +1595,29 @@ export default function App() {
             {chartsExpanded && (
               <>
                 <div className="diagnostic-body">
+                  {metric === "material" && (
+                    <div className="material-tools-host">
+                      <button
+                        className="secondary-button"
+                        disabled={
+                          source?.dimension !== 2 ||
+                          source?.identity !== "UIDs" ||
+                          source?.timeKind !== "simulation"
+                        }
+                        onClick={() => {
+                          setPlaying(false);
+                          setFTLEOpen(true);
+                        }}
+                      >
+                        Spatial FTLE map
+                      </button>
+                      <MaterialTools
+                        motion={material}
+                        index={displayedIndex}
+                        timeKind={source?.timeKind}
+                      />
+                    </div>
+                  )}
                   {metric === "pressure" && (
                     <PressureControls
                       controller={pressure}
@@ -1561,7 +1625,15 @@ export default function App() {
                     />
                   )}
                   {source &&
-                    (metric === "pressure" ? (
+                    (metric === "material" ? (
+                      <MaterialChart
+                        motion={material}
+                        source={source}
+                        index={displayedIndex}
+                        onSeek={seek}
+                        theme={theme}
+                      />
+                    ) : metric === "pressure" ? (
                       <PressureChart
                         theme={theme}
                         rows={pressure.samples}
@@ -1581,7 +1653,9 @@ export default function App() {
                     ))}
                 </div>
                 <div className="chart-note">
-                  {metric === "pressure" ? (
+                  {metric === "material" ? (
+                    "Frozen UID set; seed-time periodic branch plus original unwrapped motion. 2D FTLE masks fits above relative residual 0.25. The ellipse is the fitted image of the seed RMS circle; sparse exports and particle shifting affect interpretation. Click a chart sample to seek."
+                  ) : metric === "pressure" ? (
                     pressure.probes.length ? (
                       "Click a pressure sample to jump to its recorded frame. Add or edit fixed points in this tab; generate histories to scan the recording."
                     ) : (
@@ -2152,6 +2226,23 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+      {ftleOpen && source && registry.current.get(sourceId) && (
+        <FTLEMap
+          key={sourceId}
+          source={source}
+          reader={registry.current.get(sourceId)!}
+          seedIndex={material.seed?.index ?? 0}
+          endIndex={displayedIndex}
+          radius={material.settings.radius}
+          neighbours={material.settings.count}
+          onClose={() => setFTLEOpen(false)}
+          onPick={(uid, index) => {
+            seek(index);
+            setSelection({ sourceId, frame: index, index: -1, uid });
+            setTraceUid(uid);
+          }}
+        />
       )}
       {help && (
         <div className="modal-backdrop">

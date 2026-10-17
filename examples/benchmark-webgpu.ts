@@ -1,3 +1,4 @@
+import { computeLIC, initialLIC } from "../web/src/sources/lic";
 import catalogue from "../web/src/recorded-demos.json";
 import { GPUGrid } from "../web/src/compute/webgpu";
 import { compare } from "../web/src/compute/checks";
@@ -28,6 +29,12 @@ export async function runChecks(report: (row: string) => void, api: typeof H5) {
             const cpuTimes: number[] = [],
               gpuTimes: number[] = [];
             let worst = 0;
+            const licCPU: number[] = [],
+              licGPU: number[] = [];
+            let licError = 0,
+              licSquared = 0,
+              licCells = 0,
+              licLarge = 0;
             for (const index of [
               0,
               Math.floor(source.times.length / 2),
@@ -47,7 +54,11 @@ export async function runChecks(report: (row: string) => void, api: typeof H5) {
                 settings,
               );
               reconstructGrid(raw, source, "densities", "magnitude", settings);
-              for (let repeat = 0; repeat < 3; repeat++) {
+              for (
+                let repeat = 0;
+                repeat < (process.argv.includes("--lic") ? 1 : 3);
+                repeat++
+              ) {
                 const started = performance.now(),
                   cpu = reconstructGrid(
                     raw,
@@ -66,10 +77,40 @@ export async function runChecks(report: (row: string) => void, api: typeof H5) {
                 );
                 gpuTimes.push(actual.compute!.milliseconds);
                 worst = Math.max(worst, compare(actual, cpu).worst);
+                if (process.argv.includes("--lic")) {
+                  const time = performance.now(),
+                    ref = computeLIC(actual, initialLIC);
+                  licCPU.push(performance.now() - time);
+                  const begun = performance.now(),
+                    result = await gpu.lic(actual, initialLIC);
+                  licGPU.push(performance.now() - begun);
+                  for (let i = 0; i < result.length; i++) {
+                    if (Number.isNaN(result[i]) && Number.isNaN(ref[i]))
+                      continue;
+                    if (!Number.isFinite(result[i]) || !Number.isFinite(ref[i]))
+                      throw new Error(`LIC mask mismatch at ${i}`);
+                    const error = Math.abs(result[i] - ref[i]);
+                    licError = Math.max(licError, error);
+                    licSquared += error * error;
+                    licCells++;
+                    if (error > 1e-3) licLarge++;
+                  }
+                  if (
+                    licError > 0.05 ||
+                    Math.sqrt(licSquared / licCells) > 0.001
+                  )
+                    throw new Error(
+                      `LIC error max ${licError}, RMS ${Math.sqrt(licSquared / licCells)}`,
+                    );
+                }
               }
             }
+            if (licCPU.length)
+              report(
+                `${filename} LIC ${resolution}: CPU median ${median(licCPU).toFixed(2)} ms; GPU complete median ${median(licGPU).toFixed(2)} ms; max absolute error ${licError.toExponential(3)}; RMS ${Math.sqrt(licSquared / licCells).toExponential(3)}; >1e-3 ${licLarge}/${licCells} cells (3 states)`,
+              );
             report(
-              `${filename} ${quantity} ${resolution}: CPU median ${median(cpuTimes).toFixed(2)} ms; GPU complete median ${median(gpuTimes).toFixed(2)} ms; max scaled error ${worst.toExponential(3)} (9 samples each)`,
+              `${filename} ${quantity} ${resolution}: CPU median ${median(cpuTimes).toFixed(2)} ms; GPU complete median ${median(gpuTimes).toFixed(2)} ms; max scaled error ${worst.toExponential(3)} (${process.argv.includes("--lic") ? 3 : 9} samples each)`,
             );
           }
         }

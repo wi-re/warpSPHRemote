@@ -129,3 +129,28 @@ test("old saved views remain usable; corrupt, unsupported and nonfinite settings
   assert.equal(view.fieldView!.seeds, 8);
   assert.equal(view.fieldView!.seedMode, "regular");
 });
+
+test("LIC preferences and the material diagnostics tab persist with validated limits", () => {
+  const view = sanitizeView(
+    {
+      key: "lic",
+      metric: "material",
+      fieldView: { mode: "grid", lic: { steps: 24, seed: 12, contrast: 2.5 } },
+    },
+    "lic",
+  )!;
+  assert.deepEqual(view.fieldView!.lic, { steps: 24, seed: 12, contrast: 2.5 });
+  assert.equal(view.metric, "material");
+  const corrupt = sanitizeView(
+    {
+      key: "bad",
+      fieldView: { lic: { steps: NaN, seed: -10, contrast: 100 } },
+    },
+    "bad",
+  )!;
+  assert.deepEqual(corrupt.fieldView!.lic, {
+    steps: 16,
+    seed: 1,
+    contrast: 1.8,
+  });
+});

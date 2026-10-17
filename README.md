@@ -218,3 +218,9 @@ on the client's adapter. No simulator, Python, or application server is required
 [architecture and scope](reports/ARCHITECTURE.md),
 [verification and known limits](reports/VERIFICATION.md), and
 [evidence storage](reports/README.md) describe the current boundary.
+
+Material analysis: pick a particle → **Track neighbourhood**, then use the bottom
+**Material motion** tab for frozen UID sets, separation/local FTLE and **Spatial FTLE
+map**. LIC is available in the right field controls with CPU/WebGPU backends.
+See [material-motion contracts and limitations](reports/MATERIAL_MOTION.md) and
+[LIC verification/performance](reports/LIC.md).

@@ -1,3 +1,5 @@
+import licShader from "./lic.wgsl?raw";
+import { validateLIC, type LICSettings } from "../sources/lic";
 import { GPUScan } from "./scan";
 import shader from "./reconstruct.wgsl?raw";
 import type { RawFrame } from "../sources/core";
@@ -10,6 +12,7 @@ type Slot = { buffer: GPUBuffer; capacity: number; usage: GPUBufferUsageFlags };
 export class GPUGrid {
   private slots = new Map<string, Slot>();
   private dead = "";
+  private licPipeline?: GPUComputePipeline;
   private constructor(
     private device: GPUDevice,
     private pipelines: GPUComputePipeline[],
@@ -285,6 +288,97 @@ export class GPUGrid {
         validationError = await this.device.popErrorScope();
       if (memoryError || validationError)
         throw new Error((memoryError || validationError)!.message);
+    }
+  }
+  async lic(grid: GridData, settings: LICSettings): Promise<Float32Array> {
+    validateLIC(settings);
+    if (this.dead) throw new Error(this.dead);
+    const count = grid.width * grid.height;
+    this.device.pushErrorScope("validation");
+    this.device.pushErrorScope("out-of-memory");
+    let readback: GPUBuffer | undefined;
+    try {
+      this.licPipeline ??= await this.device.createComputePipelineAsync({
+        layout: "auto",
+        compute: {
+          module: this.device.createShaderModule({
+            code: licShader,
+            label: "LIC",
+          }),
+          entryPoint: "lic",
+        },
+      });
+      const data = new Float32Array(count * 4);
+      for (let i = 0; i < count; i++) {
+        data[4 * i] = grid.velocityValid[i] ? grid.velocity[2 * i] : 0;
+        data[4 * i + 1] = grid.velocityValid[i] ? grid.velocity[2 * i + 1] : 0;
+        data[4 * i + 2] = grid.velocityValid[i];
+      }
+      const params = new ArrayBuffer(64),
+        u = new Uint32Array(params),
+        f = new Float32Array(params);
+      u.set([grid.width, grid.height, +grid.periodic[0], +grid.periodic[1]]);
+      f.set(
+        [
+          grid.bounds[1][0] - grid.bounds[0][0],
+          grid.bounds[1][1] - grid.bounds[0][1],
+        ],
+        4,
+      );
+      u[6] = settings.steps;
+      u[7] = settings.seed;
+      f[8] = settings.contrast;
+      const velocity = this.buffer(
+          "lic-velocity",
+          data.byteLength,
+          GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        ),
+        output = this.buffer(
+          "lic-output",
+          count * 4,
+          GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        ),
+        uniform = this.buffer(
+          "lic-params",
+          64,
+          GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        );
+      readback = this.buffer(
+        "lic-readback",
+        count * 4,
+        GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      );
+      this.device.queue.writeBuffer(velocity, 0, data);
+      this.device.queue.writeBuffer(uniform, 0, params);
+      const encoder = this.device.createCommandEncoder(),
+        pass = encoder.beginComputePass();
+      pass.setPipeline(this.licPipeline);
+      pass.setBindGroup(
+        0,
+        this.device.createBindGroup({
+          layout: this.licPipeline.getBindGroupLayout(0),
+          entries: [velocity, output, uniform].map((buffer, binding) => ({
+            binding,
+            resource: { buffer },
+          })),
+        }),
+      );
+      pass.dispatchWorkgroups(Math.ceil(count / 128));
+      pass.end();
+      encoder.copyBufferToBuffer(output, 0, readback, 0, count * 4);
+      this.device.queue.submit([encoder.finish()]);
+      await readback.mapAsync(GPUMapMode.READ, 0, count * 4);
+      const result = new Float32Array(
+        readback.getMappedRange(0, count * 4),
+      ).slice();
+      for (let i = 0; i < count; i++) if (result[i] < 0) result[i] = NaN;
+      return result;
+    } finally {
+      if (readback?.mapState === "mapped") readback.unmap();
+      const memory = await this.device.popErrorScope(),
+        validation = await this.device.popErrorScope();
+      if (memory || validation)
+        throw new Error((memory || validation)!.message);
     }
   }
   close() {

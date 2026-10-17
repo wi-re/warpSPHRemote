@@ -1,4 +1,9 @@
 import {
+  deformation,
+  type MaterialSeed,
+  type MaterialSample,
+} from "./sources/material";
+import {
   matchesFieldResult,
   derivativeQuantity,
   gridQuantityLabel,
@@ -92,10 +97,18 @@ export class ParticleRenderer {
   grid = new THREE.Group();
   probeMarkers = new THREE.Group();
   traceLines = new THREE.Group();
+  materialLines = new THREE.Group();
   fieldPlane: THREE.Mesh;
   fieldMaterial: THREE.ShaderMaterial;
   fieldTexture = new THREE.DataTexture(
     new Float32Array([NaN]),
+    1,
+    1,
+    THREE.RedFormat,
+    THREE.FloatType,
+  );
+  licTexture = new THREE.DataTexture(
+    new Float32Array([1]),
     1,
     1,
     THREE.RedFormat,
@@ -186,17 +199,19 @@ export class ParticleRenderer {
       depthWrite: false,
       uniforms: {
         uField: { value: this.fieldTexture },
+        uLIC: { value: this.licTexture },
+        uHasLIC: { value: 0 },
         uPalette: { value: this.texture },
         uMin: this.material.uniforms.uMin,
         uMax: this.material.uniforms.uMax,
         uNorm: this.material.uniforms.uNorm,
       },
       vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-      fragmentShader: `uniform sampler2D uField;uniform sampler2D uPalette;uniform float uMin;uniform float uMax;uniform float uNorm;varying vec2 vUv;
+      fragmentShader: `uniform sampler2D uLIC;uniform float uHasLIC;uniform sampler2D uField;uniform sampler2D uPalette;uniform float uMin;uniform float uMax;uniform float uNorm;varying vec2 vUv;
       float transformValue(float v){if(uNorm<0.5)return v;if(uNorm<1.5)return log(max(v,1.e-30));float a=abs(v);return sign(v)*(a<0.01?a*(1.0-a*(0.5-a/3.0)):log(1.0+a));}
       void main(){float v=texture2D(uField,vUv).r;if(v!=v||abs(v)>3.4e38)discard;
       if(uNorm>0.5&&uNorm<1.5&&v<=0.0){gl_FragColor=vec4(0.5,0.5,0.5,1.0);return;}
-      float t=clamp((transformValue(v)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);gl_FragColor=vec4(texture2D(uPalette,vec2(t,0.5)).rgb,1.0);}`,
+      float t=clamp((transformValue(v)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);vec3 color=texture2D(uPalette,vec2(t,0.5)).rgb;if(uHasLIC>0.5){float n=texture2D(uLIC,vUv).r;if(n!=n)discard;color*=0.25+1.1*n;}gl_FragColor=vec4(color,1.0);}`,
     });
     this.fieldPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
@@ -206,7 +221,13 @@ export class ParticleRenderer {
     this.fieldPlane.renderOrder = -1;
     this.scene.add(this.fieldPlane, this.flowLines);
 
-    this.scene.add(this.mesh, this.grid, this.probeMarkers, this.traceLines);
+    this.scene.add(
+      this.mesh,
+      this.grid,
+      this.probeMarkers,
+      this.traceLines,
+      this.materialLines,
+    );
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.screenSpacePanning = true;
@@ -379,6 +400,149 @@ export class ParticleRenderer {
     }
     this.dirty = true;
   }
+  setMaterial(
+    seed: MaterialSeed | null,
+    rows: MaterialSample[],
+    current: number,
+    fade: boolean,
+    ellipse = false,
+  ) {
+    for (const child of [...this.materialLines.children]) {
+      const line = child as THREE.LineSegments;
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+      this.materialLines.remove(child);
+    }
+    if (!seed) {
+      this.dirty = true;
+      return;
+    }
+    for (let k = 0; k < seed.uids.length; k++) {
+      const points: number[] = [],
+        colors: number[] = [];
+      const traces = rows.map((row) => ({
+        index: row.index,
+        time: row.time,
+        position: row.positions[k],
+      }));
+      for (let j = 1; j < traces.length; j++) {
+        const a = traces[j - 1],
+          b = traces[j],
+          paths = traceSegments(
+            [a, b],
+            current,
+            this.source?.domain,
+            this.options?.wrapPeriodic,
+          );
+        const phase = b.index <= current ? "past" : "future",
+          segment = paths[phase];
+        if (!segment.length) continue;
+        const age =
+          Math.abs(b.index - current) /
+          Math.max(
+            1,
+            Math.abs(rows[0].index - current),
+            Math.abs(rows.at(-1)!.index - current),
+          );
+        const color = new THREE.Color(
+          k === 0 ? "#ffffff" : phase === "past" ? "#75ddba" : "#e6b873",
+        );
+        color.multiplyScalar(fade ? 1 - 0.75 * Math.min(1, age) : 1);
+        points.push(...segment);
+        for (let v = 0; v < 2; v++) colors.push(color.r, color.g, color.b);
+      }
+      if (points.length) {
+        const geometry = new THREE.BufferGeometry()
+          .setAttribute("position", new THREE.Float32BufferAttribute(points, 3))
+          .setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+        const line = new THREE.LineSegments(
+          geometry,
+          new THREE.LineBasicMaterial({
+            vertexColors: true,
+            depthTest: false,
+            transparent: true,
+            opacity: k === 0 ? 1 : 0.72,
+          }),
+        );
+        line.renderOrder = 92;
+        this.materialLines.add(line);
+      }
+    }
+    const row = rows.find((r) => r.index === current),
+      markers: number[] = [];
+    for (const point of row?.positions ?? [])
+      if (point) {
+        const center = [
+            ...mappedPosition(
+              point,
+              this.source?.domain,
+              this.options?.wrapPeriodic,
+            ),
+            0,
+          ].slice(0, 3),
+          size = this.span * 0.003;
+        for (let c = 0; c < (this.source?.dimension ?? 2); c++) {
+          const a = [...center],
+            b = [...center];
+          a[c] -= size;
+          b[c] += size;
+          markers.push(...a, ...b);
+        }
+      }
+    if (markers.length) {
+      const marker = new THREE.LineSegments(
+        new THREE.BufferGeometry().setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(markers, 3),
+        ),
+        new THREE.LineBasicMaterial({ color: "#e78aab", depthTest: false }),
+      );
+      marker.renderOrder = 96;
+      this.materialLines.add(marker);
+    }
+    if (ellipse && row?.positions[0] && this.source?.dimension === 2) {
+      const d = deformation(seed, row, 0.25),
+        F = d.matrix;
+      if (F && d.residual != null && d.residual <= 0.25) {
+        const local = seed.relative
+            .slice(1, seed.fitCount)
+            .filter((p): p is number[] => !!p),
+          radius = Math.sqrt(
+            local.reduce((s, p) => s + p[0] ** 2 + p[1] ** 2, 0) /
+              Math.max(1, local.length),
+          );
+        const curve = Array.from({ length: 97 }, (_, i) => {
+          const a = (2 * Math.PI * i) / 96,
+            x = radius * Math.cos(a),
+            y = radius * Math.sin(a);
+          return {
+            index: i,
+            time: 0,
+            position: [
+              row.positions[0]![0] + F[0] * x + F[1] * y,
+              row.positions[0]![1] + F[2] * x + F[3] * y,
+            ],
+          };
+        });
+        const paths = traceSegments(
+            curve,
+            97,
+            this.source.domain,
+            this.options?.wrapPeriodic,
+          ),
+          line = new THREE.LineSegments(
+            new THREE.BufferGeometry().setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(paths.past, 3),
+            ),
+            new THREE.LineBasicMaterial({ color: "#cc95ff", depthTest: false }),
+          );
+        line.renderOrder = 97;
+        this.materialLines.add(line);
+      }
+    }
+    this.dirty = true;
+  }
   setFieldView(
     result: FieldResult | null,
     mode: "particles" | "grid" | "both",
@@ -393,11 +557,12 @@ export class ParticleRenderer {
     );
     this.fieldResult = valid ? result : null;
     this.fieldMode = mode;
+    this.fieldMaterial.uniforms.uHasLIC.value = valid && result?.lic ? 1 : 0;
     this.fieldPlane.visible = !!valid && mode !== "particles";
     this.material.uniforms.uFluid.value = valid && mode === "grid" ? 0 : 1;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      `${valid && mode !== "particles" ? (mode === "grid" ? "Scalar grid" : "Grid and particles") : "Particles"}, frame ${(this.frame?.index ?? 0) + 1}${valid && derivativeQuantity(result?.grid.quantity) && mode !== "particles" ? `, ${gridQuantityLabel(result?.grid.quantity)}` : ""}${valid && result?.lines.length ? ", instantaneous streamlines" : ""}. Drag to pan in 2D or rotate in 3D; scroll to zoom; click to inspect.`,
+      `${valid && mode !== "particles" ? (mode === "grid" ? "Scalar grid" : "Grid and particles") : "Particles"}, frame ${(this.frame?.index ?? 0) + 1}${valid && derivativeQuantity(result?.grid.quantity) && mode !== "particles" ? `, ${gridQuantityLabel(result?.grid.quantity)}` : ""}${valid && result?.lines.length ? ", instantaneous streamlines" : ""}${valid && result?.lic ? ", line integral convolution" : ""}. Drag to pan in 2D or rotate in 3D; scroll to zoom; click to inspect.`,
     );
     for (const child of [...this.flowLines.children]) {
       const line = child as THREE.LineSegments;
@@ -407,6 +572,20 @@ export class ParticleRenderer {
     }
     if (valid && result) {
       const g = result.grid;
+      if (result.lic) {
+        this.licTexture.dispose();
+        this.licTexture = new THREE.DataTexture(
+          result.lic.values,
+          g.width,
+          g.height,
+          THREE.RedFormat,
+          THREE.FloatType,
+        );
+        this.licTexture.minFilter = THREE.NearestFilter;
+        this.licTexture.magFilter = THREE.NearestFilter;
+        this.licTexture.needsUpdate = true;
+        this.fieldMaterial.uniforms.uLIC.value = this.licTexture;
+      }
       if (
         this.fieldTexture.image.width !== g.width ||
         this.fieldTexture.image.height !== g.height
@@ -772,7 +951,9 @@ export class ParticleRenderer {
     this.fieldPlane.geometry.dispose();
     this.fieldMaterial.dispose();
     this.fieldTexture.dispose();
+    this.licTexture.dispose();
     this.setTrace([], 0);
+    this.setMaterial(null, [], 0, false);
     this.setProbes([]);
     this.renderer.dispose();
     this.renderer.domElement.remove();

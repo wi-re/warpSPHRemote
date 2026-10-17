@@ -1,3 +1,4 @@
+import type { LICSettings } from "./lic";
 import type { RawFrame } from "./core";
 import { validateRaw } from "./core";
 import type { Mapping, Source } from "../types";
@@ -420,10 +421,17 @@ export interface FieldQuery {
   mapping: Mapping;
   settings: GridSettings;
   streams: StreamSettings | null;
+  lic?: LICSettings;
   seed?: number[];
 }
 export interface FieldResult {
   grid: GridData;
+  lic?: {
+    values: Float32Array;
+    backend: "cpu" | "webgpu";
+    milliseconds: number;
+    reason?: string;
+  };
   lines: Float32Array;
   field: string;
   mapping: Mapping;

@@ -152,7 +152,7 @@ export interface SavedView {
   options?: ViewOptions;
   fieldView?: FieldPreferences;
   playback?: { speed: number; loop: boolean };
-  metric?: DiagnosticMetric | "pressure";
+  metric?: DiagnosticMetric | "pressure" | "material";
 }
 const object = (v: unknown): v is Record<string, any> =>
   !!v && typeof v === "object" && !Array.isArray(v);
@@ -226,7 +226,11 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       flow: f.flow === true,
       settings: {
         backend: oneOf(g.backend, ["auto", "webgpu", "cpu"] as const, "auto"),
-        quantity: oneOf(g.quantity, ["field", "divergence", "vorticity"] as const, "field"),
+        quantity: oneOf(
+          g.quantity,
+          ["field", "divergence", "vorticity"] as const,
+          "field",
+        ),
         resolution: oneOf(
           g.resolution,
           [128, 256, 512] as const,
@@ -243,6 +247,16 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       seeds: Number.isInteger(f.seeds) ? finite(f.seeds, 8, 2, 16) : 8,
       seedMode: oneOf(f.seedMode, ["regular", "picked"] as const, "regular"),
     };
+    if (object(f.lic))
+      view.fieldView.lic = {
+        steps: Number.isInteger(f.lic.steps)
+          ? finite(f.lic.steps, 16, 4, 32)
+          : 16,
+        seed: Number.isInteger(f.lic.seed)
+          ? finite(f.lic.seed, 1, 0, 65535)
+          : 1,
+        contrast: finite(f.lic.contrast, 1.8, 0.5, 4),
+      };
     if (
       Array.isArray(f.seed) &&
       f.seed.length === 2 &&
@@ -266,6 +280,7 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       "maxSpeed",
       "meanDensity",
       "pressure",
+      "material",
     ] as const,
     "kineticEnergy",
   );

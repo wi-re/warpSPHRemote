@@ -1,3 +1,4 @@
+import { computeLIC, initialLIC } from "../sources/lic";
 import { GPUScan } from "./scan";
 import { reconstructGrid, initialGrid, type GridData } from "../sources/grid";
 import { GPUGrid } from "./webgpu";
@@ -283,6 +284,61 @@ export async function runChecks(report: (row: string) => void) {
             `PASS ${kernel} ${scenario} ${quantity}: max scaled error ${result.worst.toExponential(2)}`,
           );
         }
+    }
+    for (const scenario of [
+      "uniform",
+      "rotation",
+      "masked",
+      "stagnant",
+      "nonperiodic",
+    ]) {
+      const n = 64,
+        count = n * n,
+        grid: GridData = {
+          index: 0,
+          time: 0,
+          width: n,
+          height: n,
+          bounds: [
+            [0, 0],
+            [1, 1],
+          ],
+          periodic: [scenario !== "nonperiodic", scenario !== "nonperiodic"],
+          values: new Float32Array(count).fill(1),
+          velocity: new Float32Array(count * 2),
+          velocityValid: new Uint8Array(count).fill(1),
+          coverage: new Float32Array(count).fill(1),
+          excluded: 0,
+        };
+      for (let y = 0; y < n; y++)
+        for (let x = 0; x < n; x++) {
+          const i = y * n + x;
+          grid.velocity[2 * i] =
+            scenario === "rotation"
+              ? -(y + 0.5 - n / 2) / n
+              : scenario === "stagnant"
+                ? 0
+                : 1;
+          grid.velocity[2 * i + 1] =
+            scenario === "rotation" ? (x + 0.5 - n / 2) / n : 0;
+          if (scenario === "masked" && x >= 30 && x <= 34)
+            grid.velocityValid[i] = 0;
+        }
+      const expected = computeLIC(grid, initialLIC),
+        actual = await gpu.lic(grid, initialLIC);
+      let worst = 0;
+      for (let i = 0; i < count; i++) {
+        if (Number.isNaN(actual[i]) && Number.isNaN(expected[i])) continue;
+        if (!Number.isFinite(actual[i]) || !Number.isFinite(expected[i]))
+          throw new Error(`LIC ${scenario}: mask mismatch at ${i}`);
+        worst = Math.max(worst, Math.abs(actual[i] - expected[i]));
+      }
+      if (worst > 2e-4)
+        throw new Error(`LIC ${scenario}: max absolute error ${worst}`);
+      passed++;
+      report(
+        `PASS LIC ${scenario}: max absolute error ${worst.toExponential(2)}`,
+      );
     }
     report(`COMPLETE: ${passed} GPU/CPU parity cases passed.`);
   } finally {

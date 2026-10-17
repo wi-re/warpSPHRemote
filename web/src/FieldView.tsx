@@ -1,3 +1,4 @@
+import { initialLIC, type LICSettings } from "./sources/lic";
 import { readPreferences } from "./preferences";
 import { useEffect, useState } from "react";
 import type { Mapping, Source } from "./types";
@@ -14,6 +15,7 @@ export type FieldMode = "particles" | "grid" | "both";
 export interface FieldPreferences {
   mode: FieldMode;
   flow: boolean;
+  lic?: LICSettings;
   settings: GridSettings;
   seeds: number;
   seedMode: "regular" | "picked";
@@ -22,6 +24,8 @@ export interface FieldPreferences {
 export function useFieldView(source: Source | undefined, seed: number[]) {
   const [mode, setMode] = useState<FieldMode>("particles"),
     [flow, setFlow] = useState(false),
+    [lic, setLIC] = useState(false),
+    [licSettings, setLICSettings] = useState<LICSettings>({ ...initialLIC }),
     [settings, setSettings] = useState<GridSettings>(() => ({
       ...initialGrid,
       backend: readPreferences().backend,
@@ -36,6 +40,7 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
       if (derivativeQuantity(settings.quantity))
         setSettings((old) => ({ ...old, quantity: "field" }));
       setFlow(false);
+      setLIC(false);
     }
   }, [source?.id, settings.quantity]);
   const active = source?.dimension === 2 && (mode !== "particles" || flow);
@@ -57,6 +62,7 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
   const preferences: FieldPreferences = {
     mode,
     flow,
+    ...(lic && mode !== "particles" ? { lic: licSettings } : {}),
     settings,
     seeds,
     seedMode,
@@ -65,6 +71,8 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
   const restore = (value: FieldPreferences, sourceId: string) => {
     setMode(value.mode);
     setFlow(value.flow);
+    setLIC(!!value.lic && value.mode !== "particles");
+    if (value.lic) setLICSettings(value.lic);
     setSettings(value.settings);
     setSeeds(value.seeds);
     setSeedMode(value.seedMode);
@@ -75,6 +83,10 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
     setMode,
     flow,
     setFlow,
+    lic,
+    setLIC,
+    licSettings,
+    setLICSettings,
     settings,
     setSettings,
     seeds,
@@ -107,6 +119,7 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
           quantity: mode === "particles" ? "field" : settings.quantity,
         },
         streams: flow ? { seeds, steps: 400 } : null,
+        lic: lic && mode !== "particles" ? licSettings : undefined,
         seed: flow && seedMode === "picked" ? fixedSeed : undefined,
       };
     },
@@ -145,7 +158,10 @@ export function FieldControls({
             <select
               id="field-view"
               value={v.mode}
-              onChange={(e) => v.setMode(e.target.value as FieldMode)}
+              onChange={(e) => {
+                v.setMode(e.target.value as FieldMode);
+                if (e.target.value === "particles") v.setLIC(false);
+              }}
             >
               <option value="particles">Particles</option>
               <option value="grid">Scalar grid</option>
@@ -162,7 +178,79 @@ export function FieldControls({
             />
             Instantaneous streamlines
           </label>
-          {(v.mode !== "particles" || v.flow) && (
+          <label className="flow-toggle">
+            <input
+              type="checkbox"
+              aria-label="Show LIC"
+              checked={v.lic}
+              disabled={!hasVelocity}
+              onChange={(e) => {
+                v.setLIC(e.target.checked);
+                if (e.target.checked && v.mode === "particles")
+                  v.setMode("grid");
+              }}
+            />
+            Line integral convolution
+          </label>
+          {v.lic && (
+            <>
+              <label className="control-label" htmlFor="lic-length">
+                LIC half-length · cells
+              </label>
+              <input
+                id="lic-length"
+                className="slider"
+                type="range"
+                min="4"
+                max="32"
+                step="1"
+                value={v.licSettings.steps}
+                onChange={(e) =>
+                  v.setLICSettings({ ...v.licSettings, steps: +e.target.value })
+                }
+              />
+              <label className="control-label" htmlFor="lic-contrast">
+                LIC contrast
+              </label>
+              <input
+                id="lic-contrast"
+                className="slider"
+                type="range"
+                min="0.5"
+                max="4"
+                step="0.1"
+                value={v.licSettings.contrast}
+                onChange={(e) =>
+                  v.setLICSettings({
+                    ...v.licSettings,
+                    contrast: +e.target.value,
+                  })
+                }
+              />
+              <label className="control-label" htmlFor="lic-seed">
+                LIC noise seed
+              </label>
+              <input
+                id="lic-seed"
+                type="number"
+                min="0"
+                max="65535"
+                value={v.licSettings.seed}
+                onChange={(e) => {
+                  const n = +e.target.value;
+                  if (Number.isInteger(n) && n >= 0 && n <= 65535)
+                    v.setLICSettings({ ...v.licSettings, seed: n });
+                }}
+              />
+              <p className="subtle-note">
+                Instantaneous flow texture · {v.licSettings.steps} steps each
+                way. Noise is fixed in grid coordinates during playback; this
+                texture does not show temporal transport. Stagnant and dry
+                regions are masked.
+              </p>
+            </>
+          )}
+          {(v.mode !== "particles" || v.flow || v.lic) && (
             <>
               {v.mode !== "particles" && (
                 <>
@@ -335,6 +423,19 @@ export function FieldControls({
               {v.result.grid.compute?.reason && (
                 <span>
                   CPU fallback: {v.result.grid.compute.reason}
+                  <br />
+                </span>
+              )}
+              {v.result.lic && (
+                <>
+                  LIC: {v.result.lic.backend === "webgpu" ? "WebGPU" : "CPU"} ·{" "}
+                  {v.result.lic.milliseconds.toFixed(1)} ms
+                  <br />
+                </>
+              )}
+              {v.result.lic?.reason && (
+                <span>
+                  LIC fallback: {v.result.lic.reason}
                   <br />
                 </span>
               )}

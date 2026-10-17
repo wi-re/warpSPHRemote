@@ -1,3 +1,4 @@
+import { computeLIC, type LICSettings } from "../sources/lic";
 import {
   reconstructGrid,
   type GridData,
@@ -123,6 +124,39 @@ export class GridBackend {
       reason,
     };
     return grid;
+  }
+  lic(
+    grid: GridData,
+    settings: LICSettings,
+    mode: "auto" | "cpu" | "webgpu" = "auto",
+  ) {
+    const job = this.tail.then(async () => {
+      const started = performance.now();
+      let reason = "";
+      if (mode !== "cpu" && this.gpu)
+        try {
+          return {
+            values: await (await this.gpu).lic(grid, settings),
+            backend: "webgpu" as const,
+            milliseconds: performance.now() - started,
+          };
+        } catch (e) {
+          reason = (e as Error).message;
+          if (mode === "webgpu") throw e;
+        }
+      if (mode === "webgpu")
+        throw new Error(
+          "WebGPU LIC requires an available WebGPU reconstruction backend.",
+        );
+      return {
+        values: computeLIC(grid, settings),
+        backend: "cpu" as const,
+        milliseconds: performance.now() - started,
+        reason,
+      };
+    });
+    this.tail = job.catch(() => {});
+    return job;
   }
   async close() {
     await this.tail;

@@ -1,4 +1,6 @@
 /// <reference lib="webworker" />
+import { MaterialFTLE } from "./ftle";
+import { seedMaterial, materialPositions } from "./material";
 import { streamlines, type GridData } from "./grid";
 import { tracePosition } from "./traces";
 import {
@@ -17,6 +19,8 @@ const gridBackend = new GridBackend();
 let source: RawSource | undefined;
 let hasSpecificEnergy = false,
   hasVelocity = false;
+let physicalTime = false;
+let ftleCache: { key: string; context: MaterialFTLE } | undefined;
 let gridCache: { key: string; grid: GridData } | undefined;
 const frames = new Map<string, RawFrame>();
 let cacheBytes = 0;
@@ -73,6 +77,7 @@ self.onmessage = async (event: MessageEvent) => {
         }
       }
       const metadata = await source.metadata();
+      physicalTime = metadata.timeKind === "simulation";
       hasVelocity = metadata.fields.some((f) => f.name === "velocities");
       hasSpecificEnergy = metadata.fields.some(
         (f) => f.name === "internalEnergies",
@@ -157,6 +162,61 @@ self.onmessage = async (event: MessageEvent) => {
         });
       }
       result = rows;
+    } else if (operation === "materialSeed") {
+      source.checkIndex(args.index);
+      result = seedMaterial(
+        await read(args.index, "UIDs"),
+        args.uid,
+        args.settings,
+        args.index,
+        source.times[args.index],
+        source.domain,
+        args.extra,
+      );
+    } else if (operation === "material") {
+      if (!Array.isArray(args.uids) || args.uids.length > 73 || args.count > 4)
+        throw new Error("Material batch exceeds its bounded work limit.");
+      const rows = [];
+      for (
+        let i = args.start;
+        i < Math.min(args.start + args.count, source.times.length);
+        i++
+      ) {
+        source.checkIndex(i);
+        rows.push({
+          index: i,
+          time: source.times[i],
+          positions: materialPositions(await read(i, "UIDs"), args.uids),
+        });
+      }
+      result = rows;
+    } else if (operation === "ftle") {
+      if (!physicalTime)
+        throw new Error("FTLE requires recorded physical times.");
+      const key = JSON.stringify(args.query),
+        q = args.query;
+      source.checkIndex(q.start);
+      source.checkIndex(q.end);
+      if (ftleCache?.key !== key)
+        ftleCache = {
+          key,
+          context: new MaterialFTLE(
+            await read(q.start, "UIDs"),
+            await read(q.end, "UIDs"),
+            q,
+            source.times[q.start],
+            source.times[q.end],
+            source.domain,
+          ),
+        };
+      const batch = ftleCache.context.batch(args.offset, args.count);
+      result = batch;
+      transfer = [
+        batch.values.buffer,
+        batch.residual.buffer,
+        batch.condition.buffer,
+        batch.counts.buffer,
+      ];
     } else if (operation === "grid") {
       const key = JSON.stringify([
         args.index,
@@ -193,7 +253,11 @@ self.onmessage = async (event: MessageEvent) => {
         coverage: grid.coverage.slice(),
         velocityValid: grid.velocityValid.slice(),
       };
+      const lic = args.lic
+        ? await gridBackend.lic(grid, args.lic, args.settings.backend)
+        : undefined;
       result = {
+        lic,
         grid: copy,
         lines,
         field: args.field,
@@ -206,6 +270,7 @@ self.onmessage = async (event: MessageEvent) => {
         copy.coverage.buffer,
         copy.velocityValid.buffer,
         lines.buffer,
+        ...(lic ? [lic.values.buffer] : []),
       ];
     } else throw new Error("Unknown source operation.");
     self.postMessage({ id, result }, transfer);
