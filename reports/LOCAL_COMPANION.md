@@ -209,3 +209,16 @@ pressure-history growth, explicit detach, reconnect with the chosen grid retaine
 and a 4,096-particle follow-up run. No browser console errors were observed during
 these checks. Evidence is retained in
 `../warpSPHDevelopment/remote/local-companion-20261017/`.
+
+The deployed HTTPS page's manager UI was verified, but its loopback pairing
+request timed out in the current in-app browser. The localhost-hosted viewer
+completed live launch/attach/grid/probe/reconnect checks. The hosted pairing
+path therefore still needs a normal-browser test with the daemon reachable
+on that browser device (or matching-port SSH forwarding) and local-network
+permission granted. The timeout was not treated as evidence of a specific
+browser-permission or routing cause. No browser security settings were changed.
+
+A separate-interpreter smoke check passed: the companion ran in its NumPy/Python
+environment and launched Gresho in the Warp environment without the companion
+package on the child PYTHONPATH. The isolated-script test also checks package
+bootstrap without inheriting another environment's site-packages.
