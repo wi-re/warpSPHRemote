@@ -237,13 +237,16 @@ export default function App() {
   };
   const [rows, setRows] = useState<Diagnostic[]>([]),
     [diagnosticError, setDiagnosticError] = useState(""),
-    [metric, setMetric] = useState<
-      DiagnosticMetric | "pressure" | "material" | "histogram" | "spectrum"
-    >("kineticEnergy");
+    [metric, setMetric] = useState<DiagnosticMetric | "pressure" | "material">(
+      "kineticEnergy",
+    );
   const [activeMetrics, setActiveMetrics] = useState<DiagnosticMetric[]>(
     defaultMetrics(false),
   );
   const viewLink = useRef(parseViewLink(location.search));
+  const [quantityAnalysis, setQuantityAnalysis] = useState<
+    "histogram" | "spectrum" | null
+  >(null);
   const [analysisPreferences, setAnalysisPreferences] =
     useState<AnalysisPreferences>(viewLink.current.analysis ?? defaultAnalysis);
   const [shareLink, setShareLink] = useState("");
@@ -404,7 +407,18 @@ export default function App() {
         setSpeed(view.playback.speed);
         setLoop(view.playback.loop);
       }
-      if (view.metric) setMetric(view.metric);
+      setQuantityAnalysis(
+        view.quantityAnalysis ??
+          (view.metric === "histogram" || view.metric === "spectrum"
+            ? view.metric
+            : null),
+      );
+      if (
+        view.metric &&
+        view.metric !== "histogram" &&
+        view.metric !== "spectrum"
+      )
+        setMetric(view.metric);
     }
 
     if (!link.demo || link.demo === s.id) {
@@ -444,7 +458,9 @@ export default function App() {
       };
       fieldView.restore(merged, s.id);
       if (link.chart) {
-        setMetric(link.chart as typeof metric);
+        if (link.chart === "histogram" || link.chart === "spectrum")
+          setQuantityAnalysis(link.chart);
+        else setMetric(link.chart as typeof metric);
         if (Object.hasOwn(metricDefinitions, link.chart))
           setActiveMetrics((old) =>
             old.includes(link.chart as DiagnosticMetric)
@@ -452,6 +468,10 @@ export default function App() {
               : [...old, link.chart as DiagnosticMetric],
           );
       }
+      if (link.analysisView)
+        setQuantityAnalysis(
+          link.analysisView === "off" ? null : link.analysisView,
+        );
       if (link.analysis) setAnalysisPreferences(link.analysis);
       if (link.metrics) setActiveMetrics(link.metrics);
       if (link.theme) {
@@ -703,6 +723,9 @@ export default function App() {
       setValidRange(engine.current.validRange);
     }
   }, [options]);
+  useEffect(() => {
+    engine.current?.setLICAnimation(fieldView.licAnimated, fieldView.licSpeed);
+  }, [fieldView.licAnimated, fieldView.licSpeed]);
   useEffect(() => {
     engine.current?.setPicking(picking);
   }, [picking]);
@@ -992,6 +1015,7 @@ export default function App() {
         fieldView: fieldView.preferences,
         playback: { speed, loop },
         metric,
+        quantityAnalysis,
         metrics: activeMetrics,
         analysis: analysisPreferences,
       });
@@ -1005,6 +1029,7 @@ export default function App() {
     speed,
     loop,
     metric,
+    quantityAnalysis,
     activeMetrics,
     analysisPreferences,
   ]);
@@ -1072,8 +1097,6 @@ export default function App() {
     options.wrapPeriodic,
   ]);
   const hasMetric =
-    metric !== "histogram" &&
-    metric !== "spectrum" &&
     metric !== "material" &&
     metric !== "pressure" &&
     rows.some((r) => r[metric] != null);
@@ -1238,7 +1261,7 @@ export default function App() {
                 activeMetrics.includes(metric as DiagnosticMetric) &&
                 !keys.includes(metric as DiagnosticMetric)
               )
-                setMetric(keys[0] ?? "histogram");
+                setMetric(keys[0] ?? "pressure");
             }}
             onSelect={(value) => {
               setMetric(value);
@@ -1694,7 +1717,7 @@ export default function App() {
             </IconButton>
           </section>
           <section
-            className={`diagnostics ${metric === "pressure" || metric === "material" || metric === "spectrum" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
+            className={`diagnostics ${metric === "pressure" || metric === "material" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
           >
             <div className="diagnostics-heading">
               <div className="section-heading">
@@ -1713,13 +1736,10 @@ export default function App() {
                     ),
                     ["pressure", "Pressure probes"],
                     ["material", "Material motion"],
-                    ["histogram", "Histogram"],
-                    ["spectrum", "Spectrum"],
                   ] as const
                 ).map(([id, label]) => (
                   <button
                     key={id}
-                    disabled={id === "spectrum" && source?.dimension !== 2}
                     className={metric === id ? "selected" : ""}
                     aria-pressed={metric === id}
                     onClick={() => {
@@ -1754,6 +1774,7 @@ export default function App() {
                       <button
                         className="secondary-button"
                         disabled={
+                          (source?.frames ?? 0) < 2 ||
                           source?.dimension !== 2 ||
                           source?.identity !== "UIDs" ||
                           source?.timeKind !== "simulation"
@@ -1767,6 +1788,12 @@ export default function App() {
                       </button>
                       <MaterialTools
                         motion={material}
+                        uid={traceUid}
+                        supported={source?.identity === "UIDs"}
+                        onPickSeed={() => {
+                          setPlaying(false);
+                          setPicking(true);
+                        }}
                         index={displayedIndex}
                         timeKind={source?.timeKind}
                       />
@@ -1779,43 +1806,7 @@ export default function App() {
                     />
                   )}
                   {source &&
-                    (metric === "histogram" || metric === "spectrum" ? (
-                      <QuantityAnalysis
-                        key={sourceId + metric}
-                        reader={registry.current.get(sourceId)!}
-                        index={displayedIndex}
-                        field={presentation?.field ?? field}
-                        mapping={options.mapping}
-                        grid={
-                          (presentation?.mode !== "particles"
-                            ? fieldView.query(
-                                displayedIndex,
-                                field,
-                                options.mapping,
-                                options.wrapPeriodic,
-                              )
-                            : null) ?? {
-                            index: displayedIndex,
-                            field,
-                            mapping: options.mapping,
-                            settings: {
-                              ...fieldView.settings,
-                              quantity: "field",
-                              wrapPeriodic: options.wrapPeriodic,
-                            },
-                            streams: null,
-                          }
-                        }
-                        gridVisible={
-                          !!presentation && presentation.mode !== "particles"
-                        }
-                        mode={metric}
-                        theme={theme}
-                        playing={playing}
-                        initial={analysisPreferences}
-                        onSettings={setAnalysisPreferences}
-                      />
-                    ) : metric === "material" ? (
+                    (metric === "material" ? (
                       <MaterialChart
                         motion={material}
                         source={source}
@@ -1843,13 +1834,7 @@ export default function App() {
                     ))}
                 </div>
                 <div className="chart-note">
-                  {metric === "histogram" || metric === "spectrum" ? (
-                    metric === "histogram" ? (
-                      "Histogram of the displayed mapped quantity; boundaries and invalid samples are excluded."
-                    ) : (
-                      "Spatial FFT of the reconstructed scalar, not a kinetic-energy spectrum. Mean removed; zero-masking/windowing changes the spectrum. Radial values sum power per shell. Padding preserves total mean-square power."
-                    )
-                  ) : metric === "material" ? (
+                  {metric === "material" ? (
                     "Frozen UID set; seed-time periodic branch plus original unwrapped motion. 2D FTLE masks fits above relative residual 0.25. The ellipse is the fitted image of the seed RMS circle; sparse exports and particle shifting affect interpretation. Click a chart sample to seek."
                   ) : metric === "pressure" ? (
                     pressure.probes.length ? (
@@ -1915,6 +1900,7 @@ export default function App() {
                       theme,
                       metric,
                       analysisPreferences,
+                      quantityAnalysis,
                     ),
                   )
                 }
@@ -2164,6 +2150,85 @@ export default function App() {
                 </p>
               )}
             </details>
+            <section
+              className="control-section quantity-analysis-panel"
+              aria-label="Mapped quantity analysis"
+            >
+              <div className="section-heading">
+                <Activity size={14} />
+                <span>QUANTITY ANALYSIS</span>
+              </div>
+              <div
+                className="quantity-analysis-tabs"
+                role="group"
+                aria-label="Mapped quantity analysis view"
+              >
+                {(
+                  [
+                    ["histogram", "Histogram"],
+                    ["spectrum", "Spectrum"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    className={quantityAnalysis === id ? "selected" : ""}
+                    aria-pressed={quantityAnalysis === id}
+                    disabled={
+                      !source || (id === "spectrum" && source.dimension !== 2)
+                    }
+                    onClick={() =>
+                      setQuantityAnalysis((old) => (old === id ? null : id))
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {source && quantityAnalysis && (
+                <>
+                  <QuantityAnalysis
+                    key={sourceId + quantityAnalysis}
+                    reader={registry.current.get(sourceId)!}
+                    index={displayedIndex}
+                    field={presentation?.field ?? field}
+                    mapping={options.mapping}
+                    grid={
+                      (presentation?.mode !== "particles"
+                        ? fieldView.query(
+                            displayedIndex,
+                            field,
+                            options.mapping,
+                            options.wrapPeriodic,
+                          )
+                        : null) ?? {
+                        index: displayedIndex,
+                        field,
+                        mapping: options.mapping,
+                        settings: {
+                          ...fieldView.settings,
+                          quantity: "field",
+                          wrapPeriodic: options.wrapPeriodic,
+                        },
+                        streams: null,
+                      }
+                    }
+                    gridVisible={
+                      !!presentation && presentation.mode !== "particles"
+                    }
+                    mode={quantityAnalysis}
+                    theme={theme}
+                    playing={playing}
+                    initial={analysisPreferences}
+                    onSettings={setAnalysisPreferences}
+                  />
+                  <p className="subtle-note">
+                    {quantityAnalysis === "histogram"
+                      ? "Distribution of the mapped quantity in original units; excludes boundaries and invalid samples."
+                      : "Spatial spectrum of the mapped scalar, not kinetic energy. Masking and windowing affect the result."}
+                  </p>
+                </>
+              )}
+            </section>
             <FieldControls
               onRequestSeed={() => {
                 setPlaying(false);
@@ -2480,7 +2545,7 @@ export default function App() {
           key={sourceId}
           source={source}
           reader={registry.current.get(sourceId)!}
-          seedIndex={material.seed?.index ?? 0}
+          seedIndex={material.seed?.index ?? displayedIndex}
           endIndex={displayedIndex}
           radius={material.settings.radius}
           neighbours={material.settings.count}

@@ -1,3 +1,4 @@
+import { fieldFragment } from "./fieldShader";
 import {
   deformation,
   type MaterialSeed,
@@ -114,6 +115,14 @@ export class ParticleRenderer {
     THREE.RedFormat,
     THREE.FloatType,
   );
+  velocityTexture = new THREE.DataTexture(
+    new Float32Array([0, 0, 0, 0]),
+    1,
+    1,
+    THREE.RGBAFormat,
+    THREE.FloatType,
+  );
+  private renderReportTime = 0;
   flowLines = new THREE.Group();
   fieldResult: FieldResult | null = null;
   fieldMode: "particles" | "grid" | "both" = "particles";
@@ -201,17 +210,20 @@ export class ParticleRenderer {
         uField: { value: this.fieldTexture },
         uLIC: { value: this.licTexture },
         uHasLIC: { value: 0 },
+        uLICAnimate: { value: 0 },
+        uLICSpeed: { value: 6 },
+        uLICTime: { value: 0 },
+        uVelocity: { value: this.velocityTexture },
+        uGridSize: { value: new THREE.Vector2(1, 1) },
+        uDomainSize: { value: new THREE.Vector2(1, 1) },
+        uPeriodic: { value: new THREE.Vector2(0, 0) },
         uPalette: { value: this.texture },
         uMin: this.material.uniforms.uMin,
         uMax: this.material.uniforms.uMax,
         uNorm: this.material.uniforms.uNorm,
       },
       vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-      fragmentShader: `uniform sampler2D uLIC;uniform float uHasLIC;uniform sampler2D uField;uniform sampler2D uPalette;uniform float uMin;uniform float uMax;uniform float uNorm;varying vec2 vUv;
-      float transformValue(float v){if(uNorm<0.5)return v;if(uNorm<1.5)return log(max(v,1.e-30));float a=abs(v);return sign(v)*(a<0.01?a*(1.0-a*(0.5-a/3.0)):log(1.0+a));}
-      void main(){float v=texture2D(uField,vUv).r;if(v!=v||abs(v)>3.4e38)discard;
-      if(uNorm>0.5&&uNorm<1.5&&v<=0.0){gl_FragColor=vec4(0.5,0.5,0.5,1.0);return;}
-      float t=clamp((transformValue(v)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);vec3 color=texture2D(uPalette,vec2(t,0.5)).rgb;if(uHasLIC>0.5){float n=texture2D(uLIC,vUv).r;if(n!=n)discard;color*=0.25+1.1*n;}gl_FragColor=vec4(color,1.0);}`,
+      fragmentShader: fieldFragment,
     });
     this.fieldPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
@@ -241,14 +253,32 @@ export class ParticleRenderer {
     this.resize();
     const tick = () => {
       this.raf = requestAnimationFrame(tick);
-      if (this.dirty) {
+      const animate =
+        this.fieldPlane.visible &&
+        this.fieldMaterial.uniforms.uHasLIC.value > 0.5 &&
+        this.fieldMaterial.uniforms.uLICAnimate.value > 0.5 &&
+        !document.hidden;
+      if (this.dirty || animate) {
         const t = performance.now();
+        if (animate)
+          this.fieldMaterial.uniforms.uLICTime.value = (t / 1000) % 1024;
         this.renderer.render(this.scene, this.camera);
         this.dirty = false;
-        this.onRender(performance.now() - t);
+        if (!animate || t - this.renderReportTime > 250) {
+          this.renderReportTime = t;
+          this.onRender(performance.now() - t);
+        }
       }
     };
     tick();
+  }
+  setLICAnimation(enabled: boolean, speed: number) {
+    this.fieldMaterial.uniforms.uLICAnimate.value = enabled ? 1 : 0;
+    this.fieldMaterial.uniforms.uLICSpeed.value = Math.max(
+      1,
+      Math.min(20, speed),
+    );
+    this.dirty = true;
   }
   private pointerDown = (e: PointerEvent) => {
     this.down = [e.clientX, e.clientY];
@@ -573,6 +603,33 @@ export class ParticleRenderer {
     if (valid && result) {
       const g = result.grid;
       if (result.lic) {
+        const velocity = new Float32Array(g.width * g.height * 4);
+        for (let i = 0; i < g.width * g.height; i++) {
+          velocity[4 * i] = g.velocity[2 * i];
+          velocity[4 * i + 1] = g.velocity[2 * i + 1];
+          velocity[4 * i + 2] = g.velocityValid[i];
+        }
+        this.velocityTexture.dispose();
+        this.velocityTexture = new THREE.DataTexture(
+          velocity,
+          g.width,
+          g.height,
+          THREE.RGBAFormat,
+          THREE.FloatType,
+        );
+        this.velocityTexture.minFilter = THREE.NearestFilter;
+        this.velocityTexture.magFilter = THREE.NearestFilter;
+        this.velocityTexture.needsUpdate = true;
+        this.fieldMaterial.uniforms.uVelocity.value = this.velocityTexture;
+        this.fieldMaterial.uniforms.uGridSize.value.set(g.width, g.height);
+        this.fieldMaterial.uniforms.uDomainSize.value.set(
+          g.bounds[1][0] - g.bounds[0][0],
+          g.bounds[1][1] - g.bounds[0][1],
+        );
+        this.fieldMaterial.uniforms.uPeriodic.value.set(
+          +g.periodic[0],
+          +g.periodic[1],
+        );
         this.licTexture.dispose();
         this.licTexture = new THREE.DataTexture(
           result.lic.values,
@@ -952,6 +1009,7 @@ export class ParticleRenderer {
     this.fieldMaterial.dispose();
     this.fieldTexture.dispose();
     this.licTexture.dispose();
+    this.velocityTexture.dispose();
     this.setTrace([], 0);
     this.setMaterial(null, [], 0, false);
     this.setProbes([]);

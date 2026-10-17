@@ -181,3 +181,37 @@ test("metric cards and scalar-analysis settings persist with the recording", () 
     slice: 0.75,
   });
 });
+
+test("quantity analysis persists independently of the temporal diagnostic", () => {
+  const saved = sanitizeView(
+    {
+      key: "independent",
+      index: 4,
+      field: "densities",
+      metric: "material",
+      quantityAnalysis: "spectrum",
+    },
+    "independent",
+  );
+  assert.equal(saved?.metric, "material");
+  assert.equal(saved?.quantityAnalysis, "spectrum");
+  assert.equal(
+    sanitizeView({ ...saved, quantityAnalysis: null }, "independent")
+      ?.quantityAnalysis,
+    null,
+  );
+});
+
+test("LIC animation settings persist safely without changing the reconstruction settings", () => {
+  const saved = sanitizeView(
+    { key: "lic", fieldView: { licAnimated: true, licSpeed: 9 } },
+    "lic",
+  );
+  assert.equal(saved?.fieldView?.licAnimated, true);
+  assert.equal(saved?.fieldView?.licSpeed, 9);
+  assert.equal(
+    sanitizeView({ key: "lic", fieldView: { licSpeed: 1000 } }, "lic")
+      ?.fieldView?.licSpeed,
+    6,
+  );
+});

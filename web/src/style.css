@@ -2766,3 +2766,313 @@ kbd {
   text-decoration: underline;
   margin-left: 5px;
 }
+
+/* Quantity statistics belong to the mapped field, independently of time diagnostics. */
+.quantity-analysis-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0;
+}
+.quantity-analysis-tabs button {
+  flex: 1;
+  padding: 8px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.quantity-analysis-tabs button.selected {
+  color: #75ddba;
+  border-color: #4b7561;
+  background: #75ddba12;
+}
+.quantity-analysis-panel .quantity-analysis {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.quantity-analysis-panel .analysis-tools {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  overflow: visible;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  max-height: none;
+}
+.quantity-analysis-panel .analysis-tools p {
+  grid-column: 1 / -1;
+  margin: 0 0 8px;
+}
+.quantity-analysis-panel .analysis-tools label {
+  min-width: 0;
+}
+.quantity-analysis-panel .analysis-tools select {
+  width: 100%;
+  max-width: 100%;
+}
+.quantity-analysis-panel .quantity-analysis > .chart-canvas {
+  flex: none;
+  width: 100%;
+  height: 210px;
+  min-width: 0;
+}
+.quantity-analysis-panel .spectrum-image {
+  width: 100%;
+  padding: 8px 0;
+}
+.quantity-analysis-panel .spectrum-image canvas {
+  width: 170px;
+  height: 170px;
+}
+.material-start {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.material-start strong {
+  font-size: 12px;
+  color: var(--text);
+}
+.material-start p,
+.material-start small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.material-start button {
+  font-size: 11px;
+  padding: 8px;
+}
+.material-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.material-empty strong {
+  color: var(--text);
+}
+.material-chart-note {
+  padding: 4px 16px 8px;
+  margin: 0;
+}
+.diagnostic-body > .material-tools-host {
+  width: 280px;
+}
+.ftle-intro {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+  max-width: 760px;
+}
+.ftle-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+}
+.ftle-summary > div {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ftle-summary small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.ftle-summary strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+.ftle-display-controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ftle-display-controls label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ftle-display-controls select {
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+}
+.ftle-preview {
+  height: auto;
+  background: transparent;
+  margin: 20px 0;
+}
+.ftle-map-layout {
+  width: min(100%, 550px);
+  display: grid;
+  grid-template-columns: 18px 42px minmax(0, 1fr);
+  grid-template-rows: auto 24px 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.ftle-y-title {
+  grid-column: 1;
+  grid-row: 1;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+}
+.ftle-y-ticks {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: end;
+  padding-right: 7px;
+}
+.ftle-raster {
+  grid-column: 3;
+  grid-row: 1;
+  border: 1px solid #718297;
+  min-width: 0;
+}
+.ftle-raster canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  object-fit: fill;
+}
+.ftle-x-ticks {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  justify-content: space-between;
+  padding-top: 6px;
+}
+.ftle-x-title {
+  grid-column: 3;
+  grid-row: 3;
+  text-align: center;
+}
+.ftle-legend {
+  justify-content: center;
+  color: var(--text);
+}
+.ftle-mask-key,
+.ftle-valid-key {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.ftle-mask-key::before {
+  content: "";
+  width: 18px;
+  height: 14px;
+  background: conic-gradient(
+    #3c4855 25%,
+    #2b3642 0 50%,
+    #3c4855 0 75%,
+    #2b3642 0
+  );
+  background-size: 8px 8px;
+  border: 1px solid #718297;
+}
+.ftle-valid-key::before {
+  content: "";
+  width: 18px;
+  height: 14px;
+  background: #75ddba;
+}
+.ftle-mask-explanation {
+  padding: 12px 16px;
+  border-left: 3px solid #718297;
+  background: #71829712;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.ftle-mask-explanation p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+.ftle-caption,
+.ftle-hover {
+  font-size: 11px;
+  line-height: 1.6;
+}
+.ftle-hover {
+  min-height: 36px;
+  color: var(--muted);
+}
+.ftle-empty {
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+  text-align: center;
+}
+.ftle-advanced {
+  margin-top: 14px;
+}
+.ftle-advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+@media (max-width: 900px) {
+  .diagnostic-body > .material-tools-host {
+    width: 100%;
+    max-height: 260px;
+  }
+  .ftle-summary {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .ftle-summary > div {
+    padding: 8px 12px;
+  }
+  .ftle-display-controls label {
+    flex-direction: column;
+    align-items: start;
+  }
+}
+.material-start-actions {
+  display: flex;
+  gap: 6px;
+}
+.material-start-actions button {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+}
+.material-start-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+}
+.material-start-actions button:first-child {
+  grid-column: 1 / -1;
+  padding: 5px;
+}
+.material-start-actions button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 7px 4px;
+}
+.ftle-display-controls button {
+  padding: 6px 8px;
+  font-size: 11px;
+}

@@ -221,3 +221,18 @@ test("URL overrides are partial, distinguish raw and derived quantities, and car
   assert.equal(color.options.normalization, "symlog");
   assert.equal(color.options.palette, "coolwarm");
 });
+
+test("temporal and quantity analysis views plus LIC animation have independent URL settings", () => {
+  const parsed = parseViewLink(
+    "?chart=material&analysisView=spectrum&licAnimate=1&licSpeed=9",
+  );
+  assert.equal(parsed.chart, "material");
+  assert.equal(parsed.analysisView, "spectrum");
+  assert.equal(parsed.view.licAnimated, true);
+  assert.equal(parsed.view.licSpeed, 9);
+  assert.equal(
+    parseViewLink("?analysisView=off&licAnimate=0").analysisView,
+    "off",
+  );
+  assert.equal(parseViewLink("?licSpeed=Infinity").view.licSpeed, undefined);
+});

@@ -263,3 +263,7 @@ explicit window/mask policy. High-resolution TGV, decaying-flow and obstacle-wak
 snapshot datasets accompany these tools. See [UI/analysis](VIEW_PRESETS_AND_ANALYSIS.md)
 and [data provenance](SNAPSHOT_GALLERY.md). Shared WebGPU rendering and genuine
 LCS methods remain separate milestones.
+
+- Completed: independent right-column scalar statistics, guided material capture
+  and untracking, labelled FTLE/fit-quality layers and renderer-side LIC texture
+  animation. See MATERIAL_ANALYSIS_UX.md for semantics and verification.

@@ -97,6 +97,7 @@ export interface ViewLink {
   metrics?: DiagnosticMetric[];
   theme?: "dark" | "light";
   chart?: string;
+  analysisView?: "histogram" | "spectrum" | "off";
   analysis?: AnalysisPreferences;
 }
 const number = (
@@ -113,6 +114,8 @@ const number = (
 export function parseViewLink(search: string): ViewLink {
   const p = new URLSearchParams(search),
     out: ViewLink = { options: {}, view: {} };
+  if (["histogram", "spectrum", "off"].includes(p.get("analysisView") ?? ""))
+    out.analysisView = p.get("analysisView") as ViewLink["analysisView"];
   out.demo = p.get("demo") ?? undefined;
   out.preset = p.get("preset") ?? undefined;
   out.time = number(p, "time");
@@ -238,6 +241,10 @@ export function parseViewLink(search: string): ViewLink {
     out.analysis.slice = number(p, "slice", 0, 1) ?? 0.5;
   }
   if (p.has("streams")) out.view.flow = p.get("streams") === "1";
+  if (["0", "1"].includes(p.get("licAnimate") ?? ""))
+    out.view.licAnimated = p.get("licAnimate") === "1";
+  const licSpeed = number(p, "licSpeed", 1, 20);
+  if (licSpeed != null) out.view.licSpeed = licSpeed;
   if (p.has("lic")) out.view.lic = undefined;
   if (p.get("lic") === "1")
     out.view.lic = {
@@ -325,6 +332,7 @@ export function buildViewURL(
   theme: string,
   chart?: string,
   analysis?: AnalysisPreferences,
+  analysisView?: "histogram" | "spectrum" | null,
 ) {
   const url = new URL(base);
   url.search = "";
@@ -354,7 +362,11 @@ export function buildViewURL(
     p.set("seedX", String(view.seed[0]));
     p.set("seedY", String(view.seed[1]));
   }
+  if (view.licAnimated !== undefined)
+    p.set("licAnimate", view.licAnimated ? "1" : "0");
+  if (view.licSpeed !== undefined) p.set("licSpeed", String(view.licSpeed));
   if (chart) p.set("chart", chart);
+  if (analysisView !== undefined) p.set("analysisView", analysisView ?? "off");
   if (analysis)
     for (const [key, value] of Object.entries({
       bins: analysis.bins,

@@ -49,6 +49,7 @@ export function useMaterialMotion(
     setSeed(null);
     setRows([]);
     setBusy(false);
+    setError("");
   };
   const capture = async (index: number, uid: string) => {
     if (!reader || !source || !uid) return;
@@ -205,6 +206,13 @@ export function MaterialCapture({
       </button>
       <button
         className="secondary-button"
+        disabled={!m.seed && !m.busy}
+        onClick={m.clear}
+      >
+        Untrack neighbourhood
+      </button>
+      <button
+        className="secondary-button"
         disabled={
           !supported || !uid || m.pinned.includes(uid) || m.pinned.length >= 8
         }
@@ -222,10 +230,16 @@ export function MaterialTools({
   motion: m,
   index,
   timeKind,
+  uid,
+  supported,
+  onPickSeed,
 }: {
   motion: MaterialController;
   index: number;
   timeKind?: string;
+  uid: string;
+  supported: boolean;
+  onPickSeed: () => void;
 }) {
   const current = m.analyses.find((row) => row.index === index),
     available =
@@ -233,6 +247,43 @@ export function MaterialTools({
         .length ?? 0;
   return (
     <section className="material-tools" aria-label="Material motion controls">
+      <div className="material-start">
+        <strong>
+          {m.seed ? "Track a new neighbourhood" : "Start a material curve"}
+        </strong>
+        <p>
+          {supported
+            ? "1. Pick a fluid particle. 2. Track its neighbourhood to generate the time curve."
+            : "Material curves require a recording with stable particle UIDs."}
+        </p>
+        <div className="material-start-actions">
+          <button
+            className="secondary-button"
+            disabled={!supported}
+            onClick={onPickSeed}
+          >
+            Pick a particle
+          </button>
+          <button
+            className="primary-button"
+            disabled={!supported || !uid || m.busy}
+            onClick={() => void m.capture(index, uid)}
+          >
+            Track neighbourhood
+          </button>
+          <button
+            className="secondary-button"
+            disabled={!m.seed && !m.busy}
+            onClick={m.clear}
+          >
+            Untrack
+          </button>
+        </div>
+        <small>
+          {uid ? `Selected UID ${uid} · ` : ""}Capture at frame {index + 1}.
+          Past/future frames set the time window.
+        </small>
+      </div>
       <div className="material-toolbar">
         <label>
           Neighbour selection
@@ -503,8 +554,34 @@ export function MaterialChart({
       <div
         ref={ref}
         className="chart-canvas"
+        style={!m.seed ? { display: "none" } : undefined}
         aria-label="Material diagnostic over time"
       />
+      {!m.seed && (
+        <div className="material-empty" role="status">
+          <strong>
+            {m.busy
+              ? "Capturing the neighbourhood…"
+              : "No material neighbourhood tracked yet"}
+          </strong>
+          <p>
+            Use Pick a particle, then Track neighbourhood on the left. The curve
+            will show how the same particles separate over time.
+          </p>
+        </div>
+      )}
+      {m.seed && (
+        <p className="subtle-note material-chart-note">
+          {quantity === "rmsSeparation"
+            ? "RMS distance of the captured neighbours from the central particle. Click a sample to jump to that frame."
+            : "Finite-time stretching from the capture frame to each sample. The capture instant has no FTLE; rejected fits appear as gaps."}
+          {quantity === "ftle" &&
+          m.analyses.length > 0 &&
+          !m.analyses.some((r) => r.ftle != null)
+            ? " No valid stretching fits yet. Try a shorter time window, or inspect RMS radius."
+            : ""}
+        </p>
+      )}
     </div>
   );
 }

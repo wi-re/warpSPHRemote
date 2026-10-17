@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Source } from "./types";
 import type { TrajectorySource } from "./sources/client";
 import { ridgeMask, type FTLEQuery, type FTLEBatch } from "./sources/ftle";
+import { ftleSummary } from "./ftleDisplay";
 import { paletteBytes } from "./palettes";
 interface FTLEMapResult extends FTLEBatch {
   query: FTLEQuery;
@@ -29,10 +30,12 @@ export function FTLEMap({
   onPick: (uid: string, index: number) => void;
 }) {
   const [query, setQuery] = useState<FTLEQuery>({
-      start: seedIndex,
+      start: Math.min(seedIndex, source.frames - 2),
       end:
         endIndex === seedIndex
-          ? Math.min(source.frames - 1, seedIndex + 10)
+          ? seedIndex === source.frames - 1
+            ? seedIndex
+            : Math.min(source.frames - 1, seedIndex + 10)
           : endIndex,
       resolution: 64,
       radius,
@@ -44,7 +47,12 @@ export function FTLEMap({
     [error, setError] = useState(""),
     [ridges, setRidges] = useState(false),
     [threshold, setThreshold] = useState(0),
-    [hover, setHover] = useState("");
+    [hover, setHover] = useState(""),
+    [mapDisplay, setMapDisplay] = useState<"ftle" | "residual" | "acceptance">(
+      "ftle",
+    ),
+    [contrast, setContrast] = useState<"full" | "robust">("full"),
+    [largeMap, setLargeMap] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null),
     abort = useRef<AbortController | null>(null),
     dialog = useRef<HTMLDialogElement>(null),
@@ -106,11 +114,20 @@ export function FTLEMap({
       if (!controller.signal.aborted) setBusy(false);
     }
   };
-  const finite = result
-      ? Array.from(result.values).filter(Number.isFinite)
-      : [],
-    lo = finite.length ? Math.min(...finite) : 0,
-    hi = finite.length ? Math.max(...finite) : 1;
+  const summary = result ? ftleSummary(result, result.query.maxResidual) : null;
+  const lo = mapDisplay === "ftle" ? (summary?.min ?? 0) : 0;
+  const hi =
+    mapDisplay === "ftle"
+      ? ((contrast === "robust" ? summary?.p95 : summary?.max) ?? 1)
+      : mapDisplay === "residual"
+        ? Math.max(
+            result?.query.maxResidual ?? 0.25,
+            ...Array.from(result?.residual ?? []).filter(Number.isFinite),
+          )
+        : 1;
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const number = (v: number) =>
+    Number.isFinite(v) ? Number(v.toPrecision(4)).toString() : "—";
   useEffect(() => {
     if (!canvas.current || !result) return;
     const { width: w, height: h, values } = result;
@@ -124,8 +141,15 @@ export function FTLEMap({
       for (let x = 0; x < w; x++) {
         const i = y * w + x,
           off = ((h - 1 - y) * w + x) * 4;
-        if (!Number.isFinite(values[i])) {
-          image.data.set([24, 33, 41, 255], off);
+        const value =
+          mapDisplay === "residual" ? result.residual[i] : values[i];
+        const checker = (x + y) % 2 ? [60, 72, 85, 255] : [43, 54, 66, 255];
+        if (i >= result.offset || !Number.isFinite(value)) {
+          image.data.set(checker, off);
+          continue;
+        }
+        if (mapDisplay === "acceptance") {
+          image.data.set([117, 221, 186, 255], off);
           continue;
         }
         const j =
@@ -133,33 +157,26 @@ export function FTLEMap({
             255,
             Math.max(
               0,
-              Math.round(((values[i] - lo) / Math.max(hi - lo, 1e-20)) * 255),
+              Math.round(((value - lo) / Math.max(hi - lo, 1e-20)) * 255),
             ),
           ) * 4;
         image.data.set(
-          mask?.[i]
+          mapDisplay === "ftle" && mask?.[i]
             ? [106, 255, 224, 255]
             : [palette[j], palette[j + 1], palette[j + 2], 255],
           off,
         );
       }
     context.putImageData(image, 0, 0);
-  }, [result, lo, hi, ridges, threshold]);
+  }, [result, lo, hi, ridges, threshold, mapDisplay]);
   const at = (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!result) return -1;
     const box = event.currentTarget.getBoundingClientRect(),
-      w = Math.min(box.width, (box.height * result.width) / result.height),
-      h = (w * result.height) / result.width,
-      x = Math.floor(
-        ((event.clientX - box.left - (box.width - w) / 2) / w) * result.width,
-      ),
+      x = Math.floor(((event.clientX - box.left) / box.width) * result.width),
       y =
         result.height -
         1 -
-        Math.floor(
-          ((event.clientY - box.top - (box.height - h) / 2) / h) *
-            result.height,
-        );
+        Math.floor(((event.clientY - box.top) / box.height) * result.height);
     return x < 0 || x >= result.width || y < 0 || y >= result.height
       ? -1
       : y * result.width + x;
@@ -213,13 +230,19 @@ export function FTLEMap({
     >
       <header>
         <div>
-          <h2 id="ftle-title">Material FTLE map · 2D</h2>
+          <h2 id="ftle-title">Finite-time stretching · FTLE</h2>
           <p>{source.name} · sampled at initial material coordinates</p>
         </div>
         <button aria-label="Close FTLE map" onClick={onClose}>
           ×
         </button>
       </header>
+      <p className="ftle-intro">
+        Where do nearby particles separate most? Bright colors show stronger
+        stretching over the chosen time interval, located at the particles’{" "}
+        <strong>initial positions</strong>. This is a material estimate from
+        recorded particle motion.
+      </p>
       <div className="material-toolbar">
         {(["start", "end"] as const).map((key) => (
           <label key={key}>
@@ -318,83 +341,266 @@ export function FTLEMap({
         )}
         {result && <button onClick={save}>Export analysis</button>}
       </div>
+      {result && summary ? (
+        <>
+          <div className="ftle-summary" role="status">
+            <div>
+              <small>
+                {result.times[1] > result.times[0] ? "Forward" : "Backward"}{" "}
+                interval
+              </small>
+              <strong>
+                t={number(result.times[0])} → {number(result.times[1])}
+              </strong>
+              <small>
+                Δt = {number(Math.abs(result.times[1] - result.times[0]))} ·{" "}
+                {result.query.start + 1} → {result.query.end + 1} frames
+              </small>
+            </div>
+            <div>
+              <small>Accepted fits</small>
+              <strong>
+                {(
+                  (100 * summary.valid) /
+                  Math.max(1, summary.processed)
+                ).toFixed(1)}
+                %
+              </strong>
+              <small>
+                {summary.valid.toLocaleString()} /{" "}
+                {summary.processed.toLocaleString()} evaluated cells
+              </small>
+            </div>
+            <div>
+              <small>Masked / untrusted</small>
+              <strong>{summary.masked.toLocaleString()} cells</strong>
+              <small>
+                {summary.pending
+                  ? `${summary.pending.toLocaleString()} still computing`
+                  : "Not zero stretching"}
+              </small>
+            </div>
+          </div>
+          <div className="ftle-display-controls">
+            <button
+              className="secondary-button"
+              aria-pressed={largeMap}
+              onClick={() => setLargeMap((v) => !v)}
+            >
+              {largeMap ? "Fit map to window" : "Enlarge map"}
+            </button>
+            <label>
+              Map layer{" "}
+              <select
+                aria-label="FTLE map layer"
+                value={mapDisplay}
+                onChange={(e) =>
+                  setMapDisplay(e.target.value as typeof mapDisplay)
+                }
+              >
+                <option value="ftle">Stretching · FTLE</option>
+                <option value="residual">
+                  Fit residual · including rejected fits
+                </option>
+                <option value="acceptance">Accepted fit coverage</option>
+              </select>
+            </label>
+            {mapDisplay === "ftle" && (
+              <label>
+                Color range{" "}
+                <select
+                  aria-label="FTLE color range"
+                  value={contrast}
+                  onChange={(e) =>
+                    setContrast(e.target.value as typeof contrast)
+                  }
+                >
+                  <option value="full">Full numerical range</option>
+                  <option value="robust">Clip brightest 5% for contrast</option>
+                </select>
+              </label>
+            )}
+          </div>
+        </>
+      ) : null}
       <div className="ftle-preview">
-        <canvas
-          ref={canvas}
-          aria-label="FTLE field at initial material coordinates"
-          onMouseMove={(e) => {
-            const i = at(e);
-            if (i < 0 || !result) return;
-            setHover(
-              `UID ${result.uids[i] ?? "—"} · FTLE ${Number.isFinite(result.values[i]) ? result.values[i].toPrecision(5) : "masked"} · ${result.counts[i]} matched · residual ${result.residual[i].toPrecision(3)} · condition ${result.condition[i].toPrecision(3)}`,
-            );
-          }}
-          onClick={(e) => {
-            const i = at(e),
-              uid = i >= 0 ? result?.uids[i] : null;
-            if (uid && result) {
-              onPick(uid, result.query.start);
-              onClose();
-            }
-          }}
-        />
-      </div>
-      <div className="ftle-caption" role="status">
-        {result
-          ? `${result.offset}/${result.width * result.height} cells · ${finite.length} valid · t₀=${result.times[0].toPrecision(5)} → t₁=${result.times[1].toPrecision(5)} · FTLE ${lo.toPrecision(4)} … ${hi.toPrecision(4)} [1/time]`
-          : "Choose two recorded instants and generate a map."}
-        {busy ? " · computing…" : ""}
-      </div>
-      {result && (
-        <div className="ftle-legend">
-          <span>{lo.toPrecision(4)}</span>
-          <div />
-          <span>{hi.toPrecision(4)} [1/time]</span>
-          <span>
-            x=[{result.bounds[0][0]}, {result.bounds[1][0]}] · y=[
-            {result.bounds[0][1]}, {result.bounds[1][1]}]
-          </span>
-        </div>
-      )}
-      <div className="material-toolbar">
-        <label className="flow-toggle">
-          <input
-            type="checkbox"
-            aria-label="Show FTLE ridge candidates"
-            checked={ridges}
-            onChange={(e) => setRidges(e.target.checked)}
-          />
-          Scalar ridge candidates
-        </label>
-        {ridges && (
-          <label>
-            Minimum FTLE
-            <input
-              type="number"
-              aria-label="FTLE ridge threshold"
-              step="0.1"
-              value={threshold}
-              onChange={(e) => {
-                if (Number.isFinite(+e.target.value))
-                  setThreshold(+e.target.value);
+        {result ? (
+          <div
+            className="ftle-map-layout"
+            style={{
+              width: largeMap
+                ? "min(100%,650px)"
+                : "min(100%,calc(30vh + 60px))",
+            }}
+          >
+            <div className="ftle-y-title">Initial y [length]</div>
+            <div className="ftle-y-ticks">
+              {ticks.map((t) => (
+                <span key={t}>
+                  {number(
+                    result.bounds[1][1] -
+                      t * (result.bounds[1][1] - result.bounds[0][1]),
+                  )}
+                </span>
+              ))}
+            </div>
+            <div
+              className="ftle-raster"
+              style={{
+                aspectRatio:
+                  (result.bounds[1][0] - result.bounds[0][0]) /
+                  (result.bounds[1][1] - result.bounds[0][1]),
               }}
-            />
-          </label>
+            >
+              <canvas
+                ref={canvas}
+                aria-label="FTLE field at initial material coordinates"
+                onMouseLeave={() => setHover("")}
+                onMouseMove={(e) => {
+                  const i = at(e);
+                  if (i < 0) return;
+                  const x =
+                    result.bounds[0][0] +
+                    (((i % result.width) + 0.5) / result.width) *
+                      (result.bounds[1][0] - result.bounds[0][0]);
+                  const y =
+                    result.bounds[0][1] +
+                    ((Math.floor(i / result.width) + 0.5) / result.height) *
+                      (result.bounds[1][1] - result.bounds[0][1]);
+                  const v = result.values[i];
+                  const info = Number.isFinite(v)
+                    ? `FTLE ${number(v)} [1/time] · stretch factor ≈ ${number(Math.exp(v * Math.abs(result.times[1] - result.times[0])))}×`
+                    : "Masked: no trusted stretching estimate";
+                  setHover(
+                    `x=${number(x)}, y=${number(y)} · ${info} · UID ${result.uids[i] ?? "none"} · ${result.counts[i]} neighbours · residual ${number(result.residual[i])}`,
+                  );
+                }}
+                onClick={(e) => {
+                  const i = at(e),
+                    uid = i >= 0 ? result.uids[i] : null;
+                  if (uid) {
+                    onPick(uid, result.query.start);
+                    onClose();
+                  }
+                }}
+              />
+            </div>
+            <div className="ftle-x-ticks">
+              {ticks.map((t) => (
+                <span key={t}>
+                  {number(
+                    result.bounds[0][0] +
+                      t * (result.bounds[1][0] - result.bounds[0][0]),
+                  )}
+                </span>
+              ))}
+            </div>
+            <div className="ftle-x-title">Initial x [length]</div>
+          </div>
+        ) : (
+          <div className="ftle-empty">
+            Choose a start and end frame, then Generate map.
+            <br />
+            Use a short interval first; long intervals can make local fits
+            unreliable.
+          </div>
         )}
       </div>
-      <p className="subtle-note">
-        {hover ||
-          "Hover for fit quality; click a sampled material center to inspect it in the viewer."}
-      </p>
-      <p className="subtle-note">
-        Forward/backward finite-time fits use exact UIDs and original unwrapped
-        motion. Missing identities, rank loss, condition &gt; 10⁶, and excessive
-        residual are masked. The raster samples the nearest recorded fluid
-        center within 1.5 cell diagonals and the search radius. Ridge candidates
-        are coordinate-axis local maxima above a threshold; they are not a
-        validated material LCS. Sparse exports and particle shifting affect
-        interpretation.
-      </p>
+      {result && (
+        <>
+          <div className="ftle-legend">
+            {mapDisplay !== "acceptance" ? (
+              <>
+                <span>{number(lo)}</span>
+                <div className="ftle-colorbar" />
+                <span>
+                  {number(hi)}{" "}
+                  {mapDisplay === "ftle" ? "[1/time]" : "relative residual"}
+                </span>
+              </>
+            ) : (
+              <span className="ftle-valid-key">Accepted fit</span>
+            )}
+            <span className="ftle-mask-key">Masked / unavailable</span>
+          </div>
+          <p className="ftle-caption">
+            {mapDisplay === "ftle"
+              ? "Dark = weak stretching · bright = strong stretching. Negative values indicate contraction."
+              : mapDisplay === "residual"
+                ? "Smaller residual = a closer local deformation fit. Values above the fit limit are excluded from FTLE."
+                : "Green cells passed the fit checks; patterned cells did not."}
+            {contrast === "robust" && mapDisplay === "ftle"
+              ? " Values above the 95th percentile share the brightest color; numerical values are unchanged."
+              : ""}
+          </p>
+          {summary && summary.masked > 0 && (
+            <div className="ftle-mask-explanation">
+              <strong>Why are there gaps?</strong>
+              <p>
+                {summary.noParticle.toLocaleString()} no sampled particle ·{" "}
+                {summary.fewMatches.toLocaleString()} insufficient matches ·{" "}
+                {summary.residual.toLocaleString()} above residual limit ·{" "}
+                {summary.unavailable.toLocaleString()} unstable or unavailable
+                fits.
+              </p>
+              <p>
+                Patterned regions are not evidence of low stretching. Try a
+                shorter interval and inspect the residual layer. Relaxing the
+                residual limit admits less reliable fits.
+              </p>
+            </div>
+          )}
+          <p className="ftle-hover">
+            {hover ||
+              "Hover to inspect coordinates, stretching and fit quality. Click a sampled particle to select it in the main viewer."}
+          </p>
+        </>
+      )}
+      <div className="ftle-caption" role="status">
+        {busy
+          ? `Computing ${summary?.processed ?? 0} / ${summary?.total ?? "…"} cells…`
+          : result && JSON.stringify(query) !== JSON.stringify(result.query)
+            ? "Settings changed. Generate map to update the result."
+            : ""}
+      </div>
+      <details className="ftle-advanced">
+        <summary>Ridge candidates and method details</summary>
+        <div className="material-toolbar">
+          <label className="flow-toggle">
+            <input
+              type="checkbox"
+              aria-label="Show FTLE ridge candidates"
+              checked={ridges}
+              onChange={(e) => setRidges(e.target.checked)}
+            />
+            Scalar ridge candidates
+          </label>
+          {ridges && (
+            <label>
+              Minimum FTLE
+              <input
+                type="number"
+                aria-label="FTLE ridge threshold"
+                step="0.1"
+                value={threshold}
+                onChange={(e) => {
+                  if (Number.isFinite(+e.target.value))
+                    setThreshold(+e.target.value);
+                }}
+              />
+            </label>
+          )}
+        </div>
+        <p className="subtle-note">
+          Forward/backward finite-time fits use exact UIDs and original
+          unwrapped motion. Missing identities, rank loss, condition &gt; 10⁶,
+          and excessive residual are masked. The raster samples the nearest
+          recorded fluid center within 1.5 cell diagonals and the search radius.
+          Ridge candidates are coordinate-axis local maxima above a threshold;
+          they are not a validated material LCS. Sparse exports and particle
+          shifting affect interpretation.
+        </p>
+      </details>
       {error && (
         <p className="inline-error" role="alert">
           {error}

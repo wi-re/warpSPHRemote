@@ -134,3 +134,7 @@ selection on the 512² TGV, confirmed an unobstructed plot and active picker, th
 clicked a particle and obtained 800 streamline segments without an error overlay.
 Run `npm test`, `npm run build`, `npm run dev` to reproduce. Evidence is outside
 Git under `../warpSPHDevelopment/remote/picked-streamline-waiting-20261017/`.
+
+Histogram/Spectrum now live in the right column independently of temporal
+charts. FTLE explanations, material start/untrack actions and LIC animation are
+documented in [MATERIAL_ANALYSIS_UX.md](MATERIAL_ANALYSIS_UX.md).

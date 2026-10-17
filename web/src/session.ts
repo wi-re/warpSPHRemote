@@ -158,6 +158,7 @@ export interface SavedView {
     DiagnosticMetric | "pressure" | "material" | "histogram" | "spectrum";
   metrics?: DiagnosticMetric[];
   analysis?: AnalysisPreferences;
+  quantityAnalysis?: "histogram" | "spectrum" | null;
 }
 const object = (v: unknown): v is Record<string, any> =>
   !!v && typeof v === "object" && !Array.isArray(v);
@@ -252,6 +253,10 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       seeds: Number.isInteger(f.seeds) ? finite(f.seeds, 8, 2, 16) : 8,
       seedMode: oneOf(f.seedMode, ["regular", "picked"] as const, "regular"),
     };
+    if (typeof f.licAnimated === "boolean")
+      view.fieldView.licAnimated = f.licAnimated;
+    if (f.licSpeed !== undefined)
+      view.fieldView.licSpeed = finite(f.licSpeed, 6, 1, 20);
     if (object(f.lic))
       view.fieldView.lic = {
         steps: Number.isInteger(f.lic.steps)
@@ -276,6 +281,12 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       speed: oneOf(value.playback.speed, [0.25, 0.5, 1, 2, 4], 1),
       loop: value.playback.loop !== false,
     };
+  if (value.quantityAnalysis !== undefined)
+    view.quantityAnalysis = oneOf(
+      value.quantityAnalysis,
+      ["histogram", "spectrum", null] as const,
+      null,
+    );
   if (object(value.analysis)) view.analysis = sanitizeAnalysis(value.analysis);
   const chosenMetrics = sanitizeMetrics(value.metrics);
   if (chosenMetrics) view.metrics = chosenMetrics;

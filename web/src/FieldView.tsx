@@ -16,6 +16,8 @@ export interface FieldPreferences {
   mode: FieldMode;
   flow: boolean;
   lic?: LICSettings;
+  licAnimated?: boolean;
+  licSpeed?: number;
   settings: GridSettings;
   seeds: number;
   seedMode: "regular" | "picked";
@@ -25,6 +27,8 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
   const [mode, setMode] = useState<FieldMode>("particles"),
     [flow, setFlow] = useState(false),
     [lic, setLIC] = useState(false),
+    [licAnimated, setLICAnimated] = useState(false),
+    [licSpeed, setLICSpeed] = useState(6),
     [licSettings, setLICSettings] = useState<LICSettings>({ ...initialLIC }),
     [settings, setSettings] = useState<GridSettings>(() => ({
       ...initialGrid,
@@ -63,6 +67,7 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
     mode,
     flow,
     ...(lic && mode !== "particles" ? { lic: licSettings } : {}),
+    ...(licAnimated || licSpeed !== 6 ? { licAnimated, licSpeed } : {}),
     settings,
     seeds,
     seedMode,
@@ -72,6 +77,8 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
     setMode(value.mode);
     setFlow(value.flow);
     setLIC(!!value.lic && value.mode !== "particles");
+    setLICAnimated(value.licAnimated ?? false);
+    setLICSpeed(value.licSpeed ?? 6);
     if (value.lic) setLICSettings(value.lic);
     setSettings(value.settings);
     setSeeds(value.seeds);
@@ -87,6 +94,10 @@ export function useFieldView(source: Source | undefined, seed: number[]) {
     setLIC,
     licSettings,
     setLICSettings,
+    licAnimated,
+    setLICAnimated,
+    licSpeed,
+    setLICSpeed,
     settings,
     setSettings,
     seeds,
@@ -335,6 +346,33 @@ export function FieldControls({
           </label>
           <small>{v.lic ? "On" : "Off"}</small>
         </summary>
+        <label className="flow-toggle">
+          <input
+            type="checkbox"
+            aria-label="Animate LIC"
+            checked={v.licAnimated}
+            onChange={(e) => v.setLICAnimated(e.target.checked)}
+          />
+          Animate flow texture
+        </label>
+        {v.licAnimated && (
+          <label className="control-label">
+            Animation speed · {v.licSpeed} cells/s
+            <input
+              aria-label="LIC animation speed"
+              type="range"
+              min="1"
+              max="20"
+              step="1"
+              value={v.licSpeed}
+              onChange={(e) => v.setLICSpeed(+e.target.value)}
+            />
+          </label>
+        )}
+        <p className="subtle-note">
+          Animation follows the frozen velocity field. Speed is visual; it does
+          not advance simulation time.
+        </p>
         <label className="control-label" htmlFor="lic-length">
           LIC half-length · {v.licSettings.steps} cells
         </label>
