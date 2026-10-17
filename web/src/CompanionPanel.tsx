@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, Link2, Play, Radio, Square, Unplug, X } from "lucide-react";
 import {
   CompanionClient,
+  companionConnectionMessage,
   LiveSource,
   takePairing,
   type Preset,
@@ -47,26 +48,44 @@ export function CompanionPanel({
     reader?: LiveSource;
     waiting: boolean;
   } | null>(null);
+  const connection = useRef<AbortController | null>(null);
   const callbacks = useRef({ onFrame, onDetached, sourceId, onOpen });
   callbacks.current = { onFrame, onDetached, sourceId, onOpen };
   const known = useRef<Set<string> | null>(null);
   const preset = presets.find((p) => p.id === presetId);
   async function connect(address = endpoint, secret = token) {
+    connection.current?.abort();
+    const attempt = new AbortController();
+    connection.current = attempt;
     setBusy(true);
     setError("");
     try {
       const next = new CompanionClient(address, secret.trim()),
-        session = await next.session();
+        session = await next.session(attempt.signal);
+      if (connection.current !== attempt || attempt.signal.aborted) return;
       setPresets(session.presets);
       known.current = null;
       setClient(next);
-    } catch (e) {
-      setError(
-        `${(e as Error).message} Check that the companion is running on this device and allow the browser’s local-network permission if requested.`,
-      );
+    } catch (error) {
+      if (connection.current === attempt && !attempt.signal.aborted)
+        setError(companionConnectionMessage(error));
     } finally {
-      setBusy(false);
+      if (connection.current === attempt) {
+        connection.current = null;
+        setBusy(false);
+      }
     }
+  }
+  function cancelConnection() {
+    const attempt = connection.current;
+    if (!attempt) return;
+    connection.current = null;
+    attempt.abort();
+    setBusy(false);
+  }
+  function closePanel() {
+    cancelConnection();
+    onClose();
   }
   useEffect(() => {
     const consume = () => {
@@ -130,6 +149,8 @@ export function CompanionPanel({
   }, [sourceId]);
   useEffect(
     () => () => {
+      connection.current?.abort();
+      connection.current = null;
       const current = active.current;
       current?.abort.abort();
       if (current) void current.client.detach(current.id).catch(() => {});
@@ -243,7 +264,7 @@ export function CompanionPanel({
         </div>
       )}
       {open && (
-        <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal-backdrop" onClick={closePanel}>
           <section
             className="modal companion-modal"
             role="dialog"
@@ -262,7 +283,7 @@ export function CompanionPanel({
               <button
                 className="icon-button"
                 aria-label="Close local simulations"
-                onClick={onClose}
+                onClick={closePanel}
               >
                 <X size={20} />
               </button>
@@ -294,12 +315,14 @@ export function CompanionPanel({
                       onChange={(e) => setEndpoint(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
+                      disabled={busy}
                     />
                   </label>
                   <label>
                     Pairing token
                     <input
                       type="password"
+                      disabled={busy}
                       value={token}
                       onChange={(e) => setToken(e.target.value)}
                       autoComplete="off"
@@ -312,7 +335,22 @@ export function CompanionPanel({
                   >
                     <Link2 size={15} /> {busy ? "Connecting…" : "Connect"}
                   </button>
+                  {busy && (
+                    <button
+                      className="secondary-button"
+                      onClick={cancelConnection}
+                    >
+                      Cancel connection
+                    </button>
+                  )}
                 </div>
+                {busy && (
+                  <p role="status">
+                    Waiting for the companion or your browser’s access
+                    permission. Click Allow if prompted; this attempt can wait
+                    up to one minute.
+                  </p>
+                )}
                 <details>
                   <summary>Open through the desktop launcher</summary>
                   <p>Install once in your simulation environment:</p>

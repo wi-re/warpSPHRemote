@@ -38,6 +38,10 @@ simulation data or pairing headers. Browsers may require local-network access
 permission and have different HTTPS-to-loopback policies. The client supplies
 `targetAddressSpace: 'loopback'` where supported and handles CORS preflight;
 unsupported/denied browsers receive a connection error, not a security bypass.
+Initial pairing waits up to 60 seconds to leave time for a permission decision;
+the panel shows a waiting message and a **Cancel connection** button. Subsequent
+API requests retain their 10-second deadline. Closing the panel cancels pending
+pairing, and cancelled attempts cannot replace a later successful connection.
 A local `npm run dev` viewer is also supported. For a separate simulation machine,
 `ssh -L 8766:127.0.0.1:8766 simulation-host` forwards the protected endpoint to
 the browser device without adding an external daemon listener. Pair using the
@@ -212,11 +216,22 @@ these checks. Evidence is retained in
 
 The deployed HTTPS page's manager UI was verified, but its loopback pairing
 request timed out in the current in-app browser. The localhost-hosted viewer
-completed live launch/attach/grid/probe/reconnect checks. The hosted pairing
-path therefore still needs a normal-browser test with the daemon reachable
-on that browser device (or matching-port SSH forwarding) and local-network
-permission granted. The timeout was not treated as evidence of a specific
-browser-permission or routing cause. No browser security settings were changed.
+completed live launch/attach/grid/probe/reconnect checks. The user subsequently
+confirmed hosted-page pairing works in Chrome on Windows. Firefox 154.0.1 under
+WSL with X forwarding showed a native permission popup that ignored both Allow
+and Block; an unauthenticated curl from the same WSL environment returned the
+expected HTTP 401. That proves direct daemon reachability, but does not establish
+the browser request's behavior. Investigation of that WSL-specific popup was
+stopped at the user's request. No browser security settings were changed.
+
+Pairing UI follow-up: 87 TypeScript tests and the production build passed. An
+isolated companion fixture delayed the initial session response by 30 seconds;
+pairing still completed. A separate browser check paused only that fixture,
+cancelled the pending connection, then resumed it and successfully retried. Token
+rejection, request timeout and opaque browser network failures have distinct
+messages. Evidence is in
+`../warpSPHDevelopment/remote/pairing-permission-20261017/`. These changes improve
+connection feedback; they do not repair an unresponsive native permission popup.
 
 A separate-interpreter smoke check passed: the companion ran in its NumPy/Python
 environment and launched Gresho in the Warp environment without the companion

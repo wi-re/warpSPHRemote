@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CompanionClient,
+  companionConnectionMessage,
   LiveSource,
   companionEndpoint,
   takePairing,
@@ -183,4 +184,73 @@ test("the live source acknowledges each rendered revision once and ignores obsol
   await reader.displayed(2);
   assert.equal(acknowledged, 2);
   reader.close();
+});
+
+test("pairing permits a longer permission decision while ordinary requests retain their deadline and cancellation", async () => {
+  const fetchOriginal = globalThis.fetch,
+    timeoutOriginal = AbortSignal.timeout;
+  const deadlines: { ms: number; controller: AbortController }[] = [];
+  const requests: {
+    signal: AbortSignal;
+    resolve: (response: Response) => void;
+  }[] = [];
+  AbortSignal.timeout = (ms: number) => {
+    const controller = new AbortController();
+    deadlines.push({ ms, controller });
+    return controller.signal;
+  };
+  globalThis.fetch = async (_url, init) =>
+    new Promise<Response>((resolve, reject) => {
+      const signal = init!.signal as AbortSignal;
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      });
+      requests.push({ signal, resolve });
+    });
+  try {
+    const client = new CompanionClient("http://127.0.0.1:8766", "secret"),
+      pairing = client.session();
+    assert.equal(deadlines[0].ms, 60_000);
+    const ordinary = client.request("/v1/runs");
+    assert.equal(deadlines[1].ms, 10_000);
+    deadlines[1].controller.abort(new DOMException("Expired", "TimeoutError"));
+    await assert.rejects(ordinary, { name: "TimeoutError" });
+    assert.equal(requests[0].signal.aborted, false);
+    requests[0].resolve(
+      new Response(JSON.stringify({ version: 1, presets: [] })),
+    );
+    assert.equal((await pairing).version, 1);
+    const cancel = new AbortController(),
+      cancelled = client.session(cancel.signal);
+    cancel.abort();
+    await assert.rejects(cancelled, { name: "AbortError" });
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    AbortSignal.timeout = timeoutOriginal;
+  }
+});
+test("connection messages distinguish token rejection, permission wait timeout, and opaque browser network errors", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: "A valid token is required." }), {
+      status: 401,
+    });
+  try {
+    const client = new CompanionClient("http://127.0.0.1:8766", "old-token");
+    await assert.rejects(client.session(), (error) => {
+      assert.match(companionConnectionMessage(error), /current token/);
+      assert.doesNotMatch(companionConnectionMessage(error), /permission/);
+      return true;
+    });
+    assert.match(
+      companionConnectionMessage(new DOMException("Expired", "TimeoutError")),
+      /clicked Allow/,
+    );
+    assert.match(
+      companionConnectionMessage(new TypeError("Failed to fetch")),
+      /Web Console/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
 });

@@ -40,7 +40,14 @@ export interface Snapshot {
 }
 
 export function companionEndpoint(input: string): string {
-  const url = new URL(input);
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error(
+      "Enter a valid HTTP(S) address and port, such as http://127.0.0.1:8766.",
+    );
+  }
   if (
     !["http:", "https:"].includes(url.protocol) ||
     url.username ||
@@ -68,6 +75,33 @@ export function takePairing(
   replace(location.pathname + location.search);
   return value;
 }
+// Initial pairing may wait for a browser permission decision; ordinary API calls stay bounded.
+export const companionRequestTimeout = 10_000;
+export const companionPairingTimeout = 60_000;
+export class CompanionHTTPError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CompanionHTTPError";
+  }
+}
+export function companionConnectionMessage(error: unknown): string {
+  if (error instanceof CompanionHTTPError) {
+    if (error.status === 401)
+      return "The companion rejected the pairing token. Copy the current token from its terminal and try again.";
+    return error.message;
+  }
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError")
+      return "Connection timed out while waiting for the companion or browser permission. If you just clicked Allow, press Connect again. Check that the companion or SSH tunnel is running.";
+    if (error.name === "TypeError" || error.name === "NetworkError")
+      return "The browser could not reach the companion. Check the address and SSH tunnel, then the browser Web Console for blocked local-network, mixed-content or CORS requests.";
+    return error.message;
+  }
+  return "Could not connect to the companion.";
+}
 export class CompanionClient {
   readonly endpoint: string;
   readonly viewer = crypto.randomUUID();
@@ -78,12 +112,17 @@ export class CompanionClient {
   ) {
     this.endpoint = companionEndpoint(endpoint);
   }
-  async request(path: string, data?: object, signal?: AbortSignal) {
+  async request(
+    path: string,
+    data?: object,
+    signal?: AbortSignal,
+    timeoutMs = companionRequestTimeout,
+  ) {
     const init: RequestInit & { targetAddressSpace?: string } = {
       method: data ? "POST" : "GET",
       signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
-        : AbortSignal.timeout(10000),
+        ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
       cache: "no-store",
       headers: {
         Authorization: `Bearer ${this.token}`,
@@ -99,7 +138,8 @@ export class CompanionClient {
     };
     const response = await fetch(this.endpoint + path, init);
     if (!response.ok)
-      throw new Error(
+      throw new CompanionHTTPError(
+        response.status,
         (await response.json().catch(() => ({}))).error ||
           `Companion returned HTTP ${response.status}.`,
       );
@@ -109,7 +149,12 @@ export class CompanionClient {
     signal?: AbortSignal,
   ): Promise<{ version: number; presets: Preset[] }> {
     const value = await (
-      await this.request("/v1/session", undefined, signal)
+      await this.request(
+        "/v1/session",
+        undefined,
+        signal,
+        companionPairingTimeout,
+      )
     ).json();
     if (value.version !== 1)
       throw new Error("This companion uses an unsupported protocol version.");
