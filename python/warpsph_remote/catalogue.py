@@ -32,7 +32,7 @@ def validate_launch(data):
     )
     if type(nx) is not int or not 8 <= nx <= case.get("maxNx", 512):
         raise ValueError(
-            f"Resolution nx must be 8–{case.get("maxNx",512)} for this case."
+            f"Resolution nx must be 8–{case.get('maxNx',512)} for this case."
         )
     if (
         type(duration) not in (int, float)

@@ -319,7 +319,11 @@ class Manager:
             }
             # Fixed executable/module/arguments. No browser command, import, path or shell input.
             p = subprocess.Popen(
-                [self.python, "-m", "warpsph_remote.simulation_worker", str(spec_path)],
+                [
+                    self.python,
+                    str(Path(__file__).with_name("simulation_worker.py")),
+                    str(spec_path),
+                ],
                 env=env,
                 stdout=output,
                 stderr=subprocess.STDOUT,

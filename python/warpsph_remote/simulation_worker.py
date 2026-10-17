@@ -5,6 +5,23 @@ import json
 import os
 from pathlib import Path
 import sys
+
+# Load only this package when the simulator uses a different Python environment.
+# Adding the companion's entire site-packages would mix incompatible NumPy/Torch ABIs.
+if not __package__:
+    import importlib.util
+
+    package_dir = Path(__file__).resolve().parent
+    package_spec = importlib.util.spec_from_file_location(
+        "warpsph_remote",
+        package_dir / "__init__.py",
+        submodule_search_locations=[str(package_dir)],
+    )
+    package = importlib.util.module_from_spec(package_spec)
+    sys.modules["warpsph_remote"] = package
+    package_spec.loader.exec_module(package)
+    __package__ = "warpsph_remote"
+
 from .catalogue import CATALOGUE, validate_launch
 from .publisher import SimulationPublisher, SimulationStopped
 

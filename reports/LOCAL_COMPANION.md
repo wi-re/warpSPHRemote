@@ -15,7 +15,9 @@ warpsph-companion --python /path/to/warp/environment/bin/python
 
 `--python` selects the **trusted local** executable used to launch cases. Omit it
 when the current environment already runs warpSPH. The companion itself imports
-neither Torch nor Warp; the dedicated child worker bootstraps the simulator.
+neither Torch nor Warp; the dedicated child worker bootstraps the simulator. Its fixed local entry script
+loads only the companion package when using a different interpreter, without
+adding another environment’s site-packages to the simulator’s import path.
 Source installations must retain their usual warpSPH/Core/Boundaries import
 paths and build environment. CPU can be selected with `WARPSPH_REMOTE_DEVICE=cpu`;
 the default worker device is CUDA.
@@ -200,7 +202,7 @@ python examples/check_companion_presets.py --runtime /path/to/private/runtime \
   --output /path/to/warpSPHDevelopment/remote/new-companion-smoke
 ```
 
-2026-10-17 verification: 39 Python tests and 85 TypeScript tests passed; the
+2026-10-17 verification: 40 Python tests and 85 TypeScript tests passed; the
 production build passed. Browser checks covered pairing/fragment removal, preset
 launch, 16,384-particle CRKSPH Gresho through t≈3, live scalar-grid reconstruction,
 pressure-history growth, explicit detach, reconnect with the chosen grid retained,

@@ -332,9 +332,10 @@ def test_managed_launcher_uses_fixed_worker_and_stops_only_owned_process(
     )
     run = m.launch({"preset": "gresho", "nx": 32})
     command, options = commands[0]
-    assert command[:3] == [m.python, "-m", "warpsph_remote.simulation_worker"]
+    assert command[0] == m.python
+    assert Path(command[1]).name == "simulation_worker.py"
     assert options.get("shell", False) is False and options["start_new_session"] is True
-    assert json.loads(Path(command[3]).read_text())["nx"] == 32
+    assert json.loads(Path(command[2]).read_text())["nx"] == 32
     with pytest.raises(Conflict):
         m.launch({"preset": "tgv"})
     m.stop(run["id"])
@@ -370,3 +371,20 @@ def test_failed_bind_releases_singleton_lock(api):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     finally:
         os.close(fd)
+
+
+def test_worker_entry_bootstraps_only_its_package_in_an_isolated_python(tmp_path):
+    import subprocess, sys
+    import warpsph_remote.simulation_worker as worker
+
+    spec = tmp_path / "invalid.json"
+    spec.write_text('{"preset":"unknown"}')
+    result = subprocess.run(
+        [sys.executable, "-I", worker.__file__, str(spec)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "Unknown simulation preset." in result.stderr
+    assert "attempted relative import" not in result.stderr
