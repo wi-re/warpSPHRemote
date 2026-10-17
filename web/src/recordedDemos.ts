@@ -11,6 +11,7 @@ export interface RecordedDemo {
   particles: number;
   frames: number;
   duration: number;
+  group?:"snapshots";
 }
 export const recordedDemos = catalogue as RecordedDemo[];
 export const demoSize = (bytes: number) =>
@@ -62,7 +63,7 @@ export async function loadDemoFile(
   return file;
 }
 
-/** Download explicitly selected product data; never fetch trajectories at startup.
+/** Download explicitly selected product data, including a recognized demo URL parameter.
  * Use the deployed base path, including GitHub Pages repository subdirectories.
  */
 export async function downloadDemo(

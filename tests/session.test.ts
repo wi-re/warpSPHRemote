@@ -154,3 +154,30 @@ test("LIC preferences and the material diagnostics tab persist with validated li
     contrast: 1.8,
   });
 });
+
+test("metric cards and scalar-analysis settings persist with the recording", () => {
+  const view = sanitizeView(
+    {
+      key: "analysis",
+      metrics: ["totalMass", "totalMomentum", "thermalEnergy", "totalMass"],
+      analysis: {
+        bins: 128,
+        kind: "fft1",
+        window: "none",
+        mask: "strict",
+        axis: "y",
+        slice: 0.75,
+      },
+    },
+    "analysis",
+  )!;
+  assert.deepEqual(view.metrics, ["totalMass", "totalMomentum"]);
+  assert.deepEqual(view.analysis, {
+    bins: 128,
+    kind: "fft1",
+    window: "none",
+    mask: "strict",
+    axis: "y",
+    slice: 0.75,
+  });
+});

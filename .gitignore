@@ -20,3 +20,8 @@ output/
 *.mp4
 *.gif
 *.webp
+
+!web/public/demos/tgv-wcsph-512.h5
+!web/public/demos/random-wcsph-256-snapshots.h5
+!web/public/demos/wake-disk-384.h5
+!web/public/demos/wake-square-384.h5

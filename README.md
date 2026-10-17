@@ -224,3 +224,10 @@ Material analysis: pick a particle → **Track neighbourhood**, then use the bot
 map**. LIC is available in the right field controls with CPU/WebGPU backends.
 See [material-motion contracts and limitations](reports/MATERIAL_MOTION.md) and
 [LIC verification/performance](reports/LIC.md).
+
+Expandable mapping/grid/flow controls, configurable fluid metrics, view URLs and
+mapped-quantity histograms/spatial FFTs are described in
+[view presets and analysis](reports/VIEW_PRESETS_AND_ANALYSIS.md). The example picker
+also offers [high-resolution solver snapshots](reports/SNAPSHOT_GALLERY.md) with
+direct HDF5 downloads. A reproducible KHH starting view is
+[the density preset at t≈2.6](https://fluids.dev/warpSPHRemote/?demo=demo-khh-crksph-256&preset=khh).

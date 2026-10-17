@@ -12,9 +12,20 @@ export async function runChecks(report: (row: string) => void, api: typeof H5) {
   const median = (a: number[]) =>
     a.sort((x, y) => x - y)[Math.floor(a.length / 2)];
   try {
-    for (const filename of process.argv.includes("--khh")
+    const named = process.argv.indexOf("--case"),
+      selection = named >= 0 ? process.argv[named + 1] : undefined;
+    const files = process.argv.includes("--khh")
       ? ["khh-crksph-256.h5"]
-      : catalogue.map((d) => d.file)) {
+      : catalogue
+          .filter(
+            (d) =>
+              (!process.argv.includes("--snapshots") ||
+                ("group" in d && d.group === "snapshots")) &&
+              (!selection || d.file === selection || d.id === selection),
+          )
+          .map((d) => d.file);
+    if (!files.length) throw new Error("No matching recording was selected.");
+    for (const filename of files) {
       const source = new HDF5Source(
         filename,
         filename,

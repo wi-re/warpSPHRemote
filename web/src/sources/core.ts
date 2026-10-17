@@ -168,10 +168,37 @@ export function reduceDiagnostic(
     internalValid = !!internal && !!m,
     energyValid = !!v && !!m,
     speedValid = !!v,
+    massSum = 0,
+    volumeSum = 0,
+    pressureSum = 0,
+    minDensity = Infinity,
+    maxDensity = -Infinity,
+    momentum = [0, 0, 0],
+    massValid = !!m,
+    volumeValid = !!m && !!rho,
+    pressureValid = !!f.pressures,
     densityValid = !!rho;
   for (let i = 0; i < n; i++) {
     if (Number(k[i]) !== 0) continue;
     particles++;
+    if (m) {
+      const mass = Number(m.data[i]);
+      massValid &&= Number.isFinite(mass) && mass >= 0;
+      massSum += mass;
+      if (v)
+        for (let c = 0; c < Math.min(3, v.shape[1] ?? 1); c++)
+          momentum[c] += mass * Number(v.data[i * (v.shape[1] ?? 1) + c]);
+    }
+    if (m && rho) {
+      const density = Number(rho.data[i]);
+      volumeValid &&= density > 0 && Number.isFinite(density);
+      volumeSum += Number(m.data[i]) / density;
+    }
+    if (f.pressures) {
+      const pressure = Number(f.pressures.data[i]);
+      pressureValid &&= Number.isFinite(pressure);
+      pressureSum += pressure;
+    }
     if (internal && m) {
       const u = Number(internal.data[i]),
         mass = Number(m.data[i]);
@@ -182,6 +209,8 @@ export function reduceDiagnostic(
     if (rho) {
       const r = Number(rho.data[i]);
       sumDensity += r;
+      minDensity = Math.min(minDensity, r);
+      maxDensity = Math.max(maxDensity, r);
       densityValid &&= Number.isFinite(r);
     }
     if (v) {
@@ -208,6 +237,37 @@ export function reduceDiagnostic(
     totalEnergy:
       particles && internalValid && energyValid && Number.isFinite(ie + ke)
         ? ie + ke
+        : null,
+    totalMass:
+      particles && massValid && Number.isFinite(massSum) ? massSum : null,
+    totalVolume:
+      particles && massValid && volumeValid && Number.isFinite(volumeSum)
+        ? volumeSum
+        : null,
+    totalMomentum:
+      particles &&
+      massValid &&
+      speedValid &&
+      Number.isFinite(Math.hypot(...momentum))
+        ? Math.hypot(...momentum)
+        : null,
+    momentumX:
+      particles && massValid && speedValid && Number.isFinite(momentum[0])
+        ? momentum[0]
+        : null,
+    momentumY:
+      particles && massValid && speedValid && Number.isFinite(momentum[1])
+        ? momentum[1]
+        : null,
+    momentumZ:
+      particles && massValid && speedValid && (v?.shape[1] ?? 1) >= 3
+        ? momentum[2]
+        : null,
+    minDensity: particles && densityValid ? minDensity : null,
+    maxDensity: particles && densityValid ? maxDensity : null,
+    meanPressure:
+      particles && pressureValid && Number.isFinite(pressureSum)
+        ? pressureSum / particles
         : null,
     maxSpeed: particles && speedValid ? maxSpeed : null,
     meanDensity: particles && densityValid ? sumDensity / particles : null,

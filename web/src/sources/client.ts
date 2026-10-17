@@ -1,3 +1,10 @@
+import {
+  histogram,
+  scalarSamples,
+  spatialSpectrum,
+  type AnalysisQuery,
+  type AnalysisResult,
+} from "./analysis";
 import { MaterialFTLE, type FTLEQuery, type FTLEBatch } from "./ftle";
 import {
   seedMaterial,
@@ -14,6 +21,7 @@ import {
   type PressureProbe,
   type ProbeSample,
 } from "./probes";
+import { reduceDiagnostic } from "./core";
 import { decodeFrame, request } from "../data";
 import type { Diagnostic, Frame, Source } from "../types";
 export interface TrajectorySource {
@@ -56,6 +64,7 @@ export interface TrajectorySource {
     signal?: AbortSignal,
   ): Promise<FTLEBatch>;
   grid(query: FieldQuery, signal?: AbortSignal): Promise<FieldResult>;
+  analyze(query: AnalysisQuery, signal?: AbortSignal): Promise<AnalysisResult>;
   close(): void;
 }
 interface Job {
@@ -210,6 +219,9 @@ export class BrowserSource implements TrajectorySource {
   ftle(query: FTLEQuery, offset: number, count: number, signal?: AbortSignal) {
     return this.call<FTLEBatch>("ftle", { query, offset, count }, 3, signal);
   }
+  analyze(query: AnalysisQuery, signal?: AbortSignal) {
+    return this.call<AnalysisResult>("analysis", query, 2, signal);
+  }
   grid(query: FieldQuery, signal?: AbortSignal) {
     return this.call<FieldResult>("grid", query, 1, signal);
   }
@@ -229,11 +241,25 @@ export class ServiceSource implements TrajectorySource {
     if (!r.ok) throw new Error((await r.json()).error);
     return decodeFrame(await r.arrayBuffer());
   }
-  diagnostics(start: number, count: number, signal?: AbortSignal) {
-    return request<Diagnostic[]>(
+  async diagnostics(start: number, count: number, signal?: AbortSignal) {
+    const rows = await request<Diagnostic[]>(
       `/api/sources/${this.metadata.id}/diagnostics?start=${start}&count=${count}`,
       { signal },
     );
+    const result: Diagnostic[] = [];
+    for (const row of rows) {
+      signal?.throwIfAborted();
+      const frame = await this.frame(row.index, "velocities", signal);
+      if (this.metadata.fields.some((f) => f.name === "pressures"))
+        frame.arrays.pressures = (
+          await this.frame(row.index, "pressures", signal)
+        ).arrays.pressures;
+      result.push({
+        ...reduceDiagnostic(frame.arrays, row.index, row.time),
+        ...row,
+      });
+    }
+    return result;
   }
   async probes(
     start: number,
@@ -373,6 +399,33 @@ export class ServiceSource implements TrajectorySource {
             query.seed ? [query.seed] : undefined,
           )
         : new Float32Array(),
+    };
+  }
+  async analyze(
+    query: AnalysisQuery,
+    signal?: AbortSignal,
+  ): Promise<AnalysisResult> {
+    const frame = await this.frame(query.index, query.field, signal),
+      grid = query.grid
+        ? (await this.grid(query.grid, signal)).grid
+        : undefined;
+    const result =
+      query.kind === "histogram"
+        ? histogram(
+            grid?.values ??
+              scalarSamples(frame.arrays, query.field, query.mapping),
+            query.bins,
+          )
+        : spatialSpectrum(grid!, query);
+    return {
+      ...result,
+      index: query.index,
+      time: frame.time,
+      field:
+        query.grid?.settings.quantity &&
+        query.grid.settings.quantity !== "field"
+          ? query.grid.settings.quantity
+          : query.field,
     };
   }
   close() {

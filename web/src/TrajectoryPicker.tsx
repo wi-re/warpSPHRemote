@@ -110,7 +110,16 @@ export function TrajectoryPicker({
         </span>
         {active === d.id && <Check size={16} />}
       </button>
-      <p className="picker-description">{d.description}</p>
+      <p className="picker-description">
+        {d.description}{" "}
+        <a
+          className="demo-file-link"
+          href={`${import.meta.env.BASE_URL}demos/${encodeURIComponent(d.file)}`}
+          download={d.file}
+        >
+          Download HDF5
+        </a>
+      </p>
       {download?.id === d.id && (
         <div className="demo-download" role="status">
           {download.stage === "downloading" && (
@@ -218,9 +227,22 @@ export function TrajectoryPicker({
                 Recorded solver runs. Downloads are cached independently of your
                 last local file.
               </p>
+              <div className="section-heading">TRAJECTORIES</div>
               <div className="picker-cards">
-                {recordedDemos.map(exampleCard)}
+                {recordedDemos.filter((d) => !d.group).map(exampleCard)}
               </div>
+              {recordedDemos.some((d) => d.group === "snapshots") && (
+                <>
+                  <div className="section-heading snapshot-heading">
+                    HIGH-RESOLUTION SNAPSHOTS
+                  </div>
+                  <div className="picker-cards">
+                    {recordedDemos
+                      .filter((d) => d.group === "snapshots")
+                      .map(exampleCard)}
+                  </div>
+                </>
+              )}
             </>
           )}
           {tab === "demos" && (

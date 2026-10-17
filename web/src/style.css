@@ -2512,3 +2512,257 @@ kbd {
   z-index: 2;
   border-bottom: 1px solid var(--border);
 }
+.control-disclosure {
+  display: block;
+}
+.control-disclosure > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 12px;
+  min-height: 30px;
+}
+.control-disclosure > summary::after {
+  content: "⌄";
+  color: var(--muted);
+}
+.control-disclosure[open] > summary {
+  margin-bottom: 14px;
+}
+.control-disclosure[open] > summary::after {
+  transform: rotate(180deg);
+}
+.control-disclosure summary small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.control-disclosure summary label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.mapping-preview {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.color-disclosure summary > span:nth-child(2) {
+  flex: 1;
+}
+.color-disclosure summary small {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.control-section select,
+.analysis-tools select {
+  max-width: 100%;
+  width: 100%;
+  padding: 8px;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.metric-panel .section-heading {
+  justify-content: space-between;
+}
+.metric-adder {
+  position: relative;
+}
+.metric-adder summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 19px;
+  padding: 0 6px;
+}
+.metric-adder > div {
+  position: absolute;
+  z-index: 150;
+  right: 0;
+  top: 28px;
+  width: 210px;
+  max-height: 300px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 6px 20px #0005;
+}
+.metric-adder button {
+  display: block;
+  padding: 8px;
+  width: 100%;
+  text-align: left;
+}
+.metric-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.metric-card {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 7px;
+  padding: 10px 8px;
+  min-width: 0;
+}
+.metric-value {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  text-align: left;
+  width: 100%;
+  gap: 7px;
+}
+.metric-value > span {
+  font-size: 10px;
+  color: var(--muted);
+  padding-right: 14px;
+}
+.metric-value strong {
+  font-size: 18px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.metric-value small {
+  font-size: 9px;
+  color: var(--muted);
+}
+.remove-metric {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  font-size: 14px;
+  color: var(--muted);
+  padding: 2px 4px;
+}
+.quantity-analysis {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.quantity-analysis > .chart-canvas {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+}
+.analysis-tools {
+  width: 190px;
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  font-size: 10px;
+}
+.analysis-tools label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+.analysis-tools p {
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 8px 0;
+}
+.analysis-tools select {
+  padding: 5px;
+  margin-top: 4px;
+  font-size: 10px;
+}
+.spectrum-image {
+  width: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+.spectrum-image canvas {
+  width: 145px;
+  height: 145px;
+  image-rendering: pixelated;
+}
+.spectrum-image small {
+  font-size: 9px;
+  color: var(--muted);
+  text-align: center;
+}
+@media (max-width: 900px) {
+  .main-panel .viewport {
+    min-height: 440px;
+  }
+  .main-panel .diagnostics {
+    margin-top: 32px;
+    height: 320px;
+    min-height: 320px;
+  }
+  .main-panel .diagnostics.collapsed {
+    height: 44px;
+    min-height: 44px;
+  }
+  .quantity-analysis {
+    min-height: 240px;
+  }
+  .analysis-tools {
+    width: 145px;
+  }
+  .spectrum-image {
+    width: 120px;
+  }
+  .spectrum-image canvas {
+    width: 110px;
+    height: 110px;
+  }
+}
+@media (max-width: 560px) {
+  .quantity-analysis {
+    flex-wrap: wrap;
+  }
+  .analysis-tools {
+    width: 100%;
+    max-height: 140px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .quantity-analysis > .chart-canvas {
+    height: 200px;
+    min-width: 160px;
+  }
+  .main-panel .diagnostics:not(.collapsed) {
+    height: 480px;
+    min-height: 480px;
+  }
+  .main-panel .viewport {
+    min-height: 420px;
+  }
+}
+.metric-adder > div {
+  font-size: 11px;
+  letter-spacing: normal;
+  text-transform: none;
+  font-weight: 400;
+}
+.diagnostic-tabs {
+  flex-wrap: nowrap;
+}
+.snapshot-heading {
+  margin: 20px 0 12px;
+}
+.demo-file-link {
+  color: var(--mint);
+  white-space: nowrap;
+  text-decoration: underline;
+  margin-left: 5px;
+}

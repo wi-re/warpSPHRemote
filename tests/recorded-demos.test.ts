@@ -84,8 +84,11 @@ test("failed, incomplete, corrupt and cancelled demo downloads cannot open as re
   );
 });
 test("shipped demo catalogue matches the committed HDF5 files and checksums", () => {
-  assert.equal(recordedDemos.length, 3);
-  assert.equal(new Set(recordedDemos.map((d) => d.id)).size, 3);
+  assert.ok(recordedDemos.length >= 6);
+  assert.equal(
+    new Set(recordedDemos.map((d) => d.id)).size,
+    recordedDemos.length,
+  );
   for (const demo of recordedDemos) {
     assert.ok(demo.id.startsWith("demo-"));
     assert.match(demo.file, /^[a-z0-9-]+\.h5$/);
@@ -96,7 +99,9 @@ test("shipped demo catalogue matches the committed HDF5 files and checksums", ()
     assert.equal(createHash("sha256").update(data).digest("hex"), demo.sha256);
     assert.deepEqual(data.subarray(0, 8), Buffer.from(bytes));
     assert.ok(
-      demo.frames >= 40 && demo.particles >= 10000 && demo.duration >= 3.9,
+      demo.group === "snapshots"
+        ? demo.frames >= 1 && demo.frames <= 5 && demo.particles >= 60000
+        : demo.frames >= 40 && demo.particles >= 10000 && demo.duration >= 3.9,
     );
   }
 });
@@ -137,5 +142,51 @@ test("the shipped KHH example opens with periodic domain, exact identities and r
     }
   } finally {
     source.close();
+  }
+});
+
+test("high-resolution solver snapshots open with valid physical arrays and stable identities", async () => {
+  const h5 = await import("h5wasm/node");
+  const { HDF5Source } = await import("../web/src/sources/hdf5");
+  await h5.ready;
+  for (const demo of recordedDemos.filter((d) => d.group === "snapshots")) {
+    const source = new HDF5Source(
+      demo.id,
+      demo.name,
+      new h5.File(
+        new URL(`../web/public/demos/${demo.file}`, import.meta.url).pathname,
+        "r",
+      ),
+      h5,
+    );
+    try {
+      const metadata = await source.metadata();
+      assert.equal(metadata.frames, demo.frames);
+      assert.equal(metadata.dimension, 2);
+      assert.equal(metadata.identity, "UIDs");
+      assert.ok(metadata.domain);
+      let first: string[] | undefined;
+      for (const index of [0, demo.frames - 1]) {
+        const raw = await source.read(index, "velocities");
+        assert.equal(raw.positions.shape[0], demo.particles);
+        assert.equal(raw.velocities.shape[1], 2);
+        assert.ok(
+          Array.from(raw.velocities.data, Number).every(Number.isFinite),
+        );
+        for (const key of ["masses", "densities", "supports"]) {
+          assert.ok(
+            Array.from(raw[key].data, Number).every(
+              (v) => Number.isFinite(v) && v > 0,
+            ),
+          );
+        }
+        const ids = Array.from(raw.UIDs.data, String);
+        assert.equal(new Set(ids).size, demo.particles);
+        if (first) assert.deepEqual(ids, first);
+        else first = ids;
+      }
+    } finally {
+      source.close();
+    }
   }
 });

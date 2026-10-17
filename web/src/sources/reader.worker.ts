@@ -1,3 +1,4 @@
+import { histogram, scalarSamples, spatialSpectrum } from "./analysis";
 /// <reference lib="webworker" />
 import { MaterialFTLE } from "./ftle";
 import { seedMaterial, materialPositions } from "./material";
@@ -104,28 +105,42 @@ self.onmessage = async (event: MessageEvent) => {
       ) {
         const recorded =
           source instanceof HDF5Source ? source.recordedDiagnostic(i) : null;
-        if (recorded && (!hasSpecificEnergy || recorded.internalEnergy != null))
-          rows.push(recorded);
-        else {
-          let raw = await read(i, "velocities");
-          if (hasSpecificEnergy)
-            raw = {
-              ...raw,
-              internalEnergies: (await read(i, "internalEnergies"))
-                .internalEnergies,
-            };
-          const row = reduceDiagnostic(raw, i, source.times[i]);
-          const energy =
-            source instanceof HDF5Source
-              ? source.recordedInternalEnergy(i)
-              : null;
-          if (row.internalEnergy == null && energy != null) {
+        let raw = await read(i, "velocities");
+        const pressures = (await read(i, "pressures")).pressures;
+        if (pressures) raw = { ...raw, pressures };
+        if (hasSpecificEnergy)
+          raw = {
+            ...raw,
+            internalEnergies: (await read(i, "internalEnergies"))
+              .internalEnergies,
+          };
+        const row = reduceDiagnostic(raw, i, source.times[i]);
+        if (recorded) {
+          for (const key of [
+            "kineticEnergy",
+            "internalEnergy",
+            "totalEnergy",
+            "maxSpeed",
+            "meanDensity",
+            "particles",
+          ] as const)
+            if (recorded[key] != null) (row as any)[key] = recorded[key];
+          if (
+            recorded.totalEnergy == null &&
+            row.kineticEnergy != null &&
+            row.internalEnergy != null
+          )
+            row.totalEnergy = row.kineticEnergy + row.internalEnergy;
+        }
+        if (row.internalEnergy == null && source instanceof HDF5Source) {
+          const energy = source.recordedInternalEnergy(i);
+          if (energy != null) {
             row.internalEnergy = energy;
             row.totalEnergy =
               row.kineticEnergy != null ? row.kineticEnergy + energy : null;
           }
-          rows.push(row);
         }
+        rows.push(row);
       }
       result = rows;
     } else if (operation === "probes") {
@@ -217,6 +232,55 @@ self.onmessage = async (event: MessageEvent) => {
         batch.condition.buffer,
         batch.counts.buffer,
       ];
+    } else if (operation === "analysis") {
+      source.checkIndex(args.index);
+      let grid: GridData | undefined;
+      if (args.grid) {
+        const q = args.grid,
+          key = JSON.stringify([q.index, q.field, q.mapping, q.settings]);
+        grid = gridCache?.key === key ? gridCache.grid : undefined;
+        if (!grid) {
+          let raw = await read(q.index, q.field);
+          if (!raw.velocities && hasVelocity)
+            raw = {
+              ...raw,
+              velocities: (await read(q.index, "velocities")).velocities,
+            };
+          grid = await gridBackend.reconstruct(
+            raw,
+            source,
+            q.field,
+            q.mapping,
+            q.settings,
+            q.index,
+            source.times[q.index],
+          );
+          gridCache = { key, grid };
+        }
+      }
+      const value =
+        args.kind === "histogram"
+          ? histogram(
+              grid?.values ??
+                scalarSamples(
+                  await read(args.index, args.field),
+                  args.field,
+                  args.mapping,
+                ),
+              args.bins,
+            )
+          : spatialSpectrum(grid!, args);
+      result = {
+        ...value,
+        index: args.index,
+        time: source.times[args.index],
+        field:
+          args.grid?.settings.quantity &&
+          args.grid.settings.quantity !== "field"
+            ? args.grid.settings.quantity
+            : args.field,
+      };
+      if (value.kind === "fft2" && value.image) transfer = [value.image.buffer];
     } else if (operation === "grid") {
       const key = JSON.stringify([
         args.index,

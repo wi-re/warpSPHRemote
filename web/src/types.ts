@@ -34,13 +34,31 @@ export interface Diagnostic {
   totalEnergy?: number | null;
   maxSpeed: number | null;
   meanDensity: number | null;
+  totalMass?: number | null;
+  totalVolume?: number | null;
+  totalMomentum?: number | null;
+  momentumX?: number | null;
+  momentumY?: number | null;
+  momentumZ?: number | null;
+  meanPressure?: number | null;
+  minDensity?: number | null;
+  maxDensity?: number | null;
 }
 export type DiagnosticMetric =
   | "kineticEnergy"
   | "internalEnergy"
   | "totalEnergy"
   | "maxSpeed"
-  | "meanDensity";
+  | "meanDensity"
+  | "totalMass"
+  | "totalVolume"
+  | "totalMomentum"
+  | "momentumX"
+  | "momentumY"
+  | "momentumZ"
+  | "meanPressure"
+  | "minDensity"
+  | "maxDensity";
 export type Mapping = "magnitude" | "x" | "y" | "z";
 export interface ViewOptions {
   wrapPeriodic: boolean;

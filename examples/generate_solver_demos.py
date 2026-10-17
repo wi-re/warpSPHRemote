@@ -13,7 +13,8 @@ from pathlib import Path
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--case', choices=['khh', 'sloshing', 'random'], required=True)
+    p.add_argument('--case', choices=['khh', 'sloshing', 'random', 'tgv', 'wake'], required=True)
+    p.add_argument('--shape', choices=['disk','square'], default='disk')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--duration', type=float)
     p.add_argument('--nx', type=int, help='particles per axis (case default otherwise)')
@@ -35,6 +36,12 @@ def main():
     elif args.case == 'sloshing':
         from warpSPH.cases.freeSurface.sloshingTank import sloshingTankCase as case
         nx, duration = 200, 7.0
+    elif args.case == 'tgv':
+        from warpSPH.cases.periodic.tgvWeaklyCompressible import tgvWeaklyCompressibleCase as case
+        nx, duration = 512, 1.0
+    elif args.case == 'wake':
+        from warpSPH.cases.boundaries.cylinderWake import cylinderWakeCase as case
+        nx, duration = 384, 12.0
     else:
         from warpSPH.cases.periodic.randomFlow import randomFlowCase as case
         nx, duration = 128, 6.0
@@ -125,6 +132,10 @@ def main():
 
     params = dict(seed=args.seed, bounded=False, obstacle=False,
                   inviscid=False, nu=args.viscosity) if args.case == 'random' else {}
+    if args.case == 'tgv':
+        params=dict(nu=args.viscosity,inviscid=False,initialPressure=True,machTarget=.1,referenceVelocity=1.0)
+    elif args.case == 'wake':
+        params=dict(shape=args.shape,Re=100.0,Ly=6.0,xb=4.0,band=.75,soundSpeed=10.0,fluidViscosity='alpha',targetDt=.001)
     if args.case == 'random':
         output.attrs.update(seed=args.seed, kinematicViscosity=args.viscosity,
                             initialVelocity='tileable divergence-free Perlin potential; max speed 1',
@@ -132,6 +143,7 @@ def main():
     try:
         recorded_case = replace(case, postStep=post_step)
         result = run(recorded_case, nx=nx, tLimit=duration,
+                     **(dict(L=12.0,cudaGraph=True) if args.case=='wake' else {}),
                      plot=False, store=False, show=False, holdPlot=False, progress=False,
                      device='cuda', params=params, stallDtSteps=500, stallProgress=1e-5)
         capture(result.ctx, result.state, force=True)

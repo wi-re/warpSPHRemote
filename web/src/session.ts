@@ -1,3 +1,5 @@
+import { sanitizeAnalysis, type AnalysisPreferences } from "./sources/analysis";
+import { sanitizeMetrics } from "./metrics";
 import {
   initialOptions,
   type ViewOptions,
@@ -152,7 +154,10 @@ export interface SavedView {
   options?: ViewOptions;
   fieldView?: FieldPreferences;
   playback?: { speed: number; loop: boolean };
-  metric?: DiagnosticMetric | "pressure" | "material";
+  metric?:
+    DiagnosticMetric | "pressure" | "material" | "histogram" | "spectrum";
+  metrics?: DiagnosticMetric[];
+  analysis?: AnalysisPreferences;
 }
 const object = (v: unknown): v is Record<string, any> =>
   !!v && typeof v === "object" && !Array.isArray(v);
@@ -271,6 +276,9 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       speed: oneOf(value.playback.speed, [0.25, 0.5, 1, 2, 4], 1),
       loop: value.playback.loop !== false,
     };
+  if (object(value.analysis)) view.analysis = sanitizeAnalysis(value.analysis);
+  const chosenMetrics = sanitizeMetrics(value.metrics);
+  if (chosenMetrics) view.metrics = chosenMetrics;
   view.metric = oneOf(
     value.metric,
     [
@@ -281,6 +289,17 @@ export function sanitizeView(value: unknown, key: string): SavedView | null {
       "meanDensity",
       "pressure",
       "material",
+      "histogram",
+      "spectrum",
+      "totalMass",
+      "totalVolume",
+      "totalMomentum",
+      "momentumX",
+      "momentumY",
+      "momentumZ",
+      "meanPressure",
+      "minDensity",
+      "maxDensity",
     ] as const,
     "kineticEnergy",
   );

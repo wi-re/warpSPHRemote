@@ -253,3 +253,13 @@ Validation/engineering gates:
 References: [WebGPU specification](https://www.w3.org/TR/webgpu/),
 [WGSL specification](https://www.w3.org/TR/WGSL/),
 [GPU buffer/readback model](https://developer.mozilla.org/en-US/docs/Web/API/GPUBuffer).
+
+## Compact-control and scalar-analysis iteration
+
+Delivered: left appearance controls, expandable mapping/grid/flow menus, combined
+color presets, equal energy cards and configurable metrics, saved/URL view state,
+mobile scene spacing, mapped-field histograms and spatial 1D/2D FFT analysis with
+explicit window/mask policy. High-resolution TGV, decaying-flow and obstacle-wake
+snapshot datasets accompany these tools. See [UI/analysis](VIEW_PRESETS_AND_ANALYSIS.md)
+and [data provenance](SNAPSHOT_GALLERY.md). Shared WebGPU rendering and genuine
+LCS methods remain separate milestones.

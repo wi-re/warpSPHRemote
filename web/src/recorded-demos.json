@@ -31,5 +31,53 @@
     "particles": 65536,
     "frames": 41,
     "duration": 3.9991815090179443
+  },
+  {
+    "id": "demo-tgv-wcsph-512",
+    "name": "Taylor–Green · 512² snapshots",
+    "description": "262,144-particle WCSPH Taylor–Green vortex; three solver states through t≈1. Initial analytic pressure, viscosity 0.005, target Mach 0.1.",
+    "file": "tgv-wcsph-512.h5",
+    "bytes": 16661004,
+    "sha256": "a74f8df665b992f5f15cc9e9d48251ba7ae85621cc6a3ea1d199ac5b09caeca6",
+    "particles": 262144,
+    "frames": 3,
+    "duration": 1.000404311128655,
+    "group": "snapshots"
+  },
+  {
+    "id": "demo-random-wcsph-256-snapshots",
+    "name": "Decaying flow · 256² snapshots",
+    "description": "65,536-particle periodic WCSPH random flow, viscosity 0.005. Three states through t≈2.",
+    "file": "random-wcsph-256-snapshots.h5",
+    "bytes": 3977047,
+    "sha256": "262a5c99e79bf95e9193a80e31430ac8eb7e2ef73a8f4c4459ab4ca8537ffb44",
+    "particles": 65536,
+    "frames": 3,
+    "duration": 2.0000000000002514,
+    "group": "snapshots"
+  },
+  {
+    "id": "demo-wake-disk-384",
+    "name": "Disk wake · high-resolution snapshots",
+    "description": "Developing flow past an analytic disk at Re=100 in a periodic 12×6 box with pinned inflow. 72,916 WCSPH particles; four states through t≈12.",
+    "file": "wake-disk-384.h5",
+    "bytes": 4052669,
+    "sha256": "62e61628c7433344a0d9cfd7bb9e9b18bd8f49de4a863ef79695aef445ea780d",
+    "particles": 72916,
+    "frames": 4,
+    "duration": 12.001219749450684,
+    "group": "snapshots"
+  },
+  {
+    "id": "demo-wake-square-384",
+    "name": "Square wake · high-resolution snapshots",
+    "description": "Developing flow past an analytic square at nominal Re=100 in a periodic 12×6 box with pinned inflow. 72,704 WCSPH particles; four states through t≈12.",
+    "file": "wake-square-384.h5",
+    "bytes": 4084659,
+    "sha256": "c68d02c66c593c472d6666c11857ca5e7ab6ad3819e11ff85950bf5b520a6282",
+    "particles": 72704,
+    "frames": 4,
+    "duration": 12.001219749450684,
+    "group": "snapshots"
   }
 ]

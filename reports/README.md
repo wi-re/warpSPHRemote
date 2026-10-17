@@ -2,7 +2,7 @@
 
 Written findings, known limitations, and regeneration instructions belong here.
 Generated screenshots, profiles, measurements, logs, and built bundles do not
-belong in Git. The user explicitly requested three curated shipped trajectory assets
+belong in Git. The user explicitly requested curated shipped trajectory and snapshot assets
 in `web/public/demos/`; those catalogue entries are the product-data exception.
 Their source runs and intermediate recordings still remain outside Git. See
 [provenance and regeneration](RECORDED_DEMOS.md). Use `../warpSPHDevelopment/remote/<distinct-run>/`, or
@@ -83,3 +83,6 @@ to the visualizer; recordings intentionally keep unwrapped positions.
 Real WebGPU checks and recording benchmarks use `npm run test:gpu` and
 `npm run bench:gpu`; see [WebGPU validation](WEBGPU.md) for device requirements,
 current limits and timing definitions. Write their logs outside Git as well.
+
+See [compact controls and scalar analysis](VIEW_PRESETS_AND_ANALYSIS.md) and
+[high-resolution snapshot provenance](SNAPSHOT_GALLERY.md) for the next iteration.

@@ -1,3 +1,13 @@
+import { defaultAnalysis, type AnalysisPreferences } from "./sources/analysis";
+import { QuantityAnalysis } from "./QuantityAnalysis";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
+import { metricDefinitions, defaultMetrics } from "./metrics";
+import {
+  colorPresets,
+  sourcePreset,
+  parseViewLink,
+  buildViewURL,
+} from "./viewPresets";
 import { FTLEMap } from "./FTLEMap";
 import {
   useMaterialMotion,
@@ -227,9 +237,16 @@ export default function App() {
   };
   const [rows, setRows] = useState<Diagnostic[]>([]),
     [diagnosticError, setDiagnosticError] = useState(""),
-    [metric, setMetric] = useState<DiagnosticMetric | "pressure" | "material">(
-      "kineticEnergy",
-    );
+    [metric, setMetric] = useState<
+      DiagnosticMetric | "pressure" | "material" | "histogram" | "spectrum"
+    >("kineticEnergy");
+  const [activeMetrics, setActiveMetrics] = useState<DiagnosticMetric[]>(
+    defaultMetrics(false),
+  );
+  const viewLink = useRef(parseViewLink(location.search));
+  const [analysisPreferences, setAnalysisPreferences] =
+    useState<AnalysisPreferences>(viewLink.current.analysis ?? defaultAnalysis);
+  const [shareLink, setShareLink] = useState("");
   const [ftleOpen, setFTLEOpen] = useState(false);
   const [traceUid, setTraceUid] = useState("");
   const [selection, setSelection] = useState<ParticleSelection | null>(null),
@@ -353,12 +370,95 @@ export default function App() {
         s.fields[0]?.name ??
         "kinds",
     );
-    setOptions((o) => ({
-      ...o,
-      range: "frame",
-      clipAxis: -1,
-      mapping: "magnitude",
-    }));
+    const preset = sourcePreset(s),
+      link = viewLink.current;
+    preset.view.settings.backend = fieldView.settings.backend;
+    setIndex(preset.index);
+    setField(preset.field);
+    setActiveMetrics(preset.metrics);
+    setAnalysisPreferences(defaultAnalysis);
+    setOptions((old) => ({ ...old, ...preset.options }));
+    fieldView.restore(preset.view, s.id);
+    const view =
+      rememberRef.current && files ? recallView(fileKey(files)) : null;
+    if (view) {
+      if (Number.isInteger(view.index))
+        setIndex(Math.max(0, Math.min(s.frames - 1, view.index)));
+      if (s.fields.some((f) => f.name === view.field)) setField(view.field);
+      if (view.options) {
+        // A 2D recording cannot use the saved Z component/clip plane.
+        setOptions({
+          ...view.options,
+          mapping:
+            s.dimension === 2 && view.options.mapping === "z"
+              ? "magnitude"
+              : view.options.mapping,
+          clipAxis:
+            view.options.clipAxis >= s.dimension ? -1 : view.options.clipAxis,
+        });
+      }
+      if (view.metrics) setActiveMetrics(view.metrics);
+      if (view.analysis) setAnalysisPreferences(view.analysis);
+      if (view.fieldView) fieldView.restore(view.fieldView, s.id);
+      if (view.playback) {
+        setSpeed(view.playback.speed);
+        setLoop(view.playback.loop);
+      }
+      if (view.metric) setMetric(view.metric);
+    }
+
+    if (!link.demo || link.demo === s.id) {
+      const requested = link.preset
+        ? sourcePreset(s, link.preset)
+        : { ...preset, view: view?.fieldView ?? preset.view };
+      if (link.preset) {
+        setField(requested.field);
+        setIndex(requested.index);
+        setOptions((old) => ({ ...old, ...requested.options }));
+      }
+      if (link.field && s.fields.some((f) => f.name === link.field))
+        setField(link.field);
+      if (link.frame != null) setIndex(Math.min(s.frames - 1, link.frame));
+      else if (link.time != null)
+        setIndex(
+          s.times.reduce(
+            (best, t, i) =>
+              Math.abs(t - link.time!) < Math.abs(s.times[best] - link.time!)
+                ? i
+                : best,
+            0,
+          ),
+        );
+      setOptions((old) => ({
+        ...old,
+        ...link.options,
+        mapping:
+          s.dimension === 2 && link.options.mapping === "z"
+            ? "magnitude"
+            : (link.options.mapping ?? old.mapping),
+      }));
+      const merged = {
+        ...requested.view,
+        ...link.view,
+        settings: { ...requested.view.settings, ...link.view.settings },
+      };
+      fieldView.restore(merged, s.id);
+      if (link.chart) {
+        setMetric(link.chart as typeof metric);
+        if (Object.hasOwn(metricDefinitions, link.chart))
+          setActiveMetrics((old) =>
+            old.includes(link.chart as DiagnosticMetric)
+              ? old
+              : [...old, link.chart as DiagnosticMetric],
+          );
+      }
+      if (link.analysis) setAnalysisPreferences(link.analysis);
+      if (link.metrics) setActiveMetrics(link.metrics);
+      if (link.theme) {
+        setTheme(link.theme);
+        setOptions((old) => ({ ...old, background: link.theme! }));
+      }
+    }
   };
   useEffect(() => {
     let disposed = false;
@@ -409,6 +509,21 @@ export default function App() {
           add(reader);
           if (dim === 2 && !disposed && interactions.current === 0)
             chooseSource(reader.metadata, true);
+        }
+        if (viewLink.current.demo && !disposed) {
+          const demo = recordedDemos.find(
+            (d) => d.id === viewLink.current.demo,
+          );
+          if (demo) {
+            await openRecordedDemo(demo);
+            return;
+          }
+          const analytical = registry.current.get(viewLink.current.demo);
+          if (analytical) {
+            chooseSource(analytical.metadata, true);
+            return;
+          }
+          setError("The URL names an unknown demo.");
         }
         if (rememberRef.current && !disposed && interactions.current === 0) {
           try {
@@ -466,40 +581,6 @@ export default function App() {
               localFiles.current.set(reader.metadata.id, restoreFiles);
               add(reader);
               chooseSource(reader.metadata, true);
-              const view = recallView(saved.key);
-              if (view) {
-                if (Number.isInteger(view.index))
-                  setIndex(
-                    Math.max(
-                      0,
-                      Math.min(reader.metadata.frames - 1, view.index),
-                    ),
-                  );
-                if (reader.metadata.fields.some((f) => f.name === view.field))
-                  setField(view.field);
-                if (view.options) {
-                  // A 2D recording cannot use the saved Z component/clip plane.
-                  setOptions({
-                    ...view.options,
-                    mapping:
-                      reader.metadata.dimension === 2 &&
-                      view.options.mapping === "z"
-                        ? "magnitude"
-                        : view.options.mapping,
-                    clipAxis:
-                      view.options.clipAxis >= reader.metadata.dimension
-                        ? -1
-                        : view.options.clipAxis,
-                  });
-                }
-                if (view.fieldView)
-                  fieldView.restore(view.fieldView, reader.metadata.id);
-                if (view.playback) {
-                  setSpeed(view.playback.speed);
-                  setLoop(view.playback.loop);
-                }
-                if (view.metric) setMetric(view.metric);
-              }
               setStorageStatus("Restored local copy");
             }
           } catch (e) {
@@ -634,10 +715,10 @@ export default function App() {
     setRows([]);
     setDiagnosticError("");
     const load = async () => {
-      for (let start = 0; start < source.frames; start += 8) {
+      for (let start = 0; start < source.frames; start += 1) {
         const batch = await registry.current
           .get(source.id)!
-          .diagnostics(start, 8, abort.signal);
+          .diagnostics(start, 1, abort.signal);
         if (abort.signal.aborted) return;
         setRows((old) => mergeRows(old, batch));
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -911,6 +992,8 @@ export default function App() {
         fieldView: fieldView.preferences,
         playback: { speed, loop },
         metric,
+        metrics: activeMetrics,
+        analysis: analysisPreferences,
       });
   }, [
     remember,
@@ -922,6 +1005,8 @@ export default function App() {
     speed,
     loop,
     metric,
+    activeMetrics,
+    analysisPreferences,
   ]);
   const currentField = source?.fields.find((f) => f.name === field),
     isVector = (currentField?.components ?? 1) > 1;
@@ -987,6 +1072,8 @@ export default function App() {
     options.wrapPeriodic,
   ]);
   const hasMetric =
+    metric !== "histogram" &&
+    metric !== "spectrum" &&
     metric !== "material" &&
     metric !== "pressure" &&
     rows.some((r) => r[metric] != null);
@@ -1142,48 +1229,107 @@ export default function App() {
               <dd>{frame ? `${(frame.bytes / 1e6).toFixed(2)} MB` : "—"}</dd>
             </dl>
           </section>
-          <section className="inspector-section">
-            <div className="section-heading">FLUID DIAGNOSTICS</div>
-            <div className="stat-card">
-              <span>Kinetic energy</span>
-              <strong>
-                {current?.kineticEnergy != null
-                  ? formatNumber(current.kineticEnergy, 5)
-                  : "—"}
-              </strong>
-              <span className="stat-unit">½ ∑ mᵢ |vᵢ|²</span>
+          <DiagnosticsPanel
+            current={current}
+            metrics={activeMetrics}
+            onChange={(keys) => {
+              setActiveMetrics(keys);
+              if (
+                activeMetrics.includes(metric as DiagnosticMetric) &&
+                !keys.includes(metric as DiagnosticMetric)
+              )
+                setMetric(keys[0] ?? "histogram");
+            }}
+            onSelect={(value) => {
+              setMetric(value);
+              setChartsExpanded(true);
+            }}
+          />
+          <details className="control-disclosure control-section">
+            <summary>Appearance</summary>
+            <div className="label-row">
+              <label htmlFor="size">Particle scale</label>
+              <span className="mono">{options.size.toFixed(2)}×</span>
             </div>
-            <dl className="properties">
-              {source?.internalEnergyAvailable && (
-                <>
-                  <dt>Internal energy</dt>
-                  <dd>
-                    {current?.internalEnergy != null
-                      ? formatNumber(current.internalEnergy, 6)
-                      : "—"}
-                  </dd>
-                  <dt>Total energy</dt>
-                  <dd>
-                    {current?.totalEnergy != null
-                      ? formatNumber(current.totalEnergy, 6)
-                      : "—"}
-                  </dd>
-                </>
-              )}
-              <dt>Maximum speed</dt>
-              <dd>
-                {current?.maxSpeed != null
-                  ? formatNumber(current.maxSpeed, 4)
-                  : "—"}
-              </dd>
-              <dt>Mean density</dt>
-              <dd>
-                {current?.meanDensity != null
-                  ? formatNumber(current.meanDensity, 5)
-                  : "—"}
-              </dd>
-            </dl>
-          </section>
+            <input
+              id="size"
+              className="slider"
+              type="range"
+              min="0.25"
+              max="2.5"
+              step="0.05"
+              value={options.size}
+              onChange={(e) => setOption("size", +e.target.value)}
+            />
+            <div className="toggle-row">
+              <span>Physical particle size</span>
+              <Toggle
+                label="Physical particle size"
+                value={options.physical}
+                onChange={(v) => setOption("physical", v)}
+              />
+            </div>
+            <div className="toggle-row">
+              <span>Boundary particles</span>
+              <Toggle
+                label="Boundary particles"
+                value={options.boundaries}
+                onChange={(v) => setOption("boundaries", v)}
+              />
+            </div>
+            <div className="toggle-row">
+              <span>Ghost particles</span>
+              <Toggle
+                label="Ghost particles"
+                value={options.ghosts}
+                onChange={(v) => setOption("ghosts", v)}
+              />
+            </div>
+            <div className="toggle-row">
+              <span>Reference grid</span>
+              <Toggle
+                label="Reference grid"
+                value={options.grid}
+                onChange={(v) => setOption("grid", v)}
+              />
+            </div>
+            {source?.dimension === 3 && (
+              <section className="inspector-section">
+                <div className="section-heading">CLIPPING</div>
+                <div className="select-wrap">
+                  <select
+                    aria-label="Clipping axis"
+                    value={options.clipAxis}
+                    onChange={(e) => setOption("clipAxis", +e.target.value)}
+                  >
+                    <option value="-1">Show full volume</option>
+                    <option value="0">Clip along X</option>
+                    <option value="1">Clip along Y</option>
+                    <option value="2">Clip along Z</option>
+                  </select>
+                  <ChevronDown size={13} />
+                </div>
+                {options.clipAxis >= 0 && (
+                  <>
+                    <div className="label-row">
+                      <span>Visible extent</span>
+                      <span>{Math.round(options.clip * 100)}%</span>
+                    </div>
+                    <input
+                      className="slider"
+                      aria-label="Clipping position"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step=".01"
+                      value={options.clip}
+                      onChange={(e) => setOption("clip", +e.target.value)}
+                    />
+                  </>
+                )}
+              </section>
+            )}
+          </details>
           <div className="inspector-bottom">
             <Eye size={14} />
             <span>
@@ -1214,7 +1360,12 @@ export default function App() {
                   </IconButton>
                 )}
               <span className="dimension-badge">
-                {source?.dimension ?? "—"}D PARTICLES
+                {source?.dimension ?? "—"}D{" "}
+                {fieldView.mode === "particles"
+                  ? "PARTICLES"
+                  : fieldView.mode === "both"
+                    ? "GRID + PARTICLES"
+                    : "SCALAR GRID"}
               </span>
               <IconButton
                 label="Toggle visualization controls"
@@ -1541,7 +1692,7 @@ export default function App() {
             </IconButton>
           </section>
           <section
-            className={`diagnostics ${metric === "pressure" || metric === "material" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
+            className={`diagnostics ${metric === "pressure" || metric === "material" || metric === "spectrum" ? "pressure-active" : ""} ${chartsExpanded ? "" : "collapsed"}`}
           >
             <div className="diagnostics-heading">
               <div className="section-heading">
@@ -1555,17 +1706,18 @@ export default function App() {
               >
                 {(
                   [
-                    ["kineticEnergy", "Kinetic energy"],
-                    ["internalEnergy", "Internal energy"],
-                    ["totalEnergy", "Total energy"],
-                    ["maxSpeed", "Max. speed"],
-                    ["meanDensity", "Mean density"],
+                    ...activeMetrics.map(
+                      (id) => [id, metricDefinitions[id].label] as const,
+                    ),
                     ["pressure", "Pressure probes"],
                     ["material", "Material motion"],
+                    ["histogram", "Histogram"],
+                    ["spectrum", "Spectrum"],
                   ] as const
                 ).map(([id, label]) => (
                   <button
                     key={id}
+                    disabled={id === "spectrum" && source?.dimension !== 2}
                     className={metric === id ? "selected" : ""}
                     aria-pressed={metric === id}
                     onClick={() => {
@@ -1625,7 +1777,43 @@ export default function App() {
                     />
                   )}
                   {source &&
-                    (metric === "material" ? (
+                    (metric === "histogram" || metric === "spectrum" ? (
+                      <QuantityAnalysis
+                        key={sourceId + metric}
+                        reader={registry.current.get(sourceId)!}
+                        index={displayedIndex}
+                        field={presentation?.field ?? field}
+                        mapping={options.mapping}
+                        grid={
+                          (presentation?.mode !== "particles"
+                            ? fieldView.query(
+                                displayedIndex,
+                                field,
+                                options.mapping,
+                                options.wrapPeriodic,
+                              )
+                            : null) ?? {
+                            index: displayedIndex,
+                            field,
+                            mapping: options.mapping,
+                            settings: {
+                              ...fieldView.settings,
+                              quantity: "field",
+                              wrapPeriodic: options.wrapPeriodic,
+                            },
+                            streams: null,
+                          }
+                        }
+                        gridVisible={
+                          !!presentation && presentation.mode !== "particles"
+                        }
+                        mode={metric}
+                        theme={theme}
+                        playing={playing}
+                        initial={analysisPreferences}
+                        onSettings={setAnalysisPreferences}
+                      />
+                    ) : metric === "material" ? (
                       <MaterialChart
                         motion={material}
                         source={source}
@@ -1653,7 +1841,13 @@ export default function App() {
                     ))}
                 </div>
                 <div className="chart-note">
-                  {metric === "material" ? (
+                  {metric === "histogram" || metric === "spectrum" ? (
+                    metric === "histogram" ? (
+                      "Histogram of the displayed mapped quantity; boundaries and invalid samples are excluded."
+                    ) : (
+                      "Spatial FFT of the reconstructed scalar, not a kinetic-energy spectrum. Mean removed; zero-masking/windowing changes the spectrum. Radial values sum power per shell. Padding preserves total mean-square power."
+                    )
+                  ) : metric === "material" ? (
                     "Frozen UID set; seed-time periodic branch plus original unwrapped motion. 2D FTLE masks fits above relative residual 0.25. The ellipse is the fitted image of the seed RMS circle; sparse exports and particle shifting affect interpretation. Click a chart sample to seek."
                   ) : metric === "pressure" ? (
                     pressure.probes.length ? (
@@ -1684,44 +1878,157 @@ export default function App() {
               <span>VISUALIZATION</span>
               <SlidersHorizontal size={15} />
             </div>
-            <FieldControls
-              view={{
-                ...fieldView,
-                result: presentation?.result ?? null,
-                busy: loading && fieldView.active && !playing,
-                error: fieldView.active ? error : "",
-              }}
-              dimension={source?.dimension}
-              hasVelocity={
-                source?.fields.some(
-                  (f) => f.name === "velocities" && f.components >= 2,
-                ) ?? false
-              }
-              onQuantityChange={(quantity) => {
-                if (derivativeQuantity(quantity))
+            <section className="control-section">
+              <button
+                className="secondary-button"
+                disabled={!source}
+                onClick={() => {
+                  if (!source) return;
+                  const p = sourcePreset(source);
+                  p.view.settings.backend = fieldView.settings.backend;
+                  setPlaying(false);
+                  setIndex(p.index);
+                  setField(p.field);
+                  setOptions((old) => ({ ...old, ...p.options }));
+                  fieldView.restore(p.view, source.id);
+                  setActiveMetrics(p.metrics);
+                }}
+              >
+                Recommended example view
+              </button>
+            </section>
+            <section className="control-section">
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  setShareLink(
+                    buildViewURL(
+                      location.href,
+                      source!,
+                      displayedIndex,
+                      field,
+                      options,
+                      fieldView.preferences,
+                      activeMetrics,
+                      theme,
+                      metric,
+                      analysisPreferences,
+                    ),
+                  )
+                }
+                disabled={!source}
+              >
+                Share view link
+              </button>
+              {shareLink && (
+                <>
+                  <input
+                    aria-label="View URL"
+                    readOnly
+                    value={shareLink}
+                    onFocus={(e) => e.target.select()}
+                  />
+                  <p className="subtle-note">
+                    Copy this URL. Local files stay on the viewer's device.
+                  </p>
+                </>
+              )}
+            </section>
+            <details className="control-disclosure control-section color-disclosure">
+              <summary>
+                <span
+                  className="mapping-preview"
+                  style={{ background: gradient(options.palette) }}
+                />
+                <span>
+                  Color mapping
+                  <small>
+                    {scalarTitle} · {options.normalization}
+                  </small>
+                </span>
+              </summary>
+              <label className="control-label" htmlFor="color-preset">
+                Mapping preset
+              </label>
+              <select
+                id="color-preset"
+                value=""
+                onChange={(e) => {
+                  const preset = colorPresets.find(
+                    (p) => p.id === e.target.value,
+                  );
+                  if (!preset) return;
+                  setField(preset.field);
+                  fieldView.setSettings((old) => ({
+                    ...old,
+                    quantity: preset.quantity,
+                  }));
+                  if (preset.quantity !== "field") fieldView.setMode("grid");
                   setOptions((old) => ({
                     ...old,
-                    palette: "coolwarm",
-                    normalization: "linear",
+                    palette: preset.palette,
+                    normalization: preset.normalization,
+                    mapping: preset.mapping,
                     range: "frame",
                   }));
-              }}
-            />
-            <section className="control-section">
-              <div className="section-heading">
-                <span>COLOR BY</span>
-                <SlidersHorizontal size={14} />
-              </div>
+                }}
+              >
+                <option value="">Custom mapping</option>
+                {colorPresets
+                  .filter((p) => source?.fields.some((f) => f.name === p.field))
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+              </select>
               <label className="control-label" htmlFor="field">
-                Particle quantity
+                Mapped quantity
               </label>
               <div className="select-wrap">
                 <select
                   id="field"
-                  value={field}
-                  onChange={(e) => setField(e.target.value)}
+                  value={
+                    fieldView.mode !== "particles" &&
+                    derivativeQuantity(fieldView.settings.quantity)
+                      ? "@" + fieldView.settings.quantity
+                      : field
+                  }
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value.startsWith("@")) {
+                      fieldView.setSettings((old) => ({
+                        ...old,
+                        quantity: value.slice(1) as "vorticity" | "divergence",
+                      }));
+                      fieldView.setMode("grid");
+                      setOptions((old) => ({
+                        ...old,
+                        palette: "coolwarm",
+                        normalization: "linear",
+                        range: "frame",
+                      }));
+                    } else {
+                      setField(value);
+                      if (["UIDs", "kinds", "materials"].includes(value)) {
+                        fieldView.setMode("particles");
+                        fieldView.setLIC(false);
+                      }
+                      fieldView.setSettings((old) => ({
+                        ...old,
+                        quantity: "field",
+                      }));
+                    }
+                  }}
                   disabled={!source}
                 >
+                  {source?.dimension === 2 &&
+                    source.fields.some((f) => f.name === "velocities") && (
+                      <optgroup label="Derived velocity">
+                        <option value="@vorticity">Vorticity</option>
+                        <option value="@divergence">Velocity divergence</option>
+                      </optgroup>
+                    )}
                   {source?.fields.map((f) => (
                     <option key={f.name} value={f.name}>
                       {fieldLabel(f.name)}
@@ -1730,7 +2037,7 @@ export default function App() {
                 </select>
                 <ChevronDown size={13} />
               </div>
-              {isVector && (
+              {isVector && !shownDerivative && (
                 <div
                   className="segmented mapping"
                   role="group"
@@ -1854,95 +2161,30 @@ export default function App() {
                   positive. Showing automatic range.
                 </p>
               )}
-            </section>
-            <section className="control-section">
-              <div className="section-heading">
-                <span>APPEARANCE</span>
-                <Settings2 size={14} />
-              </div>
-              <div className="label-row">
-                <label htmlFor="size">Particle scale</label>
-                <span className="mono">{options.size.toFixed(2)}×</span>
-              </div>
-              <input
-                id="size"
-                className="slider"
-                type="range"
-                min="0.25"
-                max="2.5"
-                step="0.05"
-                value={options.size}
-                onChange={(e) => setOption("size", +e.target.value)}
-              />
-              <div className="toggle-row">
-                <span>Physical particle size</span>
-                <Toggle
-                  label="Physical particle size"
-                  value={options.physical}
-                  onChange={(v) => setOption("physical", v)}
-                />
-              </div>
-              <div className="toggle-row">
-                <span>Boundary particles</span>
-                <Toggle
-                  label="Boundary particles"
-                  value={options.boundaries}
-                  onChange={(v) => setOption("boundaries", v)}
-                />
-              </div>
-              <div className="toggle-row">
-                <span>Ghost particles</span>
-                <Toggle
-                  label="Ghost particles"
-                  value={options.ghosts}
-                  onChange={(v) => setOption("ghosts", v)}
-                />
-              </div>
-              <div className="toggle-row">
-                <span>Reference grid</span>
-                <Toggle
-                  label="Reference grid"
-                  value={options.grid}
-                  onChange={(v) => setOption("grid", v)}
-                />
-              </div>
-            </section>
-            {source?.dimension === 3 && (
-              <section className="inspector-section">
-                <div className="section-heading">CLIPPING</div>
-                <div className="select-wrap">
-                  <select
-                    aria-label="Clipping axis"
-                    value={options.clipAxis}
-                    onChange={(e) => setOption("clipAxis", +e.target.value)}
-                  >
-                    <option value="-1">Show full volume</option>
-                    <option value="0">Clip along X</option>
-                    <option value="1">Clip along Y</option>
-                    <option value="2">Clip along Z</option>
-                  </select>
-                  <ChevronDown size={13} />
-                </div>
-                {options.clipAxis >= 0 && (
-                  <>
-                    <div className="label-row">
-                      <span>Visible extent</span>
-                      <span>{Math.round(options.clip * 100)}%</span>
-                    </div>
-                    <input
-                      className="slider"
-                      aria-label="Clipping position"
-                      type="range"
-                      min="0"
-                      max="1"
-                      step=".01"
-                      value={options.clip}
-                      onChange={(e) => setOption("clip", +e.target.value)}
-                    />
-                  </>
-                )}
-              </section>
-            )}
+            </details>
+            <FieldControls
+              view={{
+                ...fieldView,
+                result: presentation?.result ?? null,
+                busy: loading && fieldView.active && !playing,
+                error: fieldView.active ? error : "",
+              }}
+              dimension={source?.dimension}
+              hasVelocity={
+                source?.fields.some(
+                  (f) => f.name === "velocities" && f.components >= 2,
+                ) ?? false
+              }
+              onQuantityChange={(quantity) => {
+                if (derivativeQuantity(quantity))
+                  setOptions((old) => ({
+                    ...old,
+                    palette: "coolwarm",
+                    normalization: "linear",
+                    range: "frame",
+                  }));
+              }}
+            />
             <div className="sidebar-foot">
               <span className="tiny-dot" />
               Browser-rendered · WebGL2
