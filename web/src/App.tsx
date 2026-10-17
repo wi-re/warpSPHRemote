@@ -28,9 +28,15 @@ import {
   X,
 } from "lucide-react";
 import { ParticleRenderer } from "./renderer";
-import { decodeFrame, fieldLabel, formatNumber, request } from "./data";
+import { fieldLabel, formatNumber, request } from "./data";
+import {
+  BrowserSource,
+  ServiceSource,
+  type TrajectorySource,
+} from "./sources/client";
 import { gradient, palettes } from "./palettes";
-import { DiagnosticChart } from "./Chart";
+import { usePressureProbes, PressureControls } from "./PressureProbes";
+import { DiagnosticChart, PressureChart } from "./Chart";
 import { initialOptions } from "./types";
 import type { Diagnostic, Frame, Source, ViewOptions } from "./types";
 
@@ -113,10 +119,17 @@ export default function App() {
     [path, setPath] = useState(""),
     [opening, setOpening] = useState(false),
     [openError, setOpenError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const serviceMode =
+    new URLSearchParams(window.location.search).get("service") === "1";
+  const registry = useRef(new Map<string, TrajectorySource>());
+  const fileInput = useRef<HTMLInputElement>(null),
+    folderInput = useRef<HTMLInputElement>(null);
+  const openingRef = useRef(false);
   const [rows, setRows] = useState<Diagnostic[]>([]),
     [diagnosticError, setDiagnosticError] = useState(""),
     [metric, setMetric] = useState<
-      "kineticEnergy" | "maxSpeed" | "meanDensity"
+      "kineticEnergy" | "maxSpeed" | "meanDensity" | "pressure"
     >("kineticEnergy");
   const [selected, setSelected] = useState(-1),
     [renderMs, setRenderMs] = useState(0),
@@ -159,19 +172,38 @@ export default function App() {
     }));
   };
   useEffect(() => {
-    const abort = new AbortController();
-    request<Source[]>("/api/sources", { signal: abort.signal })
-      .then((list) => {
-        setSources(list);
+    let disposed = false;
+    const add = (reader: TrajectorySource) => {
+      if (disposed) {
+        reader.close();
+        return;
+      }
+      registry.current.set(reader.metadata.id, reader);
+      setSources((old) => [...old, reader.metadata]);
+    };
+    const load = async () => {
+      if (serviceMode) {
+        const list = await request<Source[]>("/api/sources");
+        if (disposed) return;
+        for (const meta of list) add(new ServiceSource(meta));
         if (list.length) chooseSource(list[0]);
-      })
-      .catch((e) => {
-        if (e.name !== "AbortError")
-          setError(
-            e.message + " Start the local file service to open trajectories.",
-          );
-      });
-    return () => abort.abort();
+      } else {
+        for (const dim of [2, 3] as const) {
+          const reader = await BrowserSource.open([], dim);
+          add(reader);
+          if (dim === 2 && !disposed) chooseSource(reader.metadata);
+        }
+      }
+    };
+    load().catch((e) => {
+      if (!disposed) setError(e.message);
+    });
+    folderInput.current?.setAttribute("webkitdirectory", "");
+    return () => {
+      disposed = true;
+      for (const reader of registry.current.values()) reader.close();
+      registry.current.clear();
+    };
   }, []);
   useEffect(() => {
     if (!host.current) return;
@@ -199,17 +231,12 @@ export default function App() {
     setLoading(true);
     setError("");
     const t = performance.now();
-    fetch(
-      `/api/sources/${source.id}/frames/${index}?field=${encodeURIComponent(field)}`,
-      { signal: abort.signal },
-    )
-      .then(async (r) => {
-        if (!r.ok) throw new Error((await r.json()).error);
-        return r.arrayBuffer();
-      })
-      .then((buffer) => {
+    registry.current
+      .get(source.id)!
+      .frame(index, field, abort.signal)
+      .then((loadedFrame) => {
         if (abort.signal.aborted) return;
-        setFrame(decodeFrame(buffer));
+        setFrame(loadedFrame);
         setFetchMs(performance.now() - t);
         setSelected(-1);
       })
@@ -255,11 +282,10 @@ export default function App() {
     setRows([]);
     setDiagnosticError("");
     const load = async () => {
-      for (let start = 0; start < source.frames; start += 16) {
-        const batch = await request<Diagnostic[]>(
-          `/api/sources/${source.id}/diagnostics?start=${start}&count=16`,
-          { signal: abort.signal },
-        );
+      for (let start = 0; start < source.frames; start += 8) {
+        const batch = await registry.current
+          .get(source.id)!
+          .diagnostics(start, 8, abort.signal);
         if (abort.signal.aborted) return;
         setRows((old) => mergeRows(old, batch));
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -273,10 +299,9 @@ export default function App() {
   useEffect(() => {
     if (!frame || !source || rows.some((r) => r.index === frame.index)) return;
     const abort = new AbortController();
-    request<Diagnostic[]>(
-      `/api/sources/${source.id}/diagnostics?start=${frame.index}&count=1`,
-      { signal: abort.signal },
-    )
+    registry.current
+      .get(source.id)!
+      .diagnostics(frame.index, 1, abort.signal)
       .then((batch) => {
         if (!abort.signal.aborted) setRows((old) => mergeRows(old, batch));
       })
@@ -336,7 +361,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", listener);
   }, [source, open, help]);
   useEffect(() => {
-    if (open) initialFocus.current?.focus();
+    if (open)
+      document.querySelector<HTMLElement>("[role=dialog] button")?.focus();
     else if (help)
       document.querySelector<HTMLElement>("[role=dialog] button")?.focus();
   }, [open, help]);
@@ -386,6 +412,7 @@ export default function App() {
         },
         body: JSON.stringify({ path }),
       });
+      registry.current.set(next.id, new ServiceSource(next));
       setSources((old) => [...old, next]);
       chooseSource(next);
       setOpen(false);
@@ -394,6 +421,45 @@ export default function App() {
       setOpenError(e instanceof Error ? e.message : String(e));
     } finally {
       setOpening(false);
+    }
+  };
+  const openFiles = async (files: File[]) => {
+    if (openingRef.current) return;
+    if (!files.length) return;
+    openingRef.current = true;
+    setOpening(true);
+    setOpenError("");
+    setOpen(true);
+    try {
+      if (
+        [...registry.current.keys()].filter((id) => !id.startsWith("demo-"))
+          .length >= 4
+      )
+        throw new Error(
+          "Close a trajectory before opening another; at most four local recordings are kept open.",
+        );
+      const reader = await BrowserSource.open(files);
+      registry.current.set(reader.metadata.id, reader);
+      setSources((old) => [...old, reader.metadata]);
+      chooseSource(reader.metadata);
+      setOpen(false);
+    } catch (e) {
+      setOpenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpening(false);
+      openingRef.current = false;
+    }
+  };
+  const closeCurrent = () => {
+    if (!source) return;
+    registry.current.get(source.id)?.close();
+    registry.current.delete(source.id);
+    const remaining = sources.filter((s) => s.id !== source.id);
+    setSources(remaining);
+    if (remaining.length) chooseSource(remaining[0]);
+    else {
+      setSourceId("");
+      setFrame(null);
     }
   };
   const currentField = source?.fields.find((f) => f.name === field),
@@ -424,16 +490,80 @@ export default function App() {
       : [];
   const selectedValue =
     selected >= 0 ? engine.current?.values[selected] : undefined;
-  const hasMetric = rows.some((r) => r[metric] !== null);
+  const pressure = usePressureProbes(
+    registry.current.get(sourceId),
+    source,
+    index,
+  );
+  useEffect(() => {
+    engine.current?.setProbes(pressure.probes);
+  }, [pressure.probes, frame]);
+  const hasMetric =
+    metric !== "pressure" && rows.some((r) => r[metric] !== null);
   const fixedError =
     options.range === "fixed" &&
     (!(options.max > options.min) ||
       (options.normalization === "log" && options.min <= 0));
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDragging(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node))
+          setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        void openFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
+      <input
+        ref={fileInput}
+        type="file"
+        className="visually-hidden"
+        aria-label="Select trajectory files"
+        accept=".h5,.hdf5,.npz,.json"
+        multiple
+        onChange={(e) => {
+          void openFiles(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={folderInput}
+        type="file"
+        className="visually-hidden"
+        aria-label="Select snapshot folder"
+        multiple
+        onChange={(e) => {
+          void openFiles(
+            Array.from(e.target.files ?? []).filter((f) =>
+              /\.(npz|json)$/i.test(f.name),
+            ),
+          );
+          e.target.value = "";
+        }}
+      />
+      {dragging && (
+        <div className="file-drop-overlay">
+          <FolderOpen size={40} />
+          <strong>Drop a trajectory to explore it</strong>
+          <span>HDF5 file or NPZ snapshots · stays on your device</span>
+        </div>
+      )}
       <header className="app-header">
-        <a className="brand" href="/" aria-label="warpSPH Remote home">
+        <a
+          className="brand"
+          href={import.meta.env.BASE_URL}
+          aria-label="warpSPH Remote home"
+        >
           <span className="brand-mark">
             <Activity size={23} />
           </span>
@@ -448,7 +578,7 @@ export default function App() {
         <div className="header-actions">
           <span className="local-status">
             <span />
-            Local workspace
+            Runs on your device
           </span>
           <button className="secondary-button" onClick={() => setOpen(true)}>
             <FolderOpen size={15} />
@@ -499,9 +629,7 @@ export default function App() {
                 </button>
               ))}
               {!sources.length && (
-                <p className="muted">
-                  Connect to the local file service to get started.
-                </p>
+                <p className="muted">Drop a local recording to get started.</p>
               )}
             </div>
           </section>
@@ -746,6 +874,11 @@ export default function App() {
               </h1>
             </div>
             <div className="viewport-heading-actions">
+              {source && !source.id.startsWith("demo-") && (
+                <IconButton label="Close trajectory" onClick={closeCurrent}>
+                  <X size={16} />
+                </IconButton>
+              )}
               <span className="dimension-badge">
                 {source?.dimension ?? "—"}D PARTICLES
               </span>
@@ -989,6 +1122,7 @@ export default function App() {
                     ["kineticEnergy", "Kinetic energy"],
                     ["maxSpeed", "Max. speed"],
                     ["meanDensity", "Mean density"],
+                    ["pressure", "Pressure probes"],
                   ] as const
                 ).map(([id, label]) => (
                   <button
@@ -1006,16 +1140,31 @@ export default function App() {
                   : "Fluid particles only"}
               </span>
             </div>
-            {source && (
-              <DiagnosticChart
-                rows={rows}
-                source={source}
-                metric={metric}
-                index={index}
-              />
-            )}
+            {source &&
+              (metric === "pressure" ? (
+                <PressureChart
+                  rows={pressure.samples}
+                  probes={pressure.probes}
+                  source={source}
+                  index={index}
+                  onSeek={seek}
+                />
+              ) : (
+                <DiagnosticChart
+                  rows={rows}
+                  source={source}
+                  metric={metric}
+                  index={index}
+                />
+              ))}
             <div className="chart-note">
-              {diagnosticError ? (
+              {metric === "pressure" ? (
+                pressure.probes.length ? (
+                  "Click a pressure sample to jump to its recorded frame. Add or edit fixed points in the inspector; generate histories to scan the recording."
+                ) : (
+                  "Add a pressure probe in the inspector, then generate its history. Pressure must be present in the recording."
+                )
+              ) : diagnosticError ? (
                 <span className="inline-error">{diagnosticError}</span>
               ) : rows.length > 0 && !hasMetric ? (
                 "This quantity is unavailable in this trajectory. Missing values are not replaced with zeros."
@@ -1116,6 +1265,10 @@ export default function App() {
                 )}
               </section>
             )}
+            <PressureControls
+              controller={pressure}
+              selectedPosition={selectedPosition}
+            />
             <section className="inspector-section">
               <div className="section-heading">PARTICLE PROBE</div>
               {selected >= 0 && frame ? (
@@ -1195,7 +1348,7 @@ export default function App() {
               : "Ready to inspect"}
         </span>
         <span>
-          Read + transfer {fetchMs.toFixed(1)} ms
+          Read frame {fetchMs.toFixed(1)} ms
           <span className="status-separator">/</span>CPU render submission{" "}
           {renderMs.toFixed(1)} ms<span className="status-separator">/</span>
           <button onClick={() => setHelp(true)}>
@@ -1230,58 +1383,79 @@ export default function App() {
             <h2 id="open-title">Open a trajectory</h2>
             <p>
               Read an existing recording directly from this computer. Files stay
-              local and are opened read-only.
+              local and are opened read-only. No Python service is required.
             </p>
-            <form onSubmit={openSource}>
-              <label className="control-label" htmlFor="path">
-                Local file or directory path
-              </label>
-              <input
-                ref={initialFocus}
-                id="path"
-                className="path-input"
-                placeholder="/path/to/run/trajectory.h5"
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                required
-              />
-              <div className="format-hints">
-                <span>HDF5 trajectories</span>
-                <span>NPZ snapshot sequences</span>
-              </div>
-              {openError && (
-                <div className="form-error" role="alert">
-                  {openError}
-                </div>
+            <button
+              type="button"
+              className="file-picker-zone"
+              disabled={opening}
+              onClick={() => fileInput.current?.click()}
+            >
+              {opening ? (
+                <LoaderCircle className="spin" size={28} />
+              ) : (
+                <FolderOpen size={28} />
               )}
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={opening || !path.trim()}
-                >
-                  {opening ? (
-                    <LoaderCircle size={15} className="spin" />
-                  ) : (
-                    <FolderOpen size={15} />
-                  )}{" "}
-                  {opening ? "Opening…" : "Open trajectory"}
-                </button>
+              <strong>
+                {opening ? "Reading recording…" : "Choose a trajectory file"}
+              </strong>
+              <span>or drop it anywhere on the page</span>
+            </button>
+            <div className="format-hints">
+              <span>HDF5 · .h5 / .hdf5</span>
+              <span>NPZ · multiple snapshots</span>
+            </div>
+            <button
+              className="text-button folder-button"
+              disabled={opening}
+              onClick={() => folderInput.current?.click()}
+            >
+              Select a folder of NPZ snapshots
+            </button>
+            {openError && (
+              <div className="form-error" role="alert">
+                {openError}
               </div>
-            </form>
+            )}
+            {serviceMode && (
+              <details className="service-details">
+                <summary>Open a path through this local service</summary>
+                <form onSubmit={openSource}>
+                  <input
+                    ref={initialFocus}
+                    id="path"
+                    aria-label="Local file or directory path"
+                    className="path-input"
+                    placeholder="/path/to/trajectory.h5"
+                    value={path}
+                    onChange={(e) => setPath(e.target.value)}
+                    required
+                  />
+                  <button
+                    className="primary-button"
+                    type="submit"
+                    disabled={opening || !path.trim()}
+                  >
+                    Open server path
+                  </button>
+                </form>
+              </details>
+            )}
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={opening}
+                onClick={() => setOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
             <div className="modal-footnote">
               <Info size={14} />
               <span>
-                Use an absolute path or ~/… . A run folder containing
-                trajectory.h5 also works. The local file service must be
-                running.
+                Files are read in a browser worker and are never uploaded. For
+                NPZ sequences, select measurements.json too when it contains the
+                recorded timestamps.
               </span>
             </div>
           </section>
@@ -1338,6 +1512,25 @@ export default function App() {
               particles. Units follow the recording; no unit conversions are
               applied. The reference box shows the first frame's particle
               bounds.
+            </p>
+            <p className="subtle-note">
+              HDF5 decoding uses h5wasm, developed by the National Institute of
+              Standards and Technology.{" "}
+              <a
+                href={`${import.meta.env.BASE_URL}licenses/h5wasm.txt`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                h5wasm / HDF5 notices
+              </a>{" "}
+              ·{" "}
+              <a
+                href={`${import.meta.env.BASE_URL}licenses/fflate.txt`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                fflate license
+              </a>
             </p>
             <button className="primary-button" onClick={() => setHelp(false)}>
               <Check size={15} />

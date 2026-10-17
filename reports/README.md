@@ -10,17 +10,16 @@ The initial browser verification used
 
 ## Reproduce without a simulator
 
-From an installed source checkout:
+From a source checkout with Node.js 22.12+:
 
 ```bash
 npm ci
 npm run build
-pytest -q
 npm test
-warpsph-remote
+npm run dev
 ```
 
-Open the loopback URL printed by the service. The labelled analytical 2D/3D
+Open the URL printed by Vite. Select a local HDF5 file or NPZ snapshots in the browser. The labelled analytical 2D/3D
 sources require no recordings. For larger deterministic input, select a new
 output path (the generator refuses to overwrite a file):
 
@@ -28,7 +27,7 @@ output path (the generator refuses to overwrite a file):
 python examples/make_test_trajectory.py \
   --output /tmp/warpSPHDevelopment/remote/new-run/analytical-100k.h5 \
   --count 100000 --frames 4 --dim 3
-warpsph-remote /tmp/warpSPHDevelopment/remote/new-run/analytical-100k.h5
+# Open this file with the browser's local picker.
 ```
 
 To use real data, pass an existing native `trajectory.h5`, a run folder containing
@@ -39,3 +38,27 @@ see its own regeneration instructions if those recordings are absent.
 Colormap source tables are reproducible using
 `python examples/generate_colormaps.py` with Matplotlib installed. Those bundled
 lookup tables are application source assets, not development measurements.
+
+## Generate optional real solver demos
+
+Use a Python environment in which warpSPH and CUDA already work. This is a
+recording utility, not a web-app dependency. The output directory must not exist:
+
+```bash
+/path/to/warp/python examples/generate_solver_demos.py --case khh \
+  --output /path/to/warpSPHDevelopment/remote/new-run/khh-crksph-256
+/path/to/warp/python examples/generate_solver_demos.py --case sloshing \
+  --output /path/to/warpSPHDevelopment/remote/new-run/sloshing-200
+```
+
+Defaults: KHH nx=256 with CRKSPH through t=4, sloshing nx=200 through t=7;
+0.025 simulated seconds between captures. The recorder wraps case hooks without
+modifying the solver, writes gzip/shuffle chunks with fixed identity stored once,
+and includes scalar pressure in solver units, dynamic support and precomputed
+fluid diagnostics. Captures use actual step timestamps; the first is after the
+first step and the final available state is included. The solver's own stopping
+semantics can finish just short of tLimit. No interpolation or resampling is used.
+
+`summary.json`, `caseSpec.json`, and per-step `diagnostics.json` document each run.
+A divergence or stop reason fails the command and must be inspected before using
+the recording. These are visualization demos, not new physical validation.

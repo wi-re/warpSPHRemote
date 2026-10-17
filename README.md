@@ -7,30 +7,61 @@ The first milestone is **recorded trajectory visualization**. Simulation
 integration comes after the rendering and interaction model have been exercised
 on real data. No changes to warpSPH, warpSPHCore, or warpSPHPlotting are required.
 
-## Run locally
+## Open on the web
 
-Requires Python 3.10+ and Node.js 22.12+ (Node 24 recommended).
+[Open the visualizer](https://fluids.dev/warpSPHRemote/), choose a local HDF5
+recording, or select NPZ snapshots. Data is read on your device; recording contents
+are not uploaded. File access must be granted again after reloading the page.
+The built-in 2D/3D analytical examples require no files.
+
+The static app needs no Python, Torch, Warp, Jupyter, or simulator installation.
+WebGL2 and WebAssembly must be available in the browser.
+
+## Develop locally
+
+Requires Node.js 22.12+ (Node 24 recommended):
+
+```bash
+npm ci
+npm run dev
+```
+
+Open the URL Vite prints and pick a saved recording. A working warpSPH environment
+is needed only to **generate new solver trajectories**, not to develop the website.
+
+For a static build:
+
+```bash
+npm run build
+python -m http.server --directory dist 8765
+```
+
+Python's standard-library server is just one way to serve static files. Any static
+host works. Do not open `dist/index.html` through `file://`; module workers need
+HTTP(S). The GitHub Pages workflow builds and deploys `main` with the host's base
+path, supporting both repository subpaths and a custom domain.
+
+### Optional Python file service
+
+For server-side paths or the existing WPR1 API, install Python 3.10+ with NumPy
+and h5py. The service is **optional**, loopback-only, and does not need warpSPH:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
-npm ci
 npm run build
 warpsph-remote /absolute/path/to/trajectory.h5
 ```
 
-Open **http://127.0.0.1:8765**. Multiple paths can be supplied, or use **Open
-trajectory** in the application to enter another local path. The service only
-listens on loopback. Files are opened read-only and remain on your computer.
-This preview is run from a source checkout; build the web assets before launch.
-
-With no paths, `warpsph-remote` provides explicitly labelled 2D and 3D analytical
-Taylor–Green examples. These sample a field on a fixed lattice; they are not
-advected particle simulations.
+Open `http://127.0.0.1:8765/?service=1` to opt into the same-origin Python API.
+The default page always uses the browser file reader. For Vite with the Python
+API, use `?service=1` on Vite's URL; `/api` is proxied to port 8765.
 
 ## Supported recordings
 
+- Chunked HDF5: `/frames/positions [T,N,D]`, additional numerical frame arrays,
+  `/particles/{UIDs,kinds,masses}` and `/time [T]`. See [format guidance](reports/BROWSER_FILES.md).
 - Native warpSPH `trajectory.h5`: `positions/frame_*`, `velocities/frame_*`,
   `densities/frame_*`, `times/frame_*`, optional additional numerical field
   groups, and initial `combinedKinds`, `combinedUIDs`, `combinedMasses`, etc.
@@ -43,8 +74,9 @@ advected particle simulations.
   archive's sibling `measurements.json` is also understood. If physical time
   was not recorded, the interface explicitly uses **frame index**.
 
-For a native run directory containing `trajectory.h5`, pass the directory.
-For NPZ sequences, pass the snapshots directory itself. Frames are ordered
+In the browser, select `trajectory.h5` itself, or select NPZ files / their snapshot
+folder. An optional `measurements.json` may be included with NPZ snapshots.
+In Python service mode a native run directory or NPZ snapshot directory may be passed. Frames are ordered
 numerically and read on demand, rather than loaded into memory as a trajectory.
 Only numerical datasets are read; simulator configuration callables are never
 restored. Finished recordings are the supported input; concurrent HDF5 writes
@@ -60,7 +92,7 @@ are explicitly identified as such; particle selection is confined to one frame.
 
 - Instanced WebGL2 particle discs in 2D and depth-correct sphere impostors in 3D.
 - Pan, zoom, orbit, fit current frame, camera-relative orientation triad,
-  particle probes, axis-aligned 3D clipping, and a reference grid/box.
+  particle inspection, fixed spatial pressure probes, axis-aligned 3D clipping, and a reference grid/box.
 - Scalar fields and vector magnitude / components; seven bundled 256-entry
   colormaps; linear, logarithmic, and symmetric-log normalization.
 - Automatic fluid-only ranges or manually fixed ranges; passive gray boundaries
@@ -68,7 +100,14 @@ are explicitly identified as such; particle selection is confined to one frame.
 - Play, pause, step, seek, loop, and playback speed. Each next playback frame
   is requested after the current one has loaded; slow reads slow playback.
 - Plotly kinetic-energy, maximum-speed, and mean-density histories. Computation
-  runs in bounded batches near the files. The selected frame is prioritized.
+  runs in bounded worker batches. The selected frame is prioritized. Optional
+  stored diagnostics avoid rescanning particle arrays for these three quantities.
+- Up to four fixed pressure probes: current sample, cancellable whole-recording
+  histories, and click-to-seek curves. Choose nearest fluid value or approximate
+  inverse-distance weighting within a radius. No nearby fluid means a gap.
+  Coordinates and radius use recorded units; no pressure is inferred from density.
+  Sampling uses stored coordinates without periodic wrapping or tank-motion transforms.
+  Probes and histories are session-local; live acquisition and history export remain future work.
 - PNG export of the GPU scene. The exported canvas does **not** currently include
   HTML labels, the colorbar, or the diagnostics chart.
 
@@ -93,24 +132,21 @@ Keyboard: **Space** play/pause, **← / →** step, **F** fit. In 2D, left drag 
 in 3D, left drag orbits and right drag pans. Scroll zooms; click probes a particle.
 Controls are also available in the in-app help dialog.
 
-## Development
+## Checks and dependencies
 
 ```bash
-# Terminal 1: file service
-warpsph-remote /absolute/path/to/recording
-# Terminal 2: frontend with hot reload (proxies /api to port 8765)
-npm run dev
-
-# Numerical/data-contract tests and production build
-pytest -q
 npm test
 npm run build
+# Optional Python service tests, after pip install -e '.[dev]':
+pytest -q
 ```
 
-The Python service depends only on NumPy and h5py. The frontend uses React,
-TypeScript, Three.js, and Plotly. It has no Torch, Warp, VTK, PyVista, trame,
-Jupyter, external font, or CDN runtime requirement. WebGL2 is the implemented
-renderer; a WebGPU backend is future work, not a selectable placeholder.
+React and TypeScript provide the UI, Three.js manages WebGL2, and Plotly provides
+charts. HDF5 decoding uses [h5wasm](https://github.com/usnistgov/h5wasm), developed by
+the National Institute of Standards and Technology, in a dedicated worker using
+Emscripten WORKERFS. NPZ decompression uses fflate. Bundled notices are shipped
+under `licenses/`. No external fonts or CDN runtime dependencies are used.
+The renderer currently uses WebGL2; WebGPU is future work.
 
 [Architecture and scope](reports/ARCHITECTURE.md),
 [verification and known limits](reports/VERIFICATION.md), and

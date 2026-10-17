@@ -8,17 +8,23 @@ control hooks, live subscriptions, or cloud services in this milestone.
 
 ## Components
 
-`python/warpsph_remote/sources.py` defines numerical frame sources. HDF5 and NPZ
-adapters open recordings read-only, index metadata, and load requested frames.
-The analytical sources exercise the same binary and rendering path.
+`web/src/sources/client.ts` defines the trajectory-source interface used by the UI:
+metadata, requested frame, diagnostic batch, probe batch, and close. The default
+`BrowserSource` creates one module worker per recording. Opening a local file
+passes a browser `File` handle to that worker; it never sends its contents to an
+HTTP endpoint. The two analytical sources use this same worker path.
 
-`server.py` supplies a loopback-only HTTP file service and serves the built web
-application. It has three bounded expensive-operation slots, independent HDF5
-read handles, and a bounded cache of scalar diagnostic rows. It does not render.
+`reader.worker.ts` mounts an HDF5 File in Emscripten WORKERFS for random access;
+`hdf5.ts` indexes legacy columns, nested states, checkpoints, or stacked frame
+datasets and slices only the requested frame. `npz.ts` decompresses one snapshot
+at a time. Native numeric dtype is preserved until display conversion. Raw cache
+retention is capped at two frames and 64 MiB, excluding temporary decode buffers
+and the library's own memory. At most four non-demo recordings remain open.
 
-`web/src/data.ts` decodes the versioned numerical frame contract. The browser
-renderer receives a frame independently of how it was acquired. There is no
-simulator object, plotting backend object, or Python callback in the scene.
+`ServiceSource` is an explicit `?service=1` alternative for the existing same-origin
+Python WPR1 API. The service remains loopback-only and does not render. It depends
+only on NumPy/h5py; there is no simulator dependency in either file-reading path.
+The renderer receives typed frames independently of how they were acquired.
 
 `web/src/renderer.ts` implements instanced camera-facing quads, circular coverage,
 3D sphere surface depth, palette lookup, normalization, and physical marker
@@ -61,10 +67,23 @@ Playback never tries to catch up by queuing timestep requests. Manual seeks and
 field/source changes cancel stale browser requests; already-started server reads
 may complete, with expensive server operations limited to three at a time.
 
-Historical diagnostics run independently in 16-frame batches (maximum API batch
-32); a missing current-frame diagnostic is requested separately. Browser history
-is deduplicated by frame index. Long recordings still require reading dynamic
-arrays to calculate diagnostics, and complete history storage is O(frame count).
+Historical diagnostics run in bounded eight-frame batches; current-frame reads
+have priority. Each worker has a single in-flight operation and a priority queue.
+Aborting discards queued work and rejects the caller immediately; a synchronous
+HDF5 read already running can finish before the next operation starts. Stale
+responses cannot replace a newer frame. Display buffers are copied before being
+transferred, preserving the raw cache. Large JS preparation/GPU upload still
+runs on the main thread.
+
+Pressure probes sample current frames automatically. An explicit scan calculates
+all configured probes in four-frame batches with lower priority, cancellation,
+and generation invalidation when a definition or source changes. Click targets
+carry recorded frame indices; seeking does not infer indices from uniform dt.
+No-pressure/dry samples are null and Plotly does not connect gaps. Definitions
+use fixed stored coordinates; IDW (1/r²) and nearest-neighbour within a finite
+radius are approximate sampling choices, not solver-kernel reconstruction.
+Histories cost O(probes × frames × particles) work and O(probes × frames) storage.
+All current histories and definitions live only in the tab session.
 
 A later live source can provide metadata and requested numerical snapshots to
 this boundary. It will need explicit pending-capture/owned-snapshot semantics,

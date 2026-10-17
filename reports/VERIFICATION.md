@@ -1,4 +1,4 @@
-# Initial trajectory viewer verification
+# Trajectory viewer verification
 
 Verified locally on 2026-10-17. This is an initial recorded-particle viewer, not
 completion of the longer visualization roadmap.
@@ -10,7 +10,9 @@ completion of the longer visualization roadmap.
   populations with stale metadata, missing quantities, NPZ measurement times,
   explicit frame-index fallback, nonfinite positions, nested state layouts,
   aligned binary encoding, and loopback HTTP round trips/origin restrictions.
-- Four TypeScript checks cover fluid-only and logarithmic limits, constant and
+- Thirteen TypeScript checks cover browser HDF5 frame slicing (gzip chunks), NPZ
+  numeric parsing and ordering, browser analytical sources, pressure interpolation
+  and dry-region gaps, and chart frame-index mapping, as well as fluid-only and logarithmic limits, constant and
   invalid ranges, vector components/magnitudes, and binary decoding with exact
   IDs above JavaScript's safe-integer limit and truncated-array rejection. Diagnostic histories also preserve unloaded and invalid gaps instead of drawing interpolated lines through them.
 - TypeScript compilation and the Vite production build pass. Vite warns that the
@@ -50,9 +52,9 @@ repositories were used read-only. Their recordings are not included here.
 
 ## Known limits
 
-- WebGL2 only; WebGPU, workers for decoding/rendering, and background GPU upload
-  are not yet implemented. Large frame preparation currently uses the browser
-  main thread and can interrupt interaction.
+- WebGL2 only; WebGPU and worker-side rendering/GPU upload are not yet implemented.
+  File decoding, diagnostic scans, and pressure histories run in workers. Display
+  preparation and GPU upload still use the main thread and can interrupt interaction.
 - No SPH grid interpolation, volumes, streamlines, surface reconstruction, linked
   panels, or numerical spatial axis tick labels yet.
 - Float32 display buffers limit coordinate/value precision; source diagnostics
@@ -76,3 +78,16 @@ repositories were used read-only. Their recordings are not included here.
 - This preview is installed from source; frontend assets are not packaged in a
   distributable Python wheel yet. Browser settings/source registrations are
   session-local and are not restored after restarting or reloading the service.
+
+## Static browser milestone
+
+The production build was also served under `/warpSPHRemote/` with Python's plain
+static HTTP server and **no API service**. The browser opened a local 100,000-
+particle HDF5 recording through its real file chooser and rendered it, confirming
+WORKERFS access and subpath worker loading. The built-in pressure field supports
+current-point sampling and complete histories without Python.
+
+See [browser formats and limitations](BROWSER_FILES.md). The app's browser sources
+are the default; Python API mode now requires `?service=1`. The local simulator
+repositories are unmodified. The optional demo generator requires their environment
+only to generate recordings, never to use or develop the viewer.

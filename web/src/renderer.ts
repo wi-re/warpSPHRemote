@@ -80,6 +80,7 @@ export class ParticleRenderer {
   geometry = new THREE.InstancedBufferGeometry();
   texture = new THREE.DataTexture(paletteBytes("viridis"), 256, 1);
   grid = new THREE.Group();
+  probeMarkers = new THREE.Group();
   frame: Frame | null = null;
   source: Source | null = null;
   options: ViewOptions | null = null;
@@ -148,7 +149,7 @@ export class ParticleRenderer {
     });
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
-    this.scene.add(this.mesh, this.grid);
+    this.scene.add(this.mesh, this.grid, this.probeMarkers);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.screenSpacePanning = true;
@@ -207,6 +208,50 @@ export class ParticleRenderer {
           THREE.DynamicDrawUsage,
         ),
       );
+  }
+  setProbes(probes: { position: number[]; radius: number }[]) {
+    for (const child of [...this.probeMarkers.children]) {
+      const line = child as THREE.LineSegments;
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+      this.probeMarkers.remove(child);
+    }
+    probes.forEach((p, i) => {
+      const center = [...p.position, 0].slice(0, 3),
+        points: number[] = [],
+        size = this.span * 0.009;
+      for (let c = 0; c < (this.source?.dimension ?? 2); c++) {
+        const a = [...center],
+          b = [...center];
+        a[c] -= size;
+        b[c] += size;
+        points.push(...a, ...b);
+      }
+      if (this.source?.dimension === 2)
+        for (let j = 0; j < 64; j++) {
+          for (const k of [j, j + 1])
+            points.push(
+              center[0] + p.radius * Math.cos((k * Math.PI) / 32),
+              center[1] + p.radius * Math.sin((k * Math.PI) / 32),
+              center[2],
+            );
+        }
+      const line = new THREE.LineSegments(
+        new THREE.BufferGeometry().setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(points, 3),
+        ),
+        new THREE.LineBasicMaterial({
+          color: ["#75ddba", "#e6b873", "#91aafa", "#e78aab"][i],
+          depthTest: false,
+          transparent: true,
+          opacity: 0.9,
+        }),
+      );
+      line.renderOrder = 100;
+      this.probeMarkers.add(line);
+    });
+    this.dirty = true;
   }
   setFrame(frame: Frame, source: Source, field: string, options: ViewOptions) {
     const changed = this.source?.id !== source.id;
@@ -478,6 +523,7 @@ export class ParticleRenderer {
         (o.material as THREE.Material).dispose();
       }
     });
+    this.setProbes([]);
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

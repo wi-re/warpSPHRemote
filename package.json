@@ -9,6 +9,8 @@
     "test": "node --import tsx --test --test-isolation=none tests/*.test.ts"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
+    "h5wasm": "^0.10.3",
     "lucide-react": "^0.468.0",
     "plotly.js-basic-dist-min": "^3.1.0",
     "react": "^19.2.0",

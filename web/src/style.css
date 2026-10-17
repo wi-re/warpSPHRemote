@@ -1457,3 +1457,136 @@ kbd {
     display: block;
   }
 }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+}
+.file-picker-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 27px;
+  border: 1px dashed #638979;
+  border-radius: 8px;
+  background: #233b32;
+  color: var(--mint);
+}
+.file-picker-zone strong {
+  font-size: 14px;
+}
+.file-picker-zone span {
+  color: #aac0b4;
+  font-size: 11px;
+}
+.folder-button {
+  margin-top: 17px;
+}
+.file-drop-overlay {
+  position: fixed;
+  inset: 10px;
+  z-index: 200;
+  background: #183029ed;
+  border: 2px dashed var(--mint);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 20px;
+  pointer-events: none;
+  color: var(--mint);
+}
+.file-drop-overlay strong {
+  font-size: 25px;
+  font-weight: 500;
+}
+.file-drop-overlay span {
+  font-size: 12px;
+  color: #c2d9cd;
+}
+.service-details {
+  margin-top: 20px;
+  color: #91a8b8;
+  font-size: 10px;
+}
+.service-details form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.pressure-controls .section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.pressure-controls select {
+  width: 100%;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--border);
+  padding: 7px;
+  border-radius: 5px;
+  font: inherit;
+  min-width: 0;
+}
+.pressure-controls .probe-title select {
+  width: calc(100% - 24px);
+}
+.probe-coordinates {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0 5px;
+}
+.probe-coordinates label {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted);
+  font-size: 10px;
+}
+.pressure-controls input {
+  box-sizing: border-box;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: inherit;
+  padding: 6px;
+  border-radius: 4px;
+  min-width: 0;
+  font: inherit;
+}
+.probe-radius {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 11px;
+}
+.probe-radius input {
+  width: 95px;
+  margin-left: auto;
+}
+.pressure-controls .secondary-button {
+  width: 100%;
+  font-size: 11px;
+}
+.pressure-controls .text-button {
+  font-size: 10px;
+  color: var(--mint);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.pressure-controls .subtle-note {
+  line-height: 1.6;
+}
