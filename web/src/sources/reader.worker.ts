@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { tracePosition } from "./traces";
 import {
   DemoSource,
   displayFrame,
@@ -104,7 +105,26 @@ self.onmessage = async (event: MessageEvent) => {
         rows.push({
           index: i,
           time: source.times[i],
-          values: samplePressures(await read(i, "pressures"), args.probes),
+          values: samplePressures(
+            await read(i, "pressures"),
+            args.probes,
+            source.domain,
+          ),
+        });
+      }
+      result = rows;
+    } else if (operation === "trace") {
+      const rows = [];
+      for (
+        let i = args.start;
+        i < Math.min(args.start + args.count, source.times.length);
+        i++
+      ) {
+        source.checkIndex(i);
+        rows.push({
+          index: i,
+          time: source.times[i],
+          position: tracePosition(await read(i, "UIDs"), args.uid),
         });
       }
       result = rows;

@@ -9,7 +9,7 @@ control hooks, live subscriptions, or cloud services in this milestone.
 ## Components
 
 `web/src/sources/client.ts` defines the trajectory-source interface used by the UI:
-metadata, requested frame, diagnostic batch, probe batch, and close. The default
+metadata, requested frame, diagnostic batch, probe batch, UID trace batch, and close. The default
 `BrowserSource` creates one module worker per recording. Opening a local file
 passes a browser `File` handle to that worker; it never sends its contents to an
 HTTP endpoint. The two analytical sources use this same worker path.
@@ -82,6 +82,12 @@ carry recorded frame indices; seeking does not infer indices from uniform dt.
 No-pressure/dry samples are null and Plotly does not connect gaps. Definitions
 use fixed stored coordinates; IDW (1/r²) and nearest-neighbour within a finite
 radius are approximate sampling choices, not solver-kernel reconstruction.
+UID traces scan four-frame batches for an exact ID, preserving unwrapped
+positions and gaps when the ID is absent. Renderer-only periodic mapping applies
+to typed display buffers; pressure queries use minimum-image distances. Domain
+metadata is explicit, never inferred from observed extents. Wrapped traces split
+at seams. Trace targets persist while playback changes the centered frame window.
+
 Histories cost O(probes × frames × particles) work and O(probes × frames) storage.
 All current histories and definitions live only in the tab session.
 
@@ -106,5 +112,5 @@ Clipping is a particle visibility operation, not SPH field reconstruction.
 
 Browser-side SPH interpolation and coverage masks, grid/volume rendering,
 streamlines, reconstructed surfaces, arbitrary clipping planes, linked multi-view
-layouts, temporal particle tracking, accurate data-space axis ticks, colorbar-
+layouts, multi-particle temporal tracking, accurate data-space axis ticks, colorbar-
 inclusive publication exports, and a WebGPU backend remain separate work items.

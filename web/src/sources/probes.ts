@@ -1,3 +1,4 @@
+import { spatialDifference, type Domain } from "../spatial";
 import type { RawFrame } from "./core";
 export interface PressureProbe {
   id: string;
@@ -18,6 +19,7 @@ export interface ProbeSample {
 export function samplePressures(
   frame: RawFrame,
   probes: PressureProbe[],
+  domain?: Domain,
 ): Record<string, number | null> {
   const p = frame.positions,
     pressure = frame.pressures,
@@ -48,7 +50,13 @@ export function samplePressures(
         if (!Number.isFinite(value)) continue;
         let d2 = 0;
         for (let c = 0; c < dim; c++)
-          d2 += (Number(p.data[i * dim + c]) - probe.position[c]) ** 2;
+          d2 +=
+            spatialDifference(
+              Number(p.data[i * dim + c]),
+              probe.position[c],
+              c,
+              domain,
+            ) ** 2;
         if (!Number.isFinite(d2) || d2 > radius2) continue;
         if (d2 === 0) {
           nearest = 0;

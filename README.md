@@ -106,8 +106,15 @@ are explicitly identified as such; particle selection is confined to one frame.
   histories, and click-to-seek curves. Choose nearest fluid value or approximate
   inverse-distance weighting within a radius. No nearby fluid means a gap.
   Coordinates and radius use recorded units; no pressure is inferred from density.
-  Sampling uses stored coordinates without periodic wrapping or tank-motion transforms.
-  Probes and histories are session-local; live acquisition and history export remain future work.
+  Sampling uses fixed stored coordinates; no tank-motion transform is inferred.
+  Periodic domains use minimum-image distances. Probes and histories are session-local; live acquisition and history export remain future work.
+- Optional per-particle UID trace with separate past/future recorded-frame windows.
+  Enable **Show trace for picked UID**, then click a particle. Past and future
+  segments use different colors; missing identities and periodic seam crossings
+  break the line. The target UID persists when stepping or seeking.
+- Viewer-side periodic coordinate mapping from explicit domain metadata. Toggle
+  **Wrap display coordinates** to compare wrapped and original coordinates.
+  Recording arrays and trace samples remain unwrapped and unchanged.
 - PNG export of the GPU scene. The exported canvas does **not** currently include
   HTML labels, the colorbar, or the diagnostics chart.
 

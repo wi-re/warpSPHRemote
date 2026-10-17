@@ -10,7 +10,7 @@ completion of the longer visualization roadmap.
   populations with stale metadata, missing quantities, NPZ measurement times,
   explicit frame-index fallback, nonfinite positions, nested state layouts,
   aligned binary encoding, and loopback HTTP round trips/origin restrictions.
-- Thirteen TypeScript checks cover browser HDF5 frame slicing (gzip chunks), NPZ
+- Seventeen TypeScript checks cover browser HDF5 frame slicing (gzip chunks), NPZ
   numeric parsing and ordering, browser analytical sources, pressure interpolation
   and dry-region gaps, and chart frame-index mapping, as well as fluid-only and logarithmic limits, constant and
   invalid ranges, vector components/magnitudes, and binary decoding with exact
@@ -91,3 +91,28 @@ See [browser formats and limitations](BROWSER_FILES.md). The app's browser sourc
 are the default; Python API mode now requires `?service=1`. The local simulator
 repositories are unmodified. The optional demo generator requires their environment
 only to generate recordings, never to use or develop the viewer.
+
+The static probe UI generated all 121 analytical samples. Clicking sample 60
+(t=3) selected recorded index 60 (frame 61), and the current pressure updated to
+0.20079. A real KHH file with 65,536 particles and 161 compressed frames also
+opened through the static picker; seeking the final frame and changing to
+density worked. Browser console checks returned no warnings/errors. Pressure
+histories retained gaps after particles left a fixed probe's sampling region.
+
+GitHub Pages was enabled with HTTPS and deployed via the committed workflow.
+Both CI and an explicitly dispatched Pages workflow passed for commit b4fb4b5.
+The public `https://fluids.dev/warpSPHRemote/` page loaded its analytical source.
+
+Periodic mapping tests cover negative coordinates, multiple box crossings, mixed
+periodicity and preservation of input coordinates. Trace tests follow exact UIDs
+above 2^53 across row reordering, retain original unwrapped positions, and break
+missing-ID and seam segments. HDF5 domain tests cover stacked datasets and native
+nested config list attributes; pressure tests cover minimum-image queries.
+
+In the static browser build, picking KHH UID 33151 at recorded frame index 80
+retained its raw X=-0.50141 while displaying it in the periodic unit box. A
+10-past / 30-future window produced 41 recorded positions. Stepping retained the
+target UID and recentered the window; toggling wrapped/unwrapped views remapped
+the scene without changing its scalar values. No console warnings/errors were
+returned during these checks. The trace uses the available recorded sample rate,
+not hidden simulator steps.

@@ -1,3 +1,4 @@
+import type { Domain } from "../spatial";
 import type { Diagnostic, Frame, NumericArray, Source } from "../types";
 export type RawNumeric =
   | Float32Array
@@ -56,6 +57,7 @@ export abstract class RawSource {
   name = "";
   format = "";
   times: number[] = [];
+  domain?: Domain;
   timeKind: Source["timeKind"] = "simulation";
   constructor(public id: string) {}
   abstract read(index: number, field?: string): RawFrame | Promise<RawFrame>;
@@ -63,6 +65,8 @@ export abstract class RawSource {
     const f = validateRaw(await this.read(0)),
       p = f.positions,
       dim = p.shape[1] as 2 | 3;
+    if (this.domain && this.domain.min.length !== dim)
+      throw new Error("Domain dimension does not match particle positions.");
     if (
       !this.times.length ||
       this.times.some((t) => !Number.isFinite(t)) ||
@@ -86,6 +90,7 @@ export abstract class RawSource {
       timeKind: this.timeKind,
       dimension: dim,
       bounds: [lo, hi],
+      domain: this.domain,
       identity: f.UIDs ? "UIDs" : "unavailable",
       fields: Object.entries(f)
         .filter(([name]) => name !== "positions")

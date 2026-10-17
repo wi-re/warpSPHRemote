@@ -60,6 +60,10 @@ def main():
             arrays[name] = tensor.detach().cpu().numpy()
             if not np.isfinite(arrays[name]).all():
                 raise RuntimeError(f'Nonfinite {name} at t={t}')
+        if count == 0:
+            domain = output.create_group('domain')
+            for name in ('min', 'max', 'periodic'):
+                domain.create_dataset(name, data=getattr(ctx.config.domain, name).detach().cpu().numpy())
         for name in ('UIDs', 'kinds', 'masses'):
             data = getattr(s, name).detach().cpu().numpy()
             if count == 0:

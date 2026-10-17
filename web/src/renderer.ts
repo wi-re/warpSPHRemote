@@ -1,3 +1,5 @@
+import { mappedCoordinate, mappedPosition } from "./spatial";
+import { traceSegments, type TraceSample } from "./sources/traces";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { paletteBytes } from "./palettes";
@@ -81,6 +83,7 @@ export class ParticleRenderer {
   texture = new THREE.DataTexture(paletteBytes("viridis"), 256, 1);
   grid = new THREE.Group();
   probeMarkers = new THREE.Group();
+  traceLines = new THREE.Group();
   frame: Frame | null = null;
   source: Source | null = null;
   options: ViewOptions | null = null;
@@ -149,7 +152,7 @@ export class ParticleRenderer {
     });
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
-    this.scene.add(this.mesh, this.grid, this.probeMarkers);
+    this.scene.add(this.mesh, this.grid, this.probeMarkers, this.traceLines);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.screenSpacePanning = true;
@@ -217,7 +220,14 @@ export class ParticleRenderer {
       this.probeMarkers.remove(child);
     }
     probes.forEach((p, i) => {
-      const center = [...p.position, 0].slice(0, 3),
+      const center = [
+          ...mappedPosition(
+            p.position,
+            this.source?.domain,
+            this.options?.wrapPeriodic,
+          ),
+          0,
+        ].slice(0, 3),
         points: number[] = [],
         size = this.span * 0.009;
       for (let c = 0; c < (this.source?.dimension ?? 2); c++) {
@@ -253,6 +263,67 @@ export class ParticleRenderer {
     });
     this.dirty = true;
   }
+  setTrace(rows: TraceSample[], current: number) {
+    for (const child of [...this.traceLines.children]) {
+      const line = child as THREE.LineSegments;
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+      this.traceLines.remove(child);
+    }
+    const paths = traceSegments(
+      rows,
+      current,
+      this.source?.domain,
+      this.options?.wrapPeriodic,
+    );
+    for (const [name, points] of Object.entries(paths)) {
+      if (!points.length) continue;
+      const line = new THREE.LineSegments(
+        new THREE.BufferGeometry().setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(points, 3),
+        ),
+        new THREE.LineBasicMaterial({
+          color: name === "past" ? "#75ddba" : "#e6b873",
+          depthTest: false,
+          transparent: true,
+          opacity: 0.95,
+        }),
+      );
+      line.renderOrder = 90;
+      this.traceLines.add(line);
+    }
+    const currentPoint = rows.find((r) => r.index === current)?.position;
+    if (currentPoint) {
+      const center = [
+          ...mappedPosition(
+            currentPoint,
+            this.source?.domain,
+            this.options?.wrapPeriodic,
+          ),
+          0,
+        ].slice(0, 3),
+        points: number[] = [],
+        size = this.span * 0.006;
+      for (let c = 0; c < (this.source?.dimension ?? 2); c++) {
+        const a = [...center],
+          b = [...center];
+        a[c] -= size;
+        b[c] += size;
+        points.push(...a, ...b);
+      }
+      const marker = new THREE.LineSegments(
+        new THREE.BufferGeometry().setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(points, 3),
+        ),
+        new THREE.LineBasicMaterial({ color: "#ffffff", depthTest: false }),
+      );
+      marker.renderOrder = 95;
+      this.traceLines.add(marker);
+    }
+    this.dirty = true;
+  }
   setFrame(frame: Frame, source: Source, field: string, options: ViewOptions) {
     const changed = this.source?.id !== source.id;
     this.frame = frame;
@@ -265,7 +336,12 @@ export class ParticleRenderer {
       centers = new Float32Array(n * 3);
     for (let i = 0; i < n; i++)
       for (let c = 0; c < dim; c++)
-        centers[i * 3 + c] = Number(p.data[i * dim + c]);
+        centers[i * 3 + c] = mappedCoordinate(
+          Number(p.data[i * dim + c]),
+          c,
+          source.domain,
+          options.wrapPeriodic,
+        );
     const radius = new Float32Array(n),
       kind = new Float32Array(n),
       indices = new Float32Array(n);
@@ -299,6 +375,13 @@ export class ParticleRenderer {
       point.fromArray(centers, i * 3);
       this.bounds.expandByPoint(point);
     }
+    if (options.wrapPeriodic && source.domain)
+      source.domain.periodic.forEach((periodic, c) => {
+        if (periodic) {
+          this.bounds.min.setComponent(c, source.domain!.min[c]);
+          this.bounds.max.setComponent(c, source.domain!.max[c]);
+        }
+      });
     if (changed) {
       this.selected = -1;
       this.buildGrid();
@@ -308,6 +391,18 @@ export class ParticleRenderer {
   }
   setOptions(options: ViewOptions, force = false) {
     const old = this.options;
+    if (
+      this.frame &&
+      this.source &&
+      old &&
+      old.wrapPeriodic !== options.wrapPeriodic
+    ) {
+      this.options = { ...options };
+      this.setFrame(this.frame, this.source, this.field, options);
+      this.buildGrid();
+      this.fit();
+      return;
+    }
     if (
       this.frame &&
       (force ||
@@ -523,6 +618,7 @@ export class ParticleRenderer {
         (o.material as THREE.Material).dispose();
       }
     });
+    this.setTrace([], 0);
     this.setProbes([]);
     this.renderer.dispose();
     this.renderer.domElement.remove();

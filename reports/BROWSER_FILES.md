@@ -10,6 +10,9 @@ There is no upload endpoint, CDN fetch, or simulator import in the default flow.
 For fixed row identity, use:
 
 ```
+/domain/min                   float64 [D]  # optional explicit box
+/domain/max                   float64 [D]
+/domain/periodic              uint8   [D]  # 0/1 per axis
 /time                         float64 [T]
 /particles/UIDs               int64   [N]
 /particles/kinds              int32   [N]
@@ -55,6 +58,29 @@ frame buffers, temporary decompression memory, HDF5 WASM memory and GPU buffers
 still matter. Browser process limits and frame size are practical constraints;
 chunking cannot make an individual enormous frame free. WASM memory may retain
 its high-water mark until closing the recording terminates the worker.
+
+## Periodic display and particle traces
+
+Coordinates are read and retained exactly as recorded. The renderer wraps only
+its display buffers on periodic axes, using `/domain/{min,max,periodic}`. Native
+`config/config/domain` list attributes and `config/domain` datasets are also
+understood. NPZ can provide `domain_min`, `domain_max`, and `periodic` arrays in
+the first snapshot. Bounds are never guessed from particle extents. Missing
+metadata leaves coordinates unwrapped. The inspector exposes a display toggle;
+changing it remaps the scene and refits the camera. Scalar fields and diagnostics
+are unchanged. Pressure probes use minimum-image distances in declared periodic
+axes independently of the display toggle.
+
+The picked UID can be traced over n past and m future **recorded frames**, clipped
+to available data (each control allows 0–1000). This is one selected UID at a time.
+Each source-frame lookup uses the exact UID, rather than assuming stable row
+indices. Worker batches are cancellable and lower priority than scene reads;
+changing source, UID, window or frame invalidates stale results. Original unwrapped
+positions are retained in trace samples. Past/future colors are distinct. Missing
+UIDs create gaps, and a wrapped trace omits the segment spanning a periodic seam
+rather than drawing a jump across the box. The unwrapped display draws original
+continuous segments; there is no temporal interpolation or invented motion between
+exports. A white marker indicates the current position when it is present.
 
 ## Hosting
 

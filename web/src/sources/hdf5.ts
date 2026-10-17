@@ -1,3 +1,4 @@
+import { domainFrom } from "../spatial";
 import type * as H5 from "h5wasm";
 import {
   RawSource,
@@ -52,6 +53,27 @@ export class HDF5Source extends RawSource {
       throw new Error(
         "Unsupported HDF5 layout. Expected positions/frame_*, states/*, state/positions, or frames/positions[T,N,D].",
       );
+    const domainVector = (path: string): number[] | null => {
+      const entity = this.entry(path);
+      if (entity instanceof api.Dataset)
+        return Array.from(this.numeric(entity).data, Number);
+      if (entity instanceof api.Group) {
+        const keys = Object.keys(entity.attrs)
+          .filter((k) => /^item_\d+$/.test(k))
+          .sort(naturalCompare);
+        if (keys.length) return keys.map((k) => Number(entity.attrs[k].value));
+      }
+      return null;
+    };
+    for (const path of ["domain", "config/domain", "config/config/domain"]) {
+      const min = domainVector(`${path}/min`),
+        max = domainVector(`${path}/max`),
+        periodic = domainVector(`${path}/periodic`);
+      if (min && max && periodic) {
+        this.domain = domainFrom(min, max, periodic);
+        break;
+      }
+    }
     if (this.layout === "stacked") {
       const ds = this.entry(this.dynamicPath("positions")) as H5.Dataset,
         n = ds.shape![0],

@@ -1,3 +1,4 @@
+import { useParticleTrace, TraceControls } from "./ParticleTrace";
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
@@ -131,6 +132,7 @@ export default function App() {
     [metric, setMetric] = useState<
       "kineticEnergy" | "maxSpeed" | "meanDensity" | "pressure"
     >("kineticEnergy");
+  const [traceUid, setTraceUid] = useState("");
   const [selected, setSelected] = useState(-1),
     [renderMs, setRenderMs] = useState(0),
     [fetchMs, setFetchMs] = useState(0),
@@ -157,6 +159,7 @@ export default function App() {
     setIndex(0);
     setFrame(null);
     setSelected(-1);
+    setTraceUid("");
     setError("");
     setRows([]);
     setField(
@@ -210,7 +213,11 @@ export default function App() {
     try {
       const e = new ParticleRenderer(host.current);
       engine.current = e;
-      e.onPick = setSelected;
+      e.onPick = (i) => {
+        setSelected(i);
+        if (i >= 0 && e.frame?.arrays.UIDs)
+          setTraceUid(String(e.frame.arrays.UIDs.data[i]));
+      };
       e.onRender = (ms) => {
         setRenderMs(ms);
         setAxes(e.axes());
@@ -495,9 +502,16 @@ export default function App() {
     source,
     index,
   );
+  const trace = useParticleTrace(
+    registry.current.get(sourceId),
+    source,
+    index,
+    traceUid,
+  );
   useEffect(() => {
     engine.current?.setProbes(pressure.probes);
-  }, [pressure.probes, frame]);
+    engine.current?.setTrace(trace.rows, index);
+  }, [pressure.probes, trace.rows, frame, index, options.wrapPeriodic]);
   const hasMetric =
     metric !== "pressure" && rows.some((r) => r[metric] !== null);
   const fixedError =
@@ -1182,6 +1196,23 @@ export default function App() {
               <span>INSPECTOR</span>
               <Target size={15} />
             </div>
+            {source?.domain?.periodic.some(Boolean) && (
+              <section className="inspector-section">
+                <div className="section-heading">PERIODIC DOMAIN</div>
+                <div className="label-row">
+                  <span>Wrap display coordinates</span>
+                  <Toggle
+                    label="Wrap periodic coordinates"
+                    value={options.wrapPeriodic}
+                    onChange={(v) => setOption("wrapPeriodic", v)}
+                  />
+                </div>
+                <p className="subtle-note">
+                  Display mapping only. Stored coordinates and UID traces retain
+                  their original unwrapped values.
+                </p>
+              </section>
+            )}
             <section className="inspector-section">
               <div className="section-heading">CURRENT FRAME</div>
               <div className="metric-large">
@@ -1265,6 +1296,12 @@ export default function App() {
                 )}
               </section>
             )}
+            <TraceControls
+              trace={trace}
+              uid={traceUid}
+              supported={source?.identity === "UIDs"}
+              onClear={() => setTraceUid("")}
+            />
             <PressureControls
               controller={pressure}
               selectedPosition={selectedPosition}

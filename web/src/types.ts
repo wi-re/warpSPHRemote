@@ -1,3 +1,4 @@
+import type { Domain } from "./spatial";
 export type NumericArray = Float32Array | Int32Array | BigInt64Array;
 export interface Field {
   name: string;
@@ -15,6 +16,7 @@ export interface Source {
   fields: Field[];
   bounds: number[][];
   identity: string;
+  domain?: Domain;
 }
 export interface Frame {
   index: number;
@@ -32,6 +34,7 @@ export interface Diagnostic {
 }
 export type Mapping = "magnitude" | "x" | "y" | "z";
 export interface ViewOptions {
+  wrapPeriodic: boolean;
   palette: string;
   mapping: Mapping;
   normalization: "linear" | "log" | "symlog";
@@ -48,6 +51,7 @@ export interface ViewOptions {
   clip: number;
 }
 export const initialOptions: ViewOptions = {
+  wrapPeriodic: true,
   palette: "viridis",
   mapping: "magnitude",
   normalization: "linear",

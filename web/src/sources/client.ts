@@ -1,3 +1,4 @@
+import { tracePosition, type TraceSample } from "./traces";
 import {
   samplePressures,
   type PressureProbe,
@@ -19,6 +20,12 @@ export interface TrajectorySource {
     probes: PressureProbe[],
     signal?: AbortSignal,
   ): Promise<ProbeSample[]>;
+  trace(
+    start: number,
+    count: number,
+    uid: string,
+    signal?: AbortSignal,
+  ): Promise<TraceSample[]>;
   close(): void;
 }
 interface Job {
@@ -145,6 +152,9 @@ export class BrowserSource implements TrajectorySource {
       signal,
     );
   }
+  trace(start: number, count: number, uid: string, signal?: AbortSignal) {
+    return this.call<TraceSample[]>("trace", { start, count, uid }, 3, signal);
+  }
   close() {
     this.fail(new DOMException("Recording closed", "AbortError"));
   }
@@ -181,7 +191,23 @@ export class ServiceSource implements TrajectorySource {
       rows.push({
         index: i,
         time: frame.time,
-        values: samplePressures(frame.arrays, probes),
+        values: samplePressures(frame.arrays, probes, this.metadata.domain),
+      });
+    }
+    return rows;
+  }
+  async trace(start: number, count: number, uid: string, signal?: AbortSignal) {
+    const rows: TraceSample[] = [];
+    for (
+      let i = start;
+      i < Math.min(start + count, this.metadata.frames);
+      i++
+    ) {
+      const frame = await this.frame(i, "UIDs", signal);
+      rows.push({
+        index: i,
+        time: frame.time,
+        position: tracePosition(frame.arrays, uid),
       });
     }
     return rows;

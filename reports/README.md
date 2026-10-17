@@ -62,3 +62,17 @@ semantics can finish just short of tLimit. No interpolation or resampling is use
 `summary.json`, `caseSpec.json`, and per-step `diagnostics.json` document each run.
 A divergence or stop reason fails the command and must be inspected before using
 the recording. These are visualization demos, not new physical validation.
+
+For a smaller export at a chosen cadence, copy selected **unmodified** captured
+states with `prepare_demo_recording.py`; the input remains untouched and domain
+metadata is retained. This also removes captures that straddle an export threshold
+due to floating-point rounding. No coordinate transform or temporal interpolation
+is applied:
+
+```bash
+python examples/prepare_demo_recording.py /path/to/raw/trajectory.h5 \
+  /path/to/warpSPHDevelopment/remote/new-run/demo.h5 --interval 0.025
+```
+
+This finalization needs only NumPy and h5py. Periodic coordinate mapping belongs
+to the visualizer; recordings intentionally keep unwrapped positions.

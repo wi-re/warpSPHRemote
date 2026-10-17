@@ -1,3 +1,4 @@
+import { domainFrom } from "../spatial";
 import { unzipSync } from "fflate";
 import {
   RawSource,
@@ -114,6 +115,17 @@ export class NPZSource extends RawSource {
       );
   }
   async initialize(selected: File[]) {
+    const geometry = await readNPZ(
+      this.files[0],
+      new Set(["domain_min", "domain_max", "periodic"]),
+    );
+    if (geometry.domain_min && geometry.domain_max && geometry.periodic)
+      this.domain = domainFrom(
+        Array.from(geometry.domain_min.data, Number),
+        Array.from(geometry.domain_max.data, Number),
+        Array.from(geometry.periodic.data, Number),
+      );
+
     const measurement = selected.find((f) => f.name === "measurements.json"),
       byStep = new Map<number, number>();
     if (measurement) {

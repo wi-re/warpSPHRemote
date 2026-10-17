@@ -163,6 +163,10 @@ test("HDF5 reader slices compressed stacked frames and reads stored diagnostics"
       data: new BigInt64Array([2n ** 54n + 1n, 2n, 3n]),
     });
     file.create_dataset({ name: "time", data: new Float64Array([0.2, 0.7]) });
+    const domain = file.create_group("domain");
+    domain.create_dataset({ name: "min", data: new Float64Array([0, -1]) });
+    domain.create_dataset({ name: "max", data: new Float64Array([1, 1]) });
+    domain.create_dataset({ name: "periodic", data: new Uint8Array([1, 0]) });
     const diag = file.create_group("diagnostics");
     for (const [name, data] of Object.entries({
       particles: [2, 2],
@@ -180,6 +184,11 @@ test("HDF5 reader slices compressed stacked frames and reads stored diagnostics"
       ),
       meta = await source.metadata();
     assert.deepEqual(meta.times, [0.2, 0.7]);
+    assert.deepEqual(meta.domain, {
+      min: [0, -1],
+      max: [1, 1],
+      periodic: [true, false],
+    });
     const raw = source.read(1, "velocities");
     assert.deepEqual(raw.positions.shape, [3, 2]);
     assert.equal(raw.positions.data[0], 3);
@@ -231,6 +240,18 @@ test("HDF5 legacy columns retain dynamic densities and fail stale metadata after
       name: "combinedDensities",
       data: new Float32Array([999, 999, 999]),
     });
+    const domain = file
+      .create_group("config")
+      .create_group("config")
+      .create_group("domain");
+    for (const [name, values] of Object.entries({
+      min: [0, 0],
+      max: [1, 1],
+      periodic: [1, 1],
+    })) {
+      const group = domain.create_group(name);
+      values.forEach((v, i) => group.create_attribute(`item_${i}`, v));
+    }
     file.close();
     const source = new HDF5Source(
       "legacy",
@@ -239,6 +260,11 @@ test("HDF5 legacy columns retain dynamic densities and fail stale metadata after
       h5,
     );
     assert.deepEqual(source.times, [0.2, 0.7]);
+    assert.deepEqual(source.domain, {
+      min: [0, 0],
+      max: [1, 1],
+      periodic: [true, true],
+    });
     assert.equal(source.read(0).densities.data[0], 1);
     assert.throws(() => source.read(1), /Particle count changed/);
     source.close();

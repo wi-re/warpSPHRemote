@@ -1590,3 +1590,21 @@ kbd {
 .pressure-controls .subtle-note {
   line-height: 1.6;
 }
+.trace-controls input[type="number"] {
+  width: 100%;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 6px;
+  border-radius: 4px;
+}
+.trace-enable {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0;
+  font-size: 11px;
+}
+.trace-enable input {
+  accent-color: var(--mint);
+}
