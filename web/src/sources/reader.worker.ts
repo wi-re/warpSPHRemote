@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { reconstructGrid, streamlines, type GridData } from "./grid";
 import { tracePosition } from "./traces";
 import {
   DemoSource,
@@ -12,6 +13,9 @@ import { NPZSource } from "./npz";
 import { HDF5Source } from "./hdf5";
 
 let source: RawSource | undefined;
+let hasSpecificEnergy = false,
+  hasVelocity = false;
+let gridCache: { key: string; grid: GridData } | undefined;
 const frames = new Map<string, RawFrame>();
 let cacheBytes = 0;
 async function read(index: number, field: string) {
@@ -66,7 +70,12 @@ self.onmessage = async (event: MessageEvent) => {
           source = npz;
         }
       }
-      result = await source.metadata();
+      const metadata = await source.metadata();
+      hasVelocity = metadata.fields.some((f) => f.name === "velocities");
+      hasSpecificEnergy = metadata.fields.some(
+        (f) => f.name === "internalEnergies",
+      );
+      result = metadata;
     } else if (!source) throw new Error("No recording is open.");
     else if (operation === "frame") {
       const frame = displayFrame(
@@ -88,10 +97,28 @@ self.onmessage = async (event: MessageEvent) => {
       ) {
         const recorded =
           source instanceof HDF5Source ? source.recordedDiagnostic(i) : null;
-        rows.push(
-          recorded ??
-            reduceDiagnostic(await read(i, "velocities"), i, source.times[i]),
-        );
+        if (recorded && (!hasSpecificEnergy || recorded.internalEnergy != null))
+          rows.push(recorded);
+        else {
+          let raw = await read(i, "velocities");
+          if (hasSpecificEnergy)
+            raw = {
+              ...raw,
+              internalEnergies: (await read(i, "internalEnergies"))
+                .internalEnergies,
+            };
+          const row = reduceDiagnostic(raw, i, source.times[i]);
+          const energy =
+            source instanceof HDF5Source
+              ? source.recordedInternalEnergy(i)
+              : null;
+          if (row.internalEnergy == null && energy != null) {
+            row.internalEnergy = energy;
+            row.totalEnergy =
+              row.kineticEnergy != null ? row.kineticEnergy + energy : null;
+          }
+          rows.push(row);
+        }
       }
       result = rows;
     } else if (operation === "probes") {
@@ -128,6 +155,56 @@ self.onmessage = async (event: MessageEvent) => {
         });
       }
       result = rows;
+    } else if (operation === "grid") {
+      const key = JSON.stringify([
+        args.index,
+        args.field,
+        args.mapping,
+        args.settings,
+      ]);
+      let grid = gridCache?.key === key ? gridCache.grid : undefined;
+      if (!grid) {
+        let raw = await read(args.index, args.field);
+        if (!raw.velocities && hasVelocity)
+          raw = {
+            ...raw,
+            velocities: (await read(args.index, "velocities")).velocities,
+          };
+        grid = reconstructGrid(
+          raw,
+          source,
+          args.field,
+          args.mapping,
+          args.settings,
+          args.index,
+          source.times[args.index],
+        );
+        gridCache = { key, grid };
+      }
+      const lines = args.streams
+        ? streamlines(grid, args.streams, args.seed ? [args.seed] : undefined)
+        : new Float32Array();
+      const copy = {
+        ...grid,
+        values: grid.values.slice(),
+        velocity: grid.velocity.slice(),
+        coverage: grid.coverage.slice(),
+        velocityValid: grid.velocityValid.slice(),
+      };
+      result = {
+        grid: copy,
+        lines,
+        field: args.field,
+        mapping: args.mapping,
+        sourceId: source.id,
+      };
+      transfer = [
+        copy.values.buffer,
+        copy.velocity.buffer,
+        copy.coverage.buffer,
+        copy.velocityValid.buffer,
+        lines.buffer,
+      ];
     } else throw new Error("Unknown source operation.");
     self.postMessage({ id, result }, transfer);
   } catch (error) {

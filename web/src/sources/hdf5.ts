@@ -25,6 +25,9 @@ export class HDF5Source extends RawSource {
     super(id);
     this.name = name;
     this.format = "Local HDF5";
+    this.storedInternalEnergy = ["internalEnergy", "thermalEnergy"].some(
+      (name) => this.entry(`diagnostics/${name}`) instanceof api.Dataset,
+    );
     const positions = this.entry("positions"),
       stacked = this.entry("frames/positions");
     if (stacked instanceof api.Dataset && stacked.shape?.length === 3) {
@@ -264,6 +267,7 @@ export class HDF5Source extends RawSource {
       const value = Number(this.numeric(ds, index).data[0]);
       row[name] = Number.isFinite(value) ? value : null;
     }
+    row.internalEnergy = this.recordedInternalEnergy(index);
     return row.particles === null
       ? null
       : {
@@ -271,9 +275,30 @@ export class HDF5Source extends RawSource {
           time: this.times[index],
           particles: row.particles,
           kineticEnergy: row.kineticEnergy,
+          internalEnergy: row.internalEnergy ?? null,
+          totalEnergy:
+            row.internalEnergy != null &&
+            row.kineticEnergy != null &&
+            Number.isFinite(row.internalEnergy + row.kineticEnergy)
+              ? row.internalEnergy + row.kineticEnergy
+              : null,
           maxSpeed: row.maxSpeed,
           meanDensity: row.meanDensity,
         };
+  }
+  recordedInternalEnergy(index: number): number | null {
+    for (const name of ["internalEnergy", "thermalEnergy"]) {
+      const ds = this.entry(`diagnostics/${name}`);
+      if (
+        ds instanceof this.api.Dataset &&
+        ds.shape?.length === 1 &&
+        ds.shape[0] === this.times.length
+      ) {
+        const value = Number(this.numeric(ds, index).data[0]);
+        return Number.isFinite(value) ? value : null;
+      }
+    }
+    return null;
   }
   close() {
     this.file.close();

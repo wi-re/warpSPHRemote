@@ -21,15 +21,21 @@ For fixed row identity, use:
 /frames/velocities            float32 [T,N,2 or 3]
 /frames/densities             float32 [T,N]
 /frames/pressures             float32 [T,N]
+/frames/internalEnergies      float32 [T,N]  # optional specific internal energy
 /frames/supports              float32 [T,N]
 /diagnostics/kineticEnergy     float64 [T]  # optional, fluid only
 /diagnostics/maxSpeed          float64 [T]  # optional, fluid only
 /diagnostics/meanDensity       float64 [T]  # optional, unweighted fluid mean
 /diagnostics/particles         int64   [T]  # optional, fluid count
+/diagnostics/internalEnergy    float64 [T]  # optional, sum(m*u), fluid only
+/diagnostics/totalEnergy       float64 [T]  # optional, kinetic + internal
 ```
 
-Optional diagnostics are used when all four arrays are present and match T.
-Otherwise the reader calculates them. Times must be finite and nondecreasing;
+The four base diagnostics are used when all four arrays are present and match T.
+Otherwise the reader calculates them. Global internal energy can be read
+independently; total is calculated as kinetic plus internal. Specific-energy
+arrays are used when global internal energy is absent. Missing or nonfinite
+energy remains unavailable. No EOS or unit-mass fallback is used. Times must be finite and nondecreasing;
 spatial datasets must be finite nonempty N×2 or N×3. Fields are discovered from
 the first frame. Units follow stored values; the UI currently does not interpret
 unit attributes. Particle pressure needs a scalar recorded array (`pressures`,
@@ -50,7 +56,13 @@ IDs, either endian. Object arrays/pickles and Fortran-order arrays are rejected.
 Each compressed NPZ snapshot is buffered and decompressed as a unit; HDF5 is
 preferable for very large recordings. If no physical time is present, NPZ uses an
 explicit frame-index axis. File selection (including optional measurements.json)
-is local and must be repeated after reload. Drag/drop supports files; select a
+is local. With **Remember last recording** enabled, one copy is stored in
+IndexedDB and automatically restored on reload, along with its frame/field.
+Opt-out and forget controls are in the open dialog. Saving is asynchronous;
+wait for “Saved for refresh” before reloading. Failure to save does not prevent
+viewing. Copies do not track later changes to the original files. Browser quota
+and eviction can remove them; this is session convenience, not archival storage.
+See [browser storage rules](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria). Drag/drop supports files; select a
 folder with the folder picker rather than dropping a directory.
 
 Worker memory is bounded for retained frames, not universally constant: decoded
@@ -110,3 +122,41 @@ live pressure history needs a separate simulation-side sampler or recording of
 all desired diagnostic times; reconstructing it from skipped display snapshots
 would silently lose pressure impacts. A browser disconnect must not erase that
 history. This acquisition work remains separate from file/probe rendering.
+
+## Grids and instantaneous streamlines
+
+2D only in this iteration. Reconstruction samples cell centers and scatters each
+fluid particle's compact-support kernel with volume m/rho. It uses Shepard
+normalization, sum(V W f)/sum(V W), with an explicit Wendland C2 or C4 kernel.
+The supports array is interpreted as the **cutoff radius**, matching warpSPH's
+convention. This is a viewer reconstruction, not a port of CRK corrections.
+Vectors are reconstructed before magnitude is calculated. Invalid field samples
+mask affected cells; invalid mass/density/support particles are excluded and
+counted. Coverage is the dimensionless raw sum(V W); the threshold is adjustable,
+not an exact geometric free-surface test. Boundaries/ghosts are not included in
+this fluid reconstruction, although they can remain visible as particles.
+
+For a declared periodic wrapped view, splats and velocity sampling respect the
+periodic axes. Unwrapped mode reconstructs original coordinates over current
+particle extents. Grid computations and streamline integration run in the browser
+reader worker. One reconstructed grid is cached independently of the small raw
+frame cache. A 40-million candidate-contribution cap rejects expensive requests
+with a suggestion to reduce resolution; it never silently truncates neighbours.
+The optional legacy Python-service mode computes the same reconstruction in the
+main thread after fetching arrays. Neither path currently uses WebGPU compute.
+
+Instantaneous streamlines use bilinear masked velocity samples and normalized
+midpoint/RK2 steps of 0.45 minimum cell width, up to 400 steps per direction, plus
+loop/stagnation/domain checks. All four interpolation cells must have valid
+velocity coverage. Regular seeds use 2–16 points per axis. A picked spatial seed
+stays fixed while stepping; it does not follow the UID. Wrapped lines omit seam
+segments rather than drawing chords. These curves are not time-dependent
+pathlines. Existing UID traces can be overlaid for comparison; richer material
+seeding, LIC and FTLE/LCS are tracked in [the roadmap](ROADMAP.md).
+
+Scalar grids are drawn with a WebGL float texture and the same LUT/normalization
+as particles. Texture sampling is nearest-cell; change grid resolution to study
+sampling effects. Auto color limits come from finite grid samples when the grid
+is shown, and the same limits apply to the particle overlay. Float32 graphics
+precision, coverage errors, sparse export times and reconstruction choices remain
+scientific limitations. No spatial derivative or LCS result is advertised yet.

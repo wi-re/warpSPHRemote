@@ -1,3 +1,9 @@
+import {
+  reconstructGrid,
+  streamlines,
+  type FieldQuery,
+  type FieldResult,
+} from "./grid";
 import { tracePosition, type TraceSample } from "./traces";
 import {
   samplePressures,
@@ -26,6 +32,7 @@ export interface TrajectorySource {
     uid: string,
     signal?: AbortSignal,
   ): Promise<TraceSample[]>;
+  grid(query: FieldQuery, signal?: AbortSignal): Promise<FieldResult>;
   close(): void;
 }
 interface Job {
@@ -155,6 +162,9 @@ export class BrowserSource implements TrajectorySource {
   trace(start: number, count: number, uid: string, signal?: AbortSignal) {
     return this.call<TraceSample[]>("trace", { start, count, uid }, 3, signal);
   }
+  grid(query: FieldQuery, signal?: AbortSignal) {
+    return this.call<FieldResult>("grid", query, 1, signal);
+  }
   close() {
     this.fail(new DOMException("Recording closed", "AbortError"));
   }
@@ -211,6 +221,38 @@ export class ServiceSource implements TrajectorySource {
       });
     }
     return rows;
+  }
+  async grid(query: FieldQuery, signal?: AbortSignal): Promise<FieldResult> {
+    const frame = await this.frame(query.index, query.field, signal);
+    if (
+      query.field !== "velocities" &&
+      this.metadata.fields.some((f) => f.name === "velocities")
+    )
+      frame.arrays.velocities = (
+        await this.frame(query.index, "velocities", signal)
+      ).arrays.velocities;
+    const grid = reconstructGrid(
+      frame.arrays,
+      this.metadata,
+      query.field,
+      query.mapping,
+      query.settings,
+      query.index,
+      frame.time,
+    );
+    return {
+      grid,
+      field: query.field,
+      mapping: query.mapping,
+      sourceId: this.metadata.id,
+      lines: query.streams
+        ? streamlines(
+            grid,
+            query.streams,
+            query.seed ? [query.seed] : undefined,
+          )
+        : new Float32Array(),
+    };
   }
   close() {}
 }

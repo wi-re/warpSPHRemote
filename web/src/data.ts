@@ -1,3 +1,4 @@
+import type { DiagnosticMetric } from "./types";
 import type { Diagnostic, Frame, Mapping, NumericArray } from "./types";
 
 export function decodeFrame(buffer: ArrayBuffer): Frame {
@@ -129,6 +130,7 @@ export const fieldLabel = (s: string) =>
     velocities: "Velocity",
     densities: "Density",
     pressures: "Pressure",
+    internalEnergies: "Specific internal energy",
     masses: "Mass",
     supports: "Kernel support",
     kinds: "Particle kind",
@@ -139,7 +141,7 @@ export const fieldLabel = (s: string) =>
 export function diagnosticSeries(
   times: number[],
   rows: Diagnostic[],
-  metric: "kineticEnergy" | "maxSpeed" | "meanDensity",
+  metric: DiagnosticMetric,
 ): (number | null)[] {
   const samples = new Map(rows.map((row) => [row.index, row[metric]]));
   return times.map((_, i) => samples.get(i) ?? null);

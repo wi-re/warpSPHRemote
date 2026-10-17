@@ -1,3 +1,15 @@
+import { useFieldView, FieldControls } from "./FieldView";
+import {
+  rememberFiles,
+  recallFiles,
+  forgetFiles,
+  rememberEnabled,
+  setRememberEnabled,
+  fileKey,
+  recallView,
+  saveView,
+} from "./session";
+import type { DiagnosticMetric } from "./types";
 import { useParticleTrace, TraceControls } from "./ParticleTrace";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -127,11 +139,45 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null),
     folderInput = useRef<HTMLInputElement>(null);
   const openingRef = useRef(false);
+  const [remember, setRemember] = useState(rememberEnabled),
+    [storageStatus, setStorageStatus] = useState("");
+  const rememberRef = useRef(remember);
+  rememberRef.current = remember;
+  const localFiles = useRef(new Map<string, File[]>()),
+    interactions = useRef(0),
+    saveSequence = useRef(0);
+  const [activeFileKey, setActiveFileKey] = useState("");
+  const persistFiles = (files: File[]) => {
+    if (!rememberRef.current) return;
+    const sequence = ++saveSequence.current;
+    setStorageStatus("Saving local copy…");
+    rememberFiles(files)
+      .then(() => {
+        if (sequence === saveSequence.current)
+          setStorageStatus("Saved for refresh");
+      })
+      .catch((e) => {
+        if (sequence === saveSequence.current)
+          setStorageStatus(
+            `Could not retain recording: ${e.message}. The open file is still usable.`,
+          );
+      });
+  };
+  const forgetRecording = async () => {
+    interactions.current++;
+    ++saveSequence.current;
+    try {
+      await forgetFiles();
+      setStorageStatus("Remembered recording removed");
+    } catch (e) {
+      setStorageStatus(e instanceof Error ? e.message : String(e));
+    }
+  };
   const [rows, setRows] = useState<Diagnostic[]>([]),
     [diagnosticError, setDiagnosticError] = useState(""),
-    [metric, setMetric] = useState<
-      "kineticEnergy" | "maxSpeed" | "meanDensity" | "pressure"
-    >("kineticEnergy");
+    [metric, setMetric] = useState<DiagnosticMetric | "pressure">(
+      "kineticEnergy",
+    );
   const [traceUid, setTraceUid] = useState("");
   const [selected, setSelected] = useState(-1),
     [renderMs, setRenderMs] = useState(0),
@@ -153,7 +199,11 @@ export default function App() {
     key: K,
     value: ViewOptions[K],
   ) => setOptions((o) => ({ ...o, [key]: value }));
-  const chooseSource = (s: Source) => {
+  const chooseSource = (s: Source, automatic = false) => {
+    if (!automatic) interactions.current++;
+    const files = localFiles.current.get(s.id);
+    setActiveFileKey(files ? fileKey(files) : "");
+    if (files && !automatic) persistFiles(files);
     setPlaying(false);
     setSourceId(s.id);
     setIndex(0);
@@ -189,12 +239,56 @@ export default function App() {
         const list = await request<Source[]>("/api/sources");
         if (disposed) return;
         for (const meta of list) add(new ServiceSource(meta));
-        if (list.length) chooseSource(list[0]);
+        if (list.length) chooseSource(list[0], true);
       } else {
         for (const dim of [2, 3] as const) {
           const reader = await BrowserSource.open([], dim);
           add(reader);
-          if (dim === 2 && !disposed) chooseSource(reader.metadata);
+          if (dim === 2 && !disposed && interactions.current === 0)
+            chooseSource(reader.metadata, true);
+        }
+        if (rememberRef.current && !disposed && interactions.current === 0) {
+          try {
+            const saved = await recallFiles();
+            if (
+              saved &&
+              !disposed &&
+              interactions.current === 0 &&
+              rememberRef.current
+            ) {
+              setStorageStatus("Restoring last recording…");
+              const reader = await BrowserSource.open(saved.files);
+              if (
+                disposed ||
+                interactions.current !== 0 ||
+                !rememberRef.current
+              ) {
+                reader.close();
+                return;
+              }
+              localFiles.current.set(reader.metadata.id, saved.files);
+              add(reader);
+              chooseSource(reader.metadata, true);
+              const view = recallView(saved.key);
+              if (view) {
+                if (Number.isInteger(view.index))
+                  setIndex(
+                    Math.max(
+                      0,
+                      Math.min(reader.metadata.frames - 1, view.index),
+                    ),
+                  );
+                if (reader.metadata.fields.some((f) => f.name === view.field))
+                  setField(view.field);
+              }
+              setStorageStatus("Restored local copy");
+            }
+          } catch (e) {
+            if (!disposed)
+              setStorageStatus(
+                `Could not restore recording: ${e instanceof Error ? e.message : String(e)}. Reopen the original file.`,
+              );
+          }
         }
       }
     };
@@ -431,6 +525,7 @@ export default function App() {
     }
   };
   const openFiles = async (files: File[]) => {
+    interactions.current++;
     if (openingRef.current) return;
     if (!files.length) return;
     openingRef.current = true;
@@ -447,8 +542,10 @@ export default function App() {
         );
       const reader = await BrowserSource.open(files);
       registry.current.set(reader.metadata.id, reader);
+      localFiles.current.set(reader.metadata.id, files);
       setSources((old) => [...old, reader.metadata]);
-      chooseSource(reader.metadata);
+      chooseSource(reader.metadata, true);
+      persistFiles(files);
       setOpen(false);
     } catch (e) {
       setOpenError(e instanceof Error ? e.message : String(e));
@@ -461,6 +558,8 @@ export default function App() {
     if (!source) return;
     registry.current.get(source.id)?.close();
     registry.current.delete(source.id);
+    if (localFiles.current.has(source.id)) void forgetRecording();
+    localFiles.current.delete(source.id);
     const remaining = sources.filter((s) => s.id !== source.id);
     setSources(remaining);
     if (remaining.length) chooseSource(remaining[0]);
@@ -469,6 +568,10 @@ export default function App() {
       setFrame(null);
     }
   };
+  useEffect(() => {
+    if (remember && activeFileKey)
+      saveView({ key: activeFileKey, index, field });
+  }, [remember, activeFileKey, index, field]);
   const currentField = source?.fields.find((f) => f.name === field),
     isVector = (currentField?.components ?? 1) > 1;
   const current = rows.find((r) => r.index === frame?.index);
@@ -495,6 +598,29 @@ export default function App() {
           ),
         )
       : [];
+  const fieldView = useFieldView(
+    registry.current.get(sourceId),
+    source,
+    index,
+    field,
+    options.mapping,
+    options.wrapPeriodic,
+    selectedPosition,
+  );
+  useEffect(() => {
+    engine.current?.setFieldView(fieldView.result, fieldView.mode);
+    if (engine.current) {
+      setRange([...engine.current.range]);
+      setValidRange(engine.current.validRange);
+    }
+  }, [
+    fieldView.result,
+    fieldView.mode,
+    frame,
+    field,
+    options.mapping,
+    options.background,
+  ]);
   const selectedValue =
     selected >= 0 ? engine.current?.values[selected] : undefined;
   const pressure = usePressureProbes(
@@ -513,7 +639,7 @@ export default function App() {
     engine.current?.setTrace(trace.rows, index);
   }, [pressure.probes, trace.rows, frame, index, options.wrapPeriodic]);
   const hasMetric =
-    metric !== "pressure" && rows.some((r) => r[metric] !== null);
+    metric !== "pressure" && rows.some((r) => r[metric] != null);
   const fixedError =
     options.range === "fixed" &&
     (!(options.max > options.min) ||
@@ -655,6 +781,7 @@ export default function App() {
             <SlidersHorizontal size={14} />
             {mobileControls ? "Hide view settings" : "View settings"}
           </button>
+          <FieldControls view={fieldView} dimension={source?.dimension} />
           <section className="control-section">
             <div className="section-heading">
               <span>COLOR BY</span>
@@ -1134,6 +1261,8 @@ export default function App() {
                 {(
                   [
                     ["kineticEnergy", "Kinetic energy"],
+                    ["internalEnergy", "Internal energy"],
+                    ["totalEnergy", "Total energy"],
                     ["maxSpeed", "Max. speed"],
                     ["meanDensity", "Mean density"],
                     ["pressure", "Pressure probes"],
@@ -1246,6 +1375,22 @@ export default function App() {
                 <span className="stat-unit">½ ∑ mᵢ |vᵢ|²</span>
               </div>
               <dl className="properties">
+                {source?.internalEnergyAvailable && (
+                  <>
+                    <dt>Internal energy</dt>
+                    <dd>
+                      {current?.internalEnergy != null
+                        ? formatNumber(current.internalEnergy, 6)
+                        : "—"}
+                    </dd>
+                    <dt>Total energy</dt>
+                    <dd>
+                      {current?.totalEnergy != null
+                        ? formatNumber(current.totalEnergy, 6)
+                        : "—"}
+                    </dd>
+                  </>
+                )}
                 <dt>Maximum speed</dt>
                 <dd>
                   {current?.maxSpeed != null
@@ -1385,6 +1530,12 @@ export default function App() {
               : "Ready to inspect"}
         </span>
         <span>
+          {storageStatus && (
+            <span className="storage-status" title={storageStatus}>
+              {storageStatus}
+              <span className="status-separator">/</span>
+            </span>
+          )}
           Read frame {fetchMs.toFixed(1)} ms
           <span className="status-separator">/</span>CPU render submission{" "}
           {renderMs.toFixed(1)} ms<span className="status-separator">/</span>
@@ -1437,6 +1588,40 @@ export default function App() {
                 {opening ? "Reading recording…" : "Choose a trajectory file"}
               </strong>
               <span>or drop it anywhere on the page</span>
+            </button>
+            <label className="remember-choice">
+              <input
+                type="checkbox"
+                aria-label="Remember last recording"
+                checked={remember}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  rememberRef.current = enabled;
+                  setRemember(enabled);
+                  setRememberEnabled(enabled);
+                  if (!enabled) void forgetRecording();
+                  else {
+                    const files = localFiles.current.get(sourceId);
+                    if (files) persistFiles(files);
+                  }
+                }}
+              />
+              Remember last recording on this device
+            </label>
+            <p className="subtle-note">
+              Stores one browser-local copy for refresh. Reopen the original to
+              read changes. Browser storage limits apply.
+            </p>
+            {storageStatus && (
+              <p className="subtle-note" role="status">
+                {storageStatus}
+              </p>
+            )}
+            <button
+              className="text-button folder-button"
+              onClick={() => void forgetRecording()}
+            >
+              Forget saved recording
             </button>
             <div className="format-hints">
               <span>HDF5 · .h5 / .hdf5</span>

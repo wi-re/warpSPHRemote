@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 
 BASE = ("positions", "kinds", "UIDs", "masses", "supports", "densities")
-ALIASES = {"position": "positions", "velocity": "velocities", "density": "densities", "uids": "UIDs"}
+ALIASES = {"position": "positions", "velocity": "velocities", "density": "densities", "uids": "UIDs", "internalEnergy": "internalEnergies", "specificInternalEnergy": "internalEnergies"}
 
 
 def natural_key(name):
@@ -70,13 +70,16 @@ class Source:
     def metadata(self):
         return {"name": self.name, "format": self.format, "frames": len(self.times),
                 "times": self.times, "timeKind": self.time_kind, "dimension": self.dim,
-                "fields": self.fields, "bounds": self.bounds, "identity": self.identity}
+                "fields": self.fields, "bounds": self.bounds, "identity": self.identity,
+                "internalEnergyAvailable": any(f["name"]=="internalEnergies" for f in self.fields)}
 
     def diagnostic(self, index):
         f = self.read(index, "velocities")
+        if any(x['name']=='internalEnergies' for x in self.fields):
+            f['internalEnergies']=self.read(index,'internalEnergies')['internalEnergies']
         mask = f["kinds"] == 0
         result = {"index": index, "time": self.times[index], "particles": int(mask.sum()),
-                  "kineticEnergy": None, "maxSpeed": None, "meanDensity": None}
+                  "kineticEnergy": None, "internalEnergy": None, "totalEnergy": None, "maxSpeed": None, "meanDensity": None}
         if "densities" in f and mask.any():
             rho = f["densities"][mask].reshape(-1)
             if np.isfinite(rho).all():
@@ -90,6 +93,15 @@ class Source:
                     m = f["masses"][mask].reshape(-1).astype(np.float64)
                     if np.isfinite(m).all() and (m >= 0).all():
                         result["kineticEnergy"] = float(.5 * np.sum(m*v2))
+        if 'internalEnergies' in f and 'masses' in f and mask.any():
+            m=f['masses'][mask].reshape(-1).astype(np.float64)
+            u=f['internalEnergies'][mask].reshape(-1).astype(np.float64)
+            if np.isfinite(m).all() and (m>=0).all() and np.isfinite(u).all():
+                energy=float(np.sum(m*u))
+                if np.isfinite(energy): result['internalEnergy']=energy
+        if result['kineticEnergy'] is not None and result['internalEnergy'] is not None:
+            total=result['kineticEnergy']+result['internalEnergy']
+            if np.isfinite(total): result['totalEnergy']=total
         return result
 
 

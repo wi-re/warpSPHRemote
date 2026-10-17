@@ -1,3 +1,4 @@
+import type { DiagnosticMetric } from "./types";
 import { useEffect, useRef } from "react";
 import {
   clickedFrame,
@@ -17,7 +18,7 @@ export function DiagnosticChart({
 }: {
   rows: Diagnostic[];
   source: Source;
-  metric: "kineticEnergy" | "maxSpeed" | "meanDensity";
+  metric: DiagnosticMetric;
   index: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);

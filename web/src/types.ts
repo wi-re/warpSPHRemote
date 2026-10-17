@@ -17,6 +17,7 @@ export interface Source {
   bounds: number[][];
   identity: string;
   domain?: Domain;
+  internalEnergyAvailable?: boolean;
 }
 export interface Frame {
   index: number;
@@ -29,9 +30,17 @@ export interface Diagnostic {
   time: number;
   particles: number;
   kineticEnergy: number | null;
+  internalEnergy?: number | null;
+  totalEnergy?: number | null;
   maxSpeed: number | null;
   meanDensity: number | null;
 }
+export type DiagnosticMetric =
+  | "kineticEnergy"
+  | "internalEnergy"
+  | "totalEnergy"
+  | "maxSpeed"
+  | "meanDensity";
 export type Mapping = "magnitude" | "x" | "y" | "z";
 export interface ViewOptions {
   wrapPeriodic: boolean;

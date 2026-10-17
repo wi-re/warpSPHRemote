@@ -5,12 +5,12 @@ completion of the longer visualization roadmap.
 
 ## Automated checks
 
-- Nine Python checks (also passed in the isolated Python 3.14 environment with Torch absent) cover numerical frame ordering, recorded time, exact int64
+- Ten Python checks (also passed in the isolated Python 3.14 environment with Torch absent) cover numerical frame ordering, recorded time, exact int64
   identity, dynamic density overriding initial metadata, rejection of changed
   populations with stale metadata, missing quantities, NPZ measurement times,
   explicit frame-index fallback, nonfinite positions, nested state layouts,
   aligned binary encoding, and loopback HTTP round trips/origin restrictions.
-- Seventeen TypeScript checks cover browser HDF5 frame slicing (gzip chunks), NPZ
+- Twenty-four TypeScript checks cover browser HDF5 frame slicing (gzip chunks), NPZ
   numeric parsing and ordering, browser analytical sources, pressure interpolation
   and dry-region gaps, and chart frame-index mapping, as well as fluid-only and logarithmic limits, constant and
   invalid ranges, vector components/magnitudes, and binary decoding with exact
@@ -55,12 +55,13 @@ repositories were used read-only. Their recordings are not included here.
 - WebGL2 only; WebGPU and worker-side rendering/GPU upload are not yet implemented.
   File decoding, diagnostic scans, and pressure histories run in workers. Display
   preparation and GPU upload still use the main thread and can interrupt interaction.
-- No SPH grid interpolation, volumes, streamlines, surface reconstruction, linked
-  panels, or numerical spatial axis tick labels yet.
+- 2D grids and instantaneous streamlines are implemented. 3D slices/volumes,
+  LIC, surface reconstruction, LCS, linked panels and numerical spatial axis ticks
+  remain future work.
 - Float32 display buffers limit coordinate/value precision; source diagnostics
   use float64 accumulation. Large UID probing remains exact, while UID coloring
-  is approximate. There is no trajectory-wide identity tracking or picking
-  acceleration structure. Probing scans projected particles and has a 10-pixel
+  is approximate. UID traces use exact identities across frames; there is no multi-particle
+  material-neighbourhood analysis or picking acceleration structure. Probing scans projected particles and has a 10-pixel
   center-distance threshold; overlapping candidates are selected by screen
   distance, not frontmost sphere intersection.
 - Shader symmetric-log scale is fixed at 1. Palette previews/colorbar gradients
@@ -76,8 +77,8 @@ repositories were used read-only. Their recordings are not included here.
   daemon discovery/autostart, simulation controls, static-field transport caching,
   and networking optimization are intentionally deferred.
 - This preview is installed from source; frontend assets are not packaged in a
-  distributable Python wheel yet. Browser settings/source registrations are
-  session-local and are not restored after restarting or reloading the service.
+  distributable Python wheel yet. One browser-local file copy and its frame/field can now be restored. Other
+  sources, probes, trace definitions and rendering settings remain session-local.
 
 ## Static browser milestone
 
@@ -116,3 +117,39 @@ target UID and recentered the window; toggling wrapped/unwrapped views remapped
 the scene without changing its scalar values. No console warnings/errors were
 returned during these checks. The trace uses the available recorded sample rate,
 not hidden simulator steps.
+
+## Retention, energies and reconstructed fields
+
+The production build was served on plain static HTTP under a repository subpath,
+without an API server. In the Chromium browser:
+
+- The analytical 2D field displayed a 256² scalar raster and 50,632 instantaneous
+  streamline segments, with no returned console warnings/errors.
+- The real energy-enabled KHH recording (65,536 particles / 161 frames) opened,
+  rendered a reconstructed field and streamlines, and displayed internal energy
+  3.75194 and total energy 3.9094 at t=2.0003.
+- After “Saved for refresh”, reloading reopened that recording at index 80
+  (frame 81), with density still selected, without another file picker. The
+  renderer mode reset to particles as designed; view-style persistence is separate.
+
+Numerical tests cover mass-weighted fluid energies, missing/invalid energy data,
+constant reconstruction, particle-volume weighting, variable cutoff support,
+vector-before-magnitude interpolation, dry masks, periodic splats without source
+mutation, uniform-flow and rotating streamlines, masked stopping and seam splits.
+The IndexedDB adapter test checks byte-exact copies, replacement and forgetting;
+the real-browser reload is the persistence integration check. Python energy
+reduction is also covered. These checks do not establish cross-browser storage
+quotas or WebGPU performance: current compute is in the reader worker, while
+raster/line drawing is WebGL2. See [format/limitations](BROWSER_FILES.md) and
+[the planned compute layer](ROADMAP.md).
+
+Disposable evidence for this iteration is under
+`/tmp/warpSPHDevelopment/remote/fields-session-20261017/`; final captures can be
+preserved under a distinct shared development archive directory. No generated
+recording, raster, log or production bundle is committed.
+
+A picked fixed-position streamline seed also remained active after stepping from
+KHH index 80 to 81 (798 spatial line segments), independently of the temporal UID
+trace. The real “Forget saved recording” button removed the browser copy: after
+refresh the app returned to the analytical source and no KHH recording was
+registered. The browser returned no console warnings/errors in these checks.

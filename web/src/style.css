@@ -1608,3 +1608,37 @@ kbd {
 .trace-enable input {
   accent-color: var(--mint);
 }
+.remember-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.remember-choice input {
+  accent-color: var(--mint);
+}
+.storage-status {
+  max-width: 220px;
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.flow-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 0;
+  font-size: 11px;
+}
+.flow-toggle input {
+  accent-color: var(--mint);
+}
+.field-controls .subtle-note {
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.diagnostic-tabs {
+  flex-wrap: wrap;
+}

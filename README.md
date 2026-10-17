@@ -11,7 +11,10 @@ on real data. No changes to warpSPH, warpSPHCore, or warpSPHPlotting are require
 
 [Open the visualizer](https://fluids.dev/warpSPHRemote/), choose a local HDF5
 recording, or select NPZ snapshots. Data is read on your device; recording contents
-are not uploaded. File access must be granted again after reloading the page.
+are not uploaded. **Remember last recording** retains one browser-local copy
+and restores its frame and selected field on refresh. You can disable this or
+choose **Forget saved recording** in the open dialog. Reopen the original file
+to read later changes; browser quota, private-session and eviction rules apply.
 The built-in 2D/3D analytical examples require no files.
 
 The static app needs no Python, Torch, Warp, Jupyter, or simulator installation.
@@ -99,7 +102,7 @@ are explicitly identified as such; particle selection is confined to one frame.
   and ghosts; physical or fixed-pixel particle sizing; dark and light backgrounds.
 - Play, pause, step, seek, loop, and playback speed. Each next playback frame
   is requested after the current one has loaded; slow reads slow playback.
-- Plotly kinetic-energy, maximum-speed, and mean-density histories. Computation
+- Plotly kinetic, internal and total energy, maximum-speed, and mean-density histories. Computation
   runs in bounded worker batches. The selected frame is prioritized. Optional
   stored diagnostics avoid rescanning particle arrays for these three quantities.
 - Up to four fixed pressure probes: current sample, cancellable whole-recording
@@ -115,13 +118,25 @@ are explicitly identified as such; particle selection is confined to one frame.
 - Viewer-side periodic coordinate mapping from explicit domain metadata. Toggle
   **Wrap display coordinates** to compare wrapped and original coordinates.
   Recording arrays and trace samples remain unwrapped and unchanged.
+- 2D reconstructed scalar grids, alone or with particles; Wendland C2/C4,
+  128/256/512 cells on the longest side, volume weighting and Shepard normalization.
+  Fluid coverage masks leave unsupported regions transparent. Requires recorded
+  mass, density and compact cutoff supports; categorical fields are rejected.
+- Instantaneous velocity streamlines over the reconstructed field, with regular
+  or picked fixed-position seeds. Midpoint integration runs in both directions,
+  stops at invalid coverage, and splits periodic crossings. Overlay these with
+  recorded UID traces to compare frozen-frame flow and temporal particle motion.
 - PNG export of the GPU scene. The exported canvas does **not** currently include
   HTML labels, the colorbar, or the diagnostics chart.
 
 Units follow the stored arrays. Kinetic energy is `0.5 * sum(m * |v|²)` over
 kind-0 fluid particles, maximum speed is a fluid-only maximum, and mean density
 is an unweighted fluid-particle mean. Missing quantities remain unavailable;
-missing mass is not replaced with unit mass. Nonfinite values invalidate the
+missing mass is not replaced with unit mass. Specific `internalEnergies` arrays
+are mass weighted: internal = `sum(m*u)`, total = kinetic + internal, fluid only.
+Recorded `/diagnostics/internalEnergy` (or `thermalEnergy`) is also supported.
+Total does not include gravitational, boundary work or other potential energy.
+No equation of state is inferred when energy was not recorded. Nonfinite values invalidate the
 corresponding diagnostic. Invalid or nonpositive log display samples are gray.
 A constant field gets a finite color range. Symmetric log uses
 `sign(x) * log(1 + abs(x))` (linear transition scale 1 in the field's units).
@@ -155,6 +170,7 @@ Emscripten WORKERFS. NPZ decompression uses fflate. Bundled notices are shipped
 under `licenses/`. No external fonts or CDN runtime dependencies are used.
 The renderer currently uses WebGL2; WebGPU is future work.
 
-[Architecture and scope](reports/ARCHITECTURE.md),
+[Roadmap: LIC, material tracks, FTLE/LCS and WebGPU operators](reports/ROADMAP.md),
+[architecture and scope](reports/ARCHITECTURE.md),
 [verification and known limits](reports/VERIFICATION.md), and
 [evidence storage](reports/README.md) describe the current boundary.

@@ -115,6 +115,8 @@ test("browser diagnostics exclude boundaries and preserve missing quantities", (
     time: 0.2,
     particles: 2,
     kineticEnergy: 31,
+    internalEnergy: null,
+    totalEnergy: null,
     maxSpeed: 5,
     meanDensity: 1.5,
   });
@@ -173,6 +175,7 @@ test("HDF5 reader slices compressed stacked frames and reads stored diagnostics"
       kineticEnergy: [31, 124],
       maxSpeed: [5, 10],
       meanDensity: [1.5, 3],
+      internalEnergy: [4, 5],
     }))
       diag.create_dataset({ name, data: new Float64Array(data) });
     file.close();
@@ -195,6 +198,9 @@ test("HDF5 reader slices compressed stacked frames and reads stored diagnostics"
     assert.equal(raw.UIDs.data[0], 2n ** 54n + 1n);
     assert.equal(reduceDiagnostic(raw, 1, 0.7).kineticEnergy, 124);
     assert.equal(source.recordedDiagnostic(1)?.meanDensity, 3);
+    assert.equal(meta.internalEnergyAvailable, true);
+    assert.equal(source.recordedDiagnostic(1)?.internalEnergy, 5);
+    assert.equal(source.recordedDiagnostic(1)?.totalEnergy, 129);
     source.close();
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -1,3 +1,4 @@
+import type { FieldResult } from "./sources/grid";
 import { mappedCoordinate, mappedPosition } from "./spatial";
 import { traceSegments, type TraceSample } from "./sources/traces";
 import * as THREE from "three";
@@ -16,6 +17,7 @@ uniform float uHeight;
 uniform float uScale;
 uniform float uPhysical;
 uniform float uBoundaries;
+uniform float uFluid;
 uniform float uGhosts;
 uniform float uClipAxis;
 uniform float uClip;
@@ -29,7 +31,7 @@ varying vec3 vCenter;
 varying float vRadius;
 void main(){
  vUv=position.xy;vValue=aValue;vKind=aKind;vSelected=abs(aIndex-uSelected)<0.1?1.0:0.0;
- vHidden=(aKind>0.5&&aKind<1.5&&uBoundaries<0.5)||(aKind>1.5&&uGhosts<0.5)?1.0:0.0;
+ vHidden=(aKind<0.5&&uFluid<0.5)||(aKind>0.5&&aKind<1.5&&uBoundaries<0.5)||(aKind>1.5&&uGhosts<0.5)?1.0:0.0;
  float coordinate=uClipAxis<0.5?aCenter.x:(uClipAxis<1.5?aCenter.y:aCenter.z);
  if(uClipAxis>=0.0&&coordinate>uClip)vHidden=1.0;
  vec4 center=modelViewMatrix*vec4(aCenter,1.0);
@@ -84,6 +86,18 @@ export class ParticleRenderer {
   grid = new THREE.Group();
   probeMarkers = new THREE.Group();
   traceLines = new THREE.Group();
+  fieldPlane: THREE.Mesh;
+  fieldMaterial: THREE.ShaderMaterial;
+  fieldTexture = new THREE.DataTexture(
+    new Float32Array([NaN]),
+    1,
+    1,
+    THREE.RedFormat,
+    THREE.FloatType,
+  );
+  flowLines = new THREE.Group();
+  fieldResult: FieldResult | null = null;
+  fieldMode: "particles" | "grid" | "both" = "particles";
   frame: Frame | null = null;
   source: Source | null = null;
   options: ViewOptions | null = null;
@@ -142,6 +156,7 @@ export class ParticleRenderer {
         uScale: { value: 1 },
         uPhysical: { value: 1 },
         uBoundaries: { value: 1 },
+        uFluid: { value: 1 },
         uGhosts: { value: 0 },
         uClipAxis: { value: -1 },
         uClip: { value: 0 },
@@ -152,6 +167,33 @@ export class ParticleRenderer {
     });
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
+    this.fieldTexture.minFilter = THREE.NearestFilter;
+    this.fieldTexture.magFilter = THREE.NearestFilter;
+    this.fieldMaterial = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uField: { value: this.fieldTexture },
+        uPalette: { value: this.texture },
+        uMin: this.material.uniforms.uMin,
+        uMax: this.material.uniforms.uMax,
+        uNorm: this.material.uniforms.uNorm,
+      },
+      vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+      fragmentShader: `uniform sampler2D uField;uniform sampler2D uPalette;uniform float uMin;uniform float uMax;uniform float uNorm;varying vec2 vUv;
+      float transformValue(float v){if(uNorm<0.5)return v;if(uNorm<1.5)return log(max(v,1.e-30));float a=abs(v);return sign(v)*(a<0.01?a*(1.0-a*(0.5-a/3.0)):log(1.0+a));}
+      void main(){float v=texture2D(uField,vUv).r;if(v!=v||abs(v)>3.4e38)discard;
+      if(uNorm>0.5&&uNorm<1.5&&v<=0.0){gl_FragColor=vec4(0.5,0.5,0.5,1.0);return;}
+      float t=clamp((transformValue(v)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);gl_FragColor=vec4(texture2D(uPalette,vec2(t,0.5)).rgb,1.0);}`,
+    });
+    this.fieldPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      this.fieldMaterial,
+    );
+    this.fieldPlane.visible = false;
+    this.fieldPlane.renderOrder = -1;
+    this.scene.add(this.fieldPlane, this.flowLines);
+
     this.scene.add(this.mesh, this.grid, this.probeMarkers, this.traceLines);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
@@ -324,6 +366,75 @@ export class ParticleRenderer {
     }
     this.dirty = true;
   }
+  setFieldView(
+    result: FieldResult | null,
+    mode: "particles" | "grid" | "both",
+  ) {
+    const valid =
+      result &&
+      result.sourceId === this.source?.id &&
+      result.grid.index === this.frame?.index &&
+      result.field === this.field &&
+      result.mapping === this.options?.mapping;
+    this.fieldResult = valid ? result : null;
+    this.fieldMode = mode;
+    this.fieldPlane.visible = !!valid && mode !== "particles";
+    this.material.uniforms.uFluid.value = valid && mode === "grid" ? 0 : 1;
+    for (const child of [...this.flowLines.children]) {
+      const line = child as THREE.LineSegments;
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+      this.flowLines.remove(child);
+    }
+    if (valid && result) {
+      const g = result.grid;
+      if (
+        this.fieldTexture.image.width !== g.width ||
+        this.fieldTexture.image.height !== g.height
+      ) {
+        this.fieldTexture.dispose();
+        this.fieldTexture = new THREE.DataTexture(
+          g.values,
+          g.width,
+          g.height,
+          THREE.RedFormat,
+          THREE.FloatType,
+        );
+        this.fieldTexture.minFilter = THREE.NearestFilter;
+        this.fieldTexture.magFilter = THREE.NearestFilter;
+        this.fieldMaterial.uniforms.uField.value = this.fieldTexture;
+      } else this.fieldTexture.image.data = g.values;
+      this.fieldTexture.needsUpdate = true;
+      this.fieldPlane.scale.set(
+        g.bounds[1][0] - g.bounds[0][0],
+        g.bounds[1][1] - g.bounds[0][1],
+        1,
+      );
+      this.fieldPlane.position.set(
+        (g.bounds[0][0] + g.bounds[1][0]) / 2,
+        (g.bounds[0][1] + g.bounds[1][1]) / 2,
+        -this.span * 0.002,
+      );
+      if (result.lines.length) {
+        const line = new THREE.LineSegments(
+          new THREE.BufferGeometry().setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute(result.lines, 3),
+          ),
+          new THREE.LineBasicMaterial({
+            color: this.options?.background === "light" ? "#44331f" : "#fff0ca",
+            depthTest: false,
+            transparent: true,
+            opacity: 0.75,
+          }),
+        );
+        line.renderOrder = 50;
+        this.flowLines.add(line);
+      }
+    }
+    if (this.options) this.setOptions(this.options, true);
+    this.dirty = true;
+  }
   setFrame(frame: Frame, source: Source, field: string, options: ViewOptions) {
     const changed = this.source?.id !== source.id;
     this.frame = frame;
@@ -414,9 +525,17 @@ export class ParticleRenderer {
     ) {
       this.values = scalarValues(this.frame, this.field, options.mapping);
       this.updateAttribute("aValue", this.values, 1);
+      const gridValues =
+        this.fieldResult &&
+        this.fieldMode !== "particles" &&
+        this.fieldResult.grid.index === this.frame.index &&
+        this.fieldResult.field === this.field &&
+        this.fieldResult.mapping === options.mapping
+          ? this.fieldResult.grid.values
+          : null;
       const auto = scalarRange(
-        this.values,
-        this.frame.arrays.kinds?.data,
+        gridValues ?? this.values,
+        gridValues ? undefined : this.frame.arrays.kinds?.data,
         options.normalization === "log",
       );
       this.validRange = auto !== null;
@@ -618,6 +737,10 @@ export class ParticleRenderer {
         (o.material as THREE.Material).dispose();
       }
     });
+    this.setFieldView(null, "particles");
+    this.fieldPlane.geometry.dispose();
+    this.fieldMaterial.dispose();
+    this.fieldTexture.dispose();
     this.setTrace([], 0);
     this.setProbes([]);
     this.renderer.dispose();

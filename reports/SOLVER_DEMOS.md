@@ -51,3 +51,20 @@ folder for every new run. Verify a prepared file with NumPy/h5py only:
 ```bash
 python examples/verify_demo_recording.py /path/to/raw/trajectory.h5 /path/to/demo.h5
 ```
+
+## Energy-enabled KHH copy
+
+`khh-crksph-256-energy.h5` adds global internal/total energy to a new copy of the
+same KHH trajectory. `examples/add_recorded_energies.py` matches **exact** timestamps
+to the same run's `diagnostics.json` thermalEnergy values. All particle arrays
+remain unchanged. Total is stored kinetic plus recorded internal energy; the
+browser uses this same definition. Initial internal/total energies are
+3.7499976158 / 3.9094048674; final values are 3.7539203167 / 3.9094048918.
+The original pressure-only demo is retained. Future recorder runs also include
+per-particle specific internalEnergies when present; this existing copy contains
+only the recorded global energies, not an inferred per-particle distribution.
+
+```bash
+python examples/add_recorded_energies.py /path/to/khh.h5 \
+  /path/to/same-run/diagnostics.json /path/to/new-energy-copy.h5
+```

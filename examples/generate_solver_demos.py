@@ -60,6 +60,9 @@ def main():
             arrays[name] = tensor.detach().cpu().numpy()
             if not np.isfinite(arrays[name]).all():
                 raise RuntimeError(f'Nonfinite {name} at t={t}')
+        if getattr(s, 'internalEnergies', None) is not None:
+            arrays['internalEnergies']=s.internalEnergies.detach().cpu().numpy()
+            if not np.isfinite(arrays['internalEnergies']).all(): raise RuntimeError('Nonfinite internal energy')
         if count == 0:
             domain = output.create_group('domain')
             for name in ('min', 'max', 'periodic'):
@@ -85,6 +88,9 @@ def main():
                     maxSpeed=float(np.linalg.norm(v, axis=-1).max()),
                     meanDensity=float(arrays['densities'][fluid].astype('f8').mean()),
                     particles=int(fluid.sum()))
+        if 'internalEnergies' in arrays:
+            rows['internalEnergy']=float((static['masses'][...][fluid]*arrays['internalEnergies'][fluid].astype('f8')).sum())
+            rows['totalEnergy']=rows['kineticEnergy']+rows['internalEnergy']
         for name, value in rows.items():
             if count == 0:
                 diag.create_dataset(name, (0,), maxshape=(None,), chunks=True, dtype='f8')

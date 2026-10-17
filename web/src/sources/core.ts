@@ -31,6 +31,8 @@ export const canonical = (name: string) =>
     velocity: "velocities",
     density: "densities",
     pressure: "pressures",
+    internalEnergy: "internalEnergies",
+    specificInternalEnergy: "internalEnergies",
   })[name] ?? name;
 export const naturalCompare = (a: string, b: string) =>
   a.localeCompare(b, "en", { numeric: true });
@@ -58,6 +60,7 @@ export abstract class RawSource {
   format = "";
   times: number[] = [];
   domain?: Domain;
+  storedInternalEnergy = false;
   timeKind: Source["timeKind"] = "simulation";
   constructor(public id: string) {}
   abstract read(index: number, field?: string): RawFrame | Promise<RawFrame>;
@@ -91,6 +94,8 @@ export abstract class RawSource {
       dimension: dim,
       bounds: [lo, hi],
       domain: this.domain,
+      internalEnergyAvailable:
+        !!f.internalEnergies || this.storedInternalEnergy,
       identity: f.UIDs ? "UIDs" : "unavailable",
       fields: Object.entries(f)
         .filter(([name]) => name !== "positions")
@@ -153,17 +158,27 @@ export function reduceDiagnostic(
     v = f.velocities,
     m = f.masses,
     rho = f.densities,
+    internal = f.internalEnergies,
     k = f.kinds.data;
   let particles = 0,
     ke = 0,
     maxSpeed = 0,
     sumDensity = 0,
+    ie = 0,
+    internalValid = !!internal && !!m,
     energyValid = !!v && !!m,
     speedValid = !!v,
     densityValid = !!rho;
   for (let i = 0; i < n; i++) {
     if (Number(k[i]) !== 0) continue;
     particles++;
+    if (internal && m) {
+      const u = Number(internal.data[i]),
+        mass = Number(m.data[i]);
+      internalValid &&=
+        Number.isFinite(u) && Number.isFinite(mass) && mass >= 0;
+      ie += mass * u;
+    }
     if (rho) {
       const r = Number(rho.data[i]);
       sumDensity += r;
@@ -188,6 +203,12 @@ export function reduceDiagnostic(
     time,
     particles,
     kineticEnergy: particles && energyValid && Number.isFinite(ke) ? ke : null,
+    internalEnergy:
+      particles && internalValid && Number.isFinite(ie) ? ie : null,
+    totalEnergy:
+      particles && internalValid && energyValid && Number.isFinite(ie + ke)
+        ? ie + ke
+        : null,
     maxSpeed: particles && speedValid ? maxSpeed : null,
     meanDensity: particles && densityValid ? sumDensity / particles : null,
   };

@@ -9,7 +9,8 @@ control hooks, live subscriptions, or cloud services in this milestone.
 ## Components
 
 `web/src/sources/client.ts` defines the trajectory-source interface used by the UI:
-metadata, requested frame, diagnostic batch, probe batch, UID trace batch, and close. The default
+metadata, requested frame, diagnostic batch, probe batch, UID trace batch,
+reconstructed-field request, and close. The default
 `BrowserSource` creates one module worker per recording. Opening a local file
 passes a browser `File` handle to that worker; it never sends its contents to an
 HTTP endpoint. The two analytical sources use this same worker path.
@@ -108,9 +109,27 @@ The reference box follows the first frame's particle extent. It is not a physica
 domain declaration. Current-frame fitting does not continuously reset the camera.
 Clipping is a particle visibility operation, not SPH field reconstruction.
 
+## Session retention and grid computation
+
+`session.ts` stores one browser-local File/Blob snapshot in IndexedDB, replacing
+it atomically. No origin uploads occur. A small localStorage record saves frame
+and field, keyed by file names/sizes/modification times. Startup restoration loses
+to explicit user interaction; it cannot replace a file opened during startup.
+Quota/storage errors are visible and nonfatal. Opt-out/forget removes the stored
+copy. This is not a live filesystem handle and does not observe external changes.
+
+`grid.ts` is a renderer-independent CPU reference for volume-weighted normalized
+2D SPH reconstruction and masked instantaneous streamlines. Browser sources run
+it in their worker; requests are abortable/invalidated at the UI boundary and
+have priority over historical scans. A synchronous computation in progress may
+finish before the next job. One bounded-resolution grid is retained in the worker;
+LUT, normalization and camera changes do not require reconstructing particle data.
+The renderer uploads a scalar float texture and line geometry. WebGPU compute,
+shared compute/render device buffers and core operator parity remain planned in
+[ROADMAP.md](ROADMAP.md).
+
 ## Deferred visualization work
 
-Browser-side SPH interpolation and coverage masks, grid/volume rendering,
-streamlines, reconstructed surfaces, arbitrary clipping planes, linked multi-view
+3D slice/volume reconstruction, LIC, reconstructed surfaces, arbitrary clipping planes, linked multi-view
 layouts, multi-particle temporal tracking, accurate data-space axis ticks, colorbar-
 inclusive publication exports, and a WebGPU backend remain separate work items.

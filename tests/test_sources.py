@@ -34,7 +34,7 @@ def test_hdf_times_identity_dynamic_values_and_fluid_reductions(tmp_path):
     assert s.times == [.2, .7]  # numeric, not lexicographic order
     assert s.read(1)['UIDs'][0] == 2**54+1
     assert s.read(1)['densities'][0] == 1
-    assert s.diagnostic(1) == dict(index=1,time=.7,particles=2,kineticEnergy=31.,maxSpeed=5.,meanDensity=1.5)
+    assert s.diagnostic(1) == dict(index=1,time=.7,particles=2,kineticEnergy=31.,internalEnergy=None,totalEnergy=None,maxSpeed=5.,meanDensity=1.5)
 
 
 def test_changed_population_cannot_reuse_initial_metadata(tmp_path):
@@ -121,3 +121,13 @@ def test_local_api_roundtrip_and_origin_restriction(tmp_path):
         with urlopen(base) as r: assert b'local viewer' in r.read()
     finally:
         server.shutdown();server.server_close();thread.join()
+
+
+def test_specific_internal_energy_is_mass_weighted_and_excludes_boundaries(tmp_path):
+    np.savez(tmp_path/'energy.npz',positions=np.zeros((3,2)),velocities=np.array([[1,0],[-1,0],[99,99]]),
+             kinds=np.array([0,0,1]),masses=np.array([2.,6.,999.]),internalEnergies=np.array([3.,5.,np.nan]))
+    s=open_source(tmp_path/'energy.npz')
+    d=s.diagnostic(0)
+    assert d['internalEnergy']==36.
+    assert d['totalEnergy']==40.
+    assert s.metadata()['internalEnergyAvailable'] is True
