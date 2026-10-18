@@ -84,7 +84,14 @@ def main():
     incoming = json.loads(Path(sys.argv[1]).read_text())
     if not isinstance(incoming, dict) or not isinstance(incoming.get('preset'), str):
         raise ValueError('Unknown simulation preset.')
-    catalogue = load_catalogue()
+    try:
+        catalogue = load_catalogue()
+    except ImportError as error:
+        # A standalone companion installation can validate unknown IDs even when
+        # no simulation runtime is installed. Discovery remains authoritative when present.
+        if incoming['preset'] not in {c['id'] for c in CATALOGUE}:
+            raise ValueError('Unknown simulation preset.') from error
+        raise ValueError(f'The simulation Python cannot load warpSPH: {error}') from error
     spec = validate_launch(incoming, catalogue)
     c = next(c for c in catalogue if c["id"] == spec["preset"])
     # Registration precedes costly CUDA compilation, so the manager shows startup.
