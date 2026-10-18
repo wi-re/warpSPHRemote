@@ -23,13 +23,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--seconds', type=float, default=600)
+    parser.add_argument('--origin', action='append', default=[])
+    parser.add_argument('--finish-on-file', action='store_true', help='Complete gracefully when output/finish.request appears')
     args = parser.parse_args()
     root = args.output.resolve()
     if root.exists():
         parser.error('choose a fresh output directory outside source')
     if not np.isfinite(args.seconds) or args.seconds <= 0:
         parser.error('seconds must be finite and positive')
-    manager = Manager(root)
+    manager = Manager(root, origins=args.origin)
     manager.token = 'browser-fixture-token'
     server = ThreadingHTTPServer(('127.0.0.1', 18767), partial(Handler, manager=manager))
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -53,15 +55,22 @@ def main():
     timer.daemon = True
     timer.start()
     print('Synthetic fixture: http://127.0.0.1:18767 · token browser-fixture-token', flush=True)
+    status='stopped'
     try:
         for step in range(900000):
             publisher.post_step(ctx, NS(t=step*.01, state=state), step)
+            if args.finish_on_file and (root/'finish.request').exists():
+                publisher.finish(ctx, NS(t=step*.01,state=state),step)
+                status='completed'
+                break
             time.sleep(.01)
     except (SimulationStopped, KeyboardInterrupt):
         pass
     finally:
         timer.cancel()
-        publisher.close('stopped')
+        publisher.close(status)
+        if status=='completed':
+            time.sleep(30)  # The browser must observe terminal status and finalize.
         server.shutdown()
         server.server_close()
         descriptor.unlink(missing_ok=True)

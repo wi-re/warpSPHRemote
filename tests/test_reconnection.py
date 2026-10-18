@@ -196,7 +196,7 @@ def test_recovery_registration_is_idempotent_and_does_not_override_commands(tmp_
 
 
 def test_capture_being_encoded_cannot_cross_transport_recovery(tmp_path, monkeypatch):
-    import warpsph_remote.publisher as module
+    import warpsph_remote.captures as module
     daemon = Daemon(tmp_path/'runtime')
     publisher = SimulationPublisher('capture epoch', runtime=tmp_path/'runtime', autostart=False, interval=.02)
     try:
@@ -211,10 +211,12 @@ def test_capture_being_encoded_cannot_cross_transport_recovery(tmp_path, monkeyp
                 assert publisher._recover()
             return original_encode(*args, **kwargs)
         monkeypatch.setattr(module, 'encode_frame', encode)
-        assert not publisher.snapshot(dict(positions=np.zeros((2,2)), UIDs=np.arange(2),
+        assert publisher.snapshot(dict(positions=np.zeros((2,2)), UIDs=np.arange(2),
             kinds=np.zeros(2,dtype=np.int32), masses=np.ones(2), densities=np.ones(2),
             supports=np.ones(2), velocities=np.ones((2,2))), step=1,time_value=.1)
+        wait(lambda: interrupted and not publisher._transfer_busy)
         assert publisher.pending is None
+        assert daemon.manager.runs[publisher.id]["snapshot"] is None
     finally:
         publisher.close()
         daemon.close()

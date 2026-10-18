@@ -1,3 +1,9 @@
+import {
+  ViewportVideo,
+  videoDimensions,
+  captureViewport,
+  saveVideo,
+} from "./video";
 import { LiveMetrics } from "./LiveMetrics";
 import { ProfilePlots } from "./ProfilePlots";
 import { CompanionPanel, type CompanionSection } from "./CompanionPanel";
@@ -96,7 +102,7 @@ import { gradient, palettes } from "./palettes";
 import { usePressureProbes, PressureControls } from "./PressureProbes";
 import { DiagnosticChart, PressureChart } from "./Chart";
 import { initialOptions } from "./types";
-import type { Diagnostic, Source, ViewOptions } from "./types";
+import type { Diagnostic, Source, ViewOptions, Frame } from "./types";
 
 function Toggle({
   value,
@@ -167,6 +173,33 @@ export default function App() {
     useState<CompanionSection>("running");
   const [daemonConnected, setDaemonConnected] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
+  const [videoFPS, setVideoFPS] = useState(30),
+    [videoInterval, setVideoInterval] = useState(0.04);
+  const [videoStart, setVideoStart] = useState(0),
+    [videoEnd, setVideoEnd] = useState(0),
+    [videoStride, setVideoStride] = useState(1);
+  const [videoProgress, setVideoProgress] = useState(""),
+    [videoError, setVideoError] = useState("");
+  const videoSession = useRef<{
+    encoder: ViewportVideo;
+    sourceId: string;
+    name: string;
+    live: boolean;
+    end: number;
+    stride: number;
+    seen: Set<string>;
+    lastFrame?: Frame;
+    pending: Promise<void>;
+    stopping: boolean;
+    release?: () => Promise<void>;
+  } | null>(null);
+
+  const [configurationView, setConfigurationView] = useState<{
+    loading: boolean;
+    data?: unknown;
+    error?: string;
+  } | null>(null);
   const [sources, setSources] = useState<Source[]>([]),
     [sourceId, setSourceId] = useState("");
   const source = sources.find((s) => s.id === sourceId);
@@ -767,7 +800,54 @@ export default function App() {
       setValidRange(e.validRange);
       setEngineError("");
       const reader = registry.current.get(source.id);
-      if (reader instanceof LiveSource)
+      if (videoSession.current?.sourceId === source.id) {
+        const session = videoSession.current;
+        const key = String(frame.index);
+        const captured = source.live
+          ? session.lastFrame === frame
+          : session.seen.has(key);
+        if (!captured && !session.stopping) {
+          session.lastFrame = frame;
+          if (!source.live) session.seen.add(key);
+          const scene = e.captureCanvas();
+          const labels = {
+            title: friendlyName(source),
+            quantity: `${scalarTitle} · ${optionsRef.current.normalization}${optionsRef.current.normalization === "cyclic" && optionsRef.current.colorPeriod > 0 ? ` (period ${optionsRef.current.colorPeriod})` : ""}`,
+
+            details: `t = ${formatNumber(frame.time, 6)}${source.dt !== undefined ? ` · Δt = ${formatNumber(source.dt, 5)}` : ""}${source.scheme ? ` · ${source.scheme}` : ""}${source.kernel ? ` · ${source.kernel}` : ""}${source.integrator ? ` · ${source.integrator}` : ""}${presentation.mode !== "particles" ? ` · Grid kernel ${fieldView.settings.kernel}` : ""}`,
+            particles: frame.arrays.positions.shape[0],
+            palette: optionsRef.current.palette,
+            range: e.range as [number, number],
+            axes: e.axes(),
+            dimension: source.dimension,
+            light: optionsRef.current.background === "light",
+          };
+          const canvas = captureViewport(
+            scene,
+            labels,
+            session.encoder.width,
+            session.encoder.height,
+          );
+          session.pending = session.encoder
+            .add(canvas)
+            .then(async () => {
+              if (reader instanceof LiveSource)
+                await reader.displayed(frame.liveRevision);
+              setVideoProgress(
+                `${session.encoder.frames} frames encoded${session.live ? " · Live capture waits for rendering" : ""}`,
+              );
+              if (!session.live && !session.stopping) {
+                if (frame.index >= session.end) void finishVideo();
+                else
+                  setIndex(Math.min(session.end, frame.index + session.stride));
+              }
+            })
+            .catch((error) => {
+              setVideoError(String(error));
+              void finishVideo();
+            });
+        }
+      } else if (reader instanceof LiveSource)
         void reader
           .displayed(frame.liveRevision)
           .catch((e) => setEngineError(`Live capture paused: ${e.message}`));
@@ -881,6 +961,14 @@ export default function App() {
   ]);
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
+      if (
+        videoSession.current &&
+        !videoSession.current.live &&
+        ["Space", "ArrowLeft", "ArrowRight"].includes(e.code)
+      ) {
+        e.preventDefault();
+        return;
+      }
       if (
         ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(
           (e.target as HTMLElement).tagName,
@@ -1142,7 +1230,95 @@ export default function App() {
             ? "magnitude"
             : displayedOptions.mapping.toUpperCase())
         : "");
+  async function finishVideo() {
+    const session = videoSession.current;
+    if (!session || session.stopping) return;
+    session.stopping = true;
+    // Drain the last encode/ACK before releasing the solver or packaging output.
+    await session.pending;
+    try {
+      await session.release?.();
+    } catch (error) {
+      setVideoError(
+        `Video saved; reconnect to release capture hold: ${String(error)}`,
+      );
+    }
+    try {
+      if (session.encoder.frames)
+        saveVideo(
+          session.encoder.finish(),
+          `${session.name.replace(/[^a-z0-9_-]/gi, "-")}.webm`,
+        );
+      else session.encoder.dispose();
+    } catch (error) {
+      setVideoError(String(error));
+      session.encoder.dispose();
+    }
+    if (videoSession.current === session) videoSession.current = null;
+    setVideoProgress("");
+  }
+  async function startVideo() {
+    if (!source || !frame || !engine.current || videoSession.current) return;
+    setVideoError("");
+    setPlaying(false);
+    try {
+      const canvas = engine.current.captureCanvas();
+      const { width, height } = videoDimensions(canvas);
+      if (!(await ViewportVideo.supported(width, height, videoFPS)))
+        throw new Error(
+          "VP8 video encoding is unavailable in this browser. Try a browser with WebCodecs VideoEncoder support.",
+        );
+      if (source.live && !simulationControl?.setVideo)
+        throw new Error(
+          "Update the daemon and simulation adapter for synchronized video capture.",
+        );
+      const session = {
+        encoder: new ViewportVideo(width, height, videoFPS),
+        sourceId: source.id,
+        name: source.name,
+        live: !!source.live,
+        end: videoEnd,
+        stride: videoStride,
+        seen: new Set<string>(),
+        pending: Promise.resolve(),
+        stopping: false,
+        release: source.live
+          ? () => simulationControl!.setVideo!(false, videoInterval)
+          : undefined,
+      };
+      videoSession.current = session;
+      try {
+        if (source.live)
+          await simulationControl!.setVideo!(true, videoInterval);
+        else {
+          setIndex(videoStart);
+          setRetryRevision((v) => v + 1);
+        }
+      } catch (error) {
+        videoSession.current = null;
+        session.encoder.dispose();
+        throw error;
+      }
+      setVideoProgress("Waiting for the first rendered frame…");
+      setVideoOpen(false);
+    } catch (error) {
+      setVideoError(String(error));
+    }
+  }
+  useEffect(() => {
+    const session = videoSession.current;
+    if (
+      session &&
+      (session.sourceId !== sourceId ||
+        (session.live &&
+          ["completed", "stopped", "failed"].includes(
+            simulationControl?.status ?? "",
+          )))
+    )
+      void finishVideo();
+  }, [sourceId, simulationControl?.status]);
   const seek = (i: number) => {
+    if (videoSession.current && !videoSession.current.live) return;
     setPlaying(false);
     setIndex(i);
   };
@@ -1381,7 +1557,68 @@ export default function App() {
               <dd>{frame ? `${(frame.bytes / 1e6).toFixed(2)} MB` : "—"}</dd>
             </dl>
           </section>
-          {simulationControl && <LiveMetrics control={simulationControl} />}
+          {simulationControl && (
+            <>
+              <LiveMetrics control={simulationControl} />
+              {simulationControl?.run?.video?.active &&
+                (!videoSession.current ||
+                  simulationControl.run.video.orphaned) && (
+                  <div className="capture-hold-note">
+                    <p>
+                      Video capture is holding this simulation. Resume with
+                      Export video, or release the capture hold to continue
+                      normal monitoring.
+                    </p>
+                    {videoSession.current && (
+                      <button
+                        className="secondary-button"
+                        onClick={() =>
+                          void simulationControl
+                            .setVideo?.(true, videoInterval)
+                            .catch((error) => setVideoError(String(error)))
+                        }
+                      >
+                        Resume video capture
+                      </button>
+                    )}
+                    <button
+                      className="secondary-button"
+                      onClick={() => {
+                        if (videoSession.current) void finishVideo();
+                        else
+                          void simulationControl
+                            .setVideo?.(false, 0.04)
+                            .catch((error) => setVideoError(String(error)));
+                      }}
+                    >
+                      Release video capture hold
+                    </button>
+                  </div>
+                )}
+              <section className="inspector-section">
+                <button
+                  className="secondary-button"
+                  disabled={!simulationControl.configurationAvailable}
+                  onClick={() => {
+                    setConfigurationView({ loading: true });
+                    simulationControl
+                      .inspectConfiguration?.()
+                      .then((data) =>
+                        setConfigurationView({ loading: false, data }),
+                      )
+                      .catch((error) =>
+                        setConfigurationView({
+                          loading: false,
+                          error: error.message,
+                        }),
+                      );
+                  }}
+                >
+                  Inspect simulation configuration
+                </button>
+              </section>
+            </>
+          )}
           <DiagnosticsPanel
             current={current}
             metrics={activeMetrics}
@@ -1547,23 +1784,57 @@ export default function App() {
             aria-label="Particle visualization"
           >
             <div className="scene-host" ref={host} />
+            {(videoProgress || videoError) && (
+              <div className="video-status" role="status">
+                {videoError || videoProgress}
+                {videoError && (
+                  <button
+                    className="secondary-button compact"
+                    onClick={() => setVideoError("")}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            )}
             <div className="scene-title">
-              <span className="scene-title-dot" />
-              {scalarTitle}
-              {loading && !playing && (
-                <span className="scene-time" role="status">
-                  {" "}
-                  · Updating…
-                </span>
-              )}
+              <strong>{source ? friendlyName(source) : "warpSPH"}</strong>
+              <span>
+                <span className="scene-title-dot" /> {scalarTitle}
+                {loading && !playing ? " · Updating…" : ""}
+              </span>
               {source && (
                 <span className="scene-time">
                   {source.timeKind === "simulation" ? "t = " : "frame "}
                   {formatNumber(frame?.time ?? 0, 5)}
+                  {source.dt !== undefined
+                    ? ` · Δt = ${formatNumber(source.dt, 4)}`
+                    : ""}
+                  {source.scheme ? ` · ${source.scheme}` : ""}
+                  {source.kernel ? ` · ${source.kernel}` : ""}
+                  {source.integrator ? ` · ${source.integrator}` : ""}
+                  {presentation?.mode !== "particles"
+                    ? ` · Grid kernel ${fieldView.settings.kernel === "wendland4" ? "C4" : "C2"}`
+                    : ""}
                 </span>
               )}
             </div>
             <div className="scene-tools">
+              <button
+                className="secondary-button compact"
+                disabled={!frame || (loading && !videoSession.current)}
+                onClick={() => {
+                  if (videoSession.current) void finishVideo();
+                  else {
+                    setVideoStart(index);
+                    setVideoEnd(Math.max(index, (source?.frames ?? 1) - 1));
+                    setVideoOpen(true);
+                    setVideoError("");
+                  }
+                }}
+              >
+                {videoSession.current ? "Finish & save video" : "Export video"}
+              </button>
               <IconButton
                 label="Pick a particle (P)"
                 active={picking}
@@ -1795,7 +2066,11 @@ export default function App() {
               </>
             )}
           </section>
-          <section className="transport" aria-label="Trajectory playback">
+          <section
+            className="transport"
+            aria-label="Trajectory playback"
+            inert={!!videoSession.current && !source?.live}
+          >
             <div className="transport-buttons">
               <IconButton
                 label="First frame"
@@ -1869,6 +2144,28 @@ export default function App() {
                 <ChevronsRight size={17} />
               </IconButton>
             </div>
+            {source?.live && simulationControl?.toggleTransfers && (
+              <button
+                className="secondary-button live-update-toggle"
+                aria-label={
+                  simulationControl.transfersPaused
+                    ? "Resume live updates"
+                    : "Pause live updates"
+                }
+                title="Pause snapshot downloads independently of simulation execution"
+                onClick={simulationControl.toggleTransfers}
+                disabled={!!simulationControl.run?.video?.active}
+              >
+                {simulationControl.transfersPaused ? (
+                  <Play size={14} />
+                ) : (
+                  <Pause size={14} />
+                )}
+                {simulationControl.transfersPaused
+                  ? "Resume updates"
+                  : "Pause updates"}
+              </button>
+            )}
             <div className="scrubber">
               <div className="scrubber-info">
                 <span>
@@ -2599,6 +2896,139 @@ export default function App() {
             if (uid) materialPick.current(uid, displayedIndex, sourceId);
           }}
         />
+      )}
+      {videoOpen && (
+        <div className="modal-backdrop">
+          <section
+            className="settings-modal modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Export viewport video"
+          >
+            <div className="modal-heading">
+              <h2>Export viewport video</h2>
+              <button
+                className="icon-button"
+                aria-label="Close video settings"
+                onClick={() => setVideoOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p>
+              Capture the scene, title, time, particle count, color bar and
+              axes. Controls stay outside the video.
+            </p>
+            <label>
+              Video frames per second
+              <NumberControl
+                min={1}
+                max={120}
+                step={1}
+                value={videoFPS}
+                onValueChange={setVideoFPS}
+              />
+            </label>
+            {source?.live ? (
+              <>
+                <label>
+                  Simulation time between frames
+                  <NumberControl
+                    min={0.000001}
+                    step={0.01}
+                    value={videoInterval}
+                    onValueChange={setVideoInterval}
+                  />
+                </label>
+                <p>
+                  The solver waits at completed steps until each requested frame
+                  is rendered and encoded. Without a recorded trajectory, losing
+                  the viewer holds the simulation until you reconnect and resume
+                  capture or release the hold.
+                </p>
+              </>
+            ) : (
+              <div className="video-range">
+                <label>
+                  First frame
+                  <NumberControl
+                    min={0}
+                    max={videoEnd}
+                    step={1}
+                    value={videoStart}
+                    onValueChange={setVideoStart}
+                  />
+                </label>
+                <label>
+                  Last frame
+                  <NumberControl
+                    min={videoStart}
+                    max={(source?.frames ?? 1) - 1}
+                    step={1}
+                    value={videoEnd}
+                    onValueChange={setVideoEnd}
+                  />
+                </label>
+                <label>
+                  Frame stride
+                  <NumberControl
+                    min={1}
+                    step={1}
+                    value={videoStride}
+                    onValueChange={setVideoStride}
+                  />
+                </label>
+              </div>
+            )}
+            <p className="subtle-note">
+              WebM / VP8. Encoded video is held in browser memory until saved.
+              Keep this tab open; background tabs may capture more slowly.
+            </p>
+            {videoError && <p role="alert">{videoError}</p>}
+            <button
+              className="primary-button"
+              onClick={() => void startVideo()}
+            >
+              Start video export
+            </button>
+          </section>
+        </div>
+      )}
+      {configurationView && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setConfigurationView(null)}
+        >
+          <section
+            className="modal configuration-inspector"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Simulation configuration"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header>
+              <h2>Simulation configuration</h2>
+              <button
+                className="icon-button"
+                aria-label="Close simulation configuration"
+                onClick={() => setConfigurationView(null)}
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <p className="subtle-note">
+              Read-only resolved setup. Current adaptive Δt is shown in the live
+              metrics.
+            </p>
+            {configurationView.loading ? (
+              <p>Loading configuration…</p>
+            ) : configurationView.error ? (
+              <p role="alert">{configurationView.error}</p>
+            ) : (
+              <pre>{JSON.stringify(configurationView.data, null, 2)}</pre>
+            )}
+          </section>
+        </div>
       )}
       <CompanionPanel
         section={companionSection}

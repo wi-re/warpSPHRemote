@@ -1,10 +1,9 @@
 """Optional simulation-side resident adapter. No rendering and no Warp import."""
 
 from __future__ import annotations
-import hashlib
 import json
+import copy
 import os
-import struct
 import threading
 import time
 from urllib.request import Request, urlopen
@@ -12,7 +11,8 @@ from urllib.error import HTTPError
 import numpy as np
 from .daemon import ensure_daemon, descriptor, runtime_dir
 from .telemetry import StepTiming, ResourceSampler
-from .protocol import DEFAULT_SNAPSHOT_BYTES, encode_frame
+from .protocol import DEFAULT_SNAPSHOT_BYTES
+from .captures import Capture, owned_arrays, encode_capture
 
 
 class SimulationStopped(Exception):
@@ -47,6 +47,14 @@ class SimulationPublisher:
         self.captured = 0
         self.static_revision = None
         self.pending = None
+        self._queued_capture = None
+        self._copy_busy = self._transfer_busy = False
+        self._capture_stats = {}
+        self.configuration = self.configuration_pending = None
+        self.video = None
+        self.capture_interval = 0.5
+        self._next_capture_at = 0.0
+        self.transfer_event = threading.Event()
         self._last_published = None
         self.timing = StepTiming()
         self.resources = ResourceSampler()
@@ -57,16 +65,21 @@ class SimulationPublisher:
             "time": 0.0,
             "dt": 0.0,
         }
-        body = {"name": name, "pid": os.getpid()}
+        body = {"name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo"]}
         if os.environ.get("WARPSPH_REMOTE_RUN"):
             body["id"] = os.environ["WARPSPH_REMOTE_RUN"]
         registration = self._request("/producer/runs", body)
         self.id = registration["id"]
         self.started_at = registration.get("startedAt", self.started_at)
         self.telemetry_supported = "telemetry" in registration.get("features", [])
+        self.capture_metrics_supported = "bufferedCapture" in registration.get("features", [])
+        self.configuration_supported = "configurationInspection" in registration.get("features", [])
         self.thread = threading.Thread(
             target=self._loop, name="warpsph-companion-publisher", daemon=True
         )
+        self.transfer_thread = threading.Thread(target=self._transfer_loop,
+            name="warpsph-companion-transfer", daemon=True)
+        self.transfer_thread.start()
         self.thread.start()
 
     def _request(self, path, data, headers=None):
@@ -88,7 +101,7 @@ class SimulationPublisher:
                 **(headers or {}),
             },
         )
-        with urlopen(req, timeout=5) as r:
+        with urlopen(req, timeout=max(30, len(data)/2**20) if isinstance(data,bytes) else 5) as r:
             return json.load(r)
 
     def _recover(self):
@@ -99,13 +112,17 @@ class SimulationPublisher:
             registration = self._request("/producer/runs", dict(
                 id=self.id, name=self.name, pid=os.getpid(), reconnect=True,
                 startedAt=self.started_at, paused=self.pausing.is_set(),
-                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id))
+                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, capabilities=["synchronizedVideo"]))
             if registration["id"] != self.id:
                 raise ValueError("Companion did not preserve the recovered run identity.")
             self.telemetry_supported = "telemetry" in registration.get("features", [])
+            self.capture_metrics_supported = "bufferedCapture" in registration.get("features", [])
+            self.configuration_supported = "configurationInspection" in registration.get("features", [])
             with self.lock:
                 self._transport_epoch += 1
-                self.pending = None
+                self.pending = self._queued_capture = None
+                self.configuration_pending = self.configuration
+                self._next_capture_at = 0.0
                 self.capture_target = self.captured = 0
                 self.static_revision = self._last_published = None
                 self.history_request = self.history_pending = self.history_seen = None
@@ -123,31 +140,11 @@ class SimulationPublisher:
                     meta = dict(self.meta)
                     if resources is not None:
                         meta["resources"] = resources
-                    pending = self.pending
-                    self.pending = None
-                    history_pending = self.history_pending
-                    self.history_pending = None
-                if history_pending:
-                    try:
-                        self._request(f"/producer/{self.id}/history", history_pending[0], history_pending[1])
-                    except HTTPError as error:
-                        if error.code != 409:
-                            raise
-                if pending:
-                    try:
-                        self._request(
-                            f"/producer/{self.id}/snapshot", pending[0], pending[1]
-                        )
-                        with self.lock:
-                            self._last_published = pending[2]
-                    except HTTPError as e:
-                        if e.code != 409:
-                            raise  # detached/expired viewers may discard a capture
-                        with self.lock:
-                            self.captured = 0
                 response = self._request(f"/producer/{self.id}/status", meta)
                 with self.lock:
                     self.max_snapshot_bytes = response.get("maxSnapshotBytes", self.max_snapshot_bytes)
+                    self.capture_interval = response.get("captureInterval", self.capture_interval)
+                    self.video = response.get("video")
                     if response["capture"]:
                         self.capture_target = response["captureSequence"]
                         self.static_revision = response["staticRevision"]
@@ -187,97 +184,99 @@ class SimulationPublisher:
     def wants_snapshot(self):
         with self.lock:
             return (self.capture_target > self.captured and self.pending is None
-                    and time.monotonic() >= self._capture_retry_at)
+                    and self._queued_capture is None and not self._copy_busy and not self._transfer_busy
+                    and time.monotonic() >= max(self._capture_retry_at, self._next_capture_at))
 
-    def snapshot(self, arrays, *, step, time_value, domain=None):
-        """Call only at a safe completed-step boundary. One pending capture maximum."""
+    def snapshot(self, arrays, *, step, time_value, domain=None, details=None):
+        """Own one CPU copy at a safe boundary; encode/send asynchronously.
+
+        True means queued, not delivered. Validation/encoding failures are reported
+        in status without stopping the integrator. No queue of historical states.
+        """
         with self.lock:
-            if self.capture_target <= self.captured or self.pending is not None:
+            if (self.capture_target <= self.captured or self.pending is not None
+                    or self._queued_capture is not None or self._copy_busy or self._transfer_busy
+                    or time.monotonic() < max(self._capture_retry_at, self._next_capture_at)):
                 return False
-            generation = self.capture_target
-            transport_epoch = self._transport_epoch
-            expected = self.static_revision
-        raw = {
-            name: numpy_array(value)
-            for name, value in arrays.items()
-            if value is not None
-        }
-        required = {
-            "positions",
-            "UIDs",
-            "kinds",
-            "masses",
-            "densities",
-            "supports",
-            "velocities",
-        }
-        if not required <= raw.keys():
-            raise ValueError(
-                "Live snapshots require positions, stable IDs, kinds, masses, density, supports and velocity."
-            )
-        p = raw["positions"]
-        n, dim = p.shape
-        if dim not in (2, 3) or not n:
-            raise ValueError("Live snapshots require nonempty 2D/3D positions.")
-        for name, a in raw.items():
-            if a.ndim not in (1, 2) or a.shape[0] != n or not np.isfinite(a).all():
-                raise ValueError(f"Invalid live field {name}.")
-        # Bound bytes, not particle count: different fields/dimensions cost differently.
-        payload_bytes = sum(
-            a.size * (4 if a.dtype.kind == "f" or a.dtype.itemsize <= 4 else 8)
-            for a in raw.values()
-        )
-        if payload_bytes > self.max_snapshot_bytes:
-            raise ValueError(
-                f"Snapshot payload needs {payload_bytes / 2**20:.1f} MiB; daemon budget is "
-                f"{self.max_snapshot_bytes / 2**20:g} MiB. Increase --max-snapshot-mib on the daemon.")
-        static = {k: raw.pop(k) for k in ("UIDs", "kinds", "masses")}
-        digest = hashlib.sha256()
-        for k, a in static.items():
-            digest.update(k.encode())
-            digest.update(str((a.dtype.str, a.shape)).encode())
-            digest.update(a.tobytes())
-        revision = digest.hexdigest()
-        statics = (
-            encode_frame(static, index=step, time=time_value)
-            if expected != revision
-            else b""
-        )
-        dynamics = encode_frame(raw, index=step, time=time_value)
-        fields = [
-            dict(name=k, components=a.shape[1] if a.ndim == 2 else 1, dtype=a.dtype.str)
-            for k, a in {**static, **raw}.items()
-        ]
-        metadata = dict(
-            name=self.name,
-            dimension=dim,
-            fields=fields,
-            bounds=[p.min(axis=0).tolist(), p.max(axis=0).tolist()],
-            identity="UIDs",
-            domain=domain,
-            internalEnergyAvailable="internalEnergies" in raw,
-            step=step,
-            time=time_value,
-        )
-        packet = struct.pack("<II", len(statics), len(dynamics)) + statics + dynamics
-        if len(packet) > self.max_snapshot_bytes:
-            raise ValueError("Snapshot including headers exceeds the daemon budget; increase --max-snapshot-mib.")
-        headers = {
-            "X-Capture-Generation": str(generation),
-            "X-Static-Revision": revision,
-            "X-Snapshot-Metadata": json.dumps(
-                metadata, separators=(",", ":"), allow_nan=False
-            ),
-        }
+            generation, epoch, expected = self.capture_target, self._transport_epoch, self.static_revision
+            self._copy_busy = True
+        started = time.perf_counter()
+        try:
+            raw = owned_arrays(arrays, self.max_snapshot_bytes)
+            capture = Capture(raw, int(step), float(time_value), copy.deepcopy(domain), generation,
+                epoch, expected, (time.perf_counter()-started)*1000, sum(a.nbytes for a in raw.values()), copy.deepcopy(details))
+            with self.lock:
+                if epoch != self._transport_epoch or generation != self.capture_target:
+                    return False
+                self.captured = generation
+                self._queued_capture = capture
+                self._next_capture_at = time.monotonic() + self.capture_interval
+                self._capture_stats.update(captureMs=capture.copy_ms, captureBytes=capture.cpu_bytes, captureStep=capture.step)
+                if self.capture_metrics_supported:
+                    self.meta['performance'] = {**self.meta.get('performance',{}), **self._capture_stats}
+            self.transfer_event.set()
+            return True
+        finally:
+            with self.lock:
+                self._copy_busy = False
+
+    def _capture_failure(self, error):
         with self.lock:
-            if transport_epoch != self._transport_epoch or generation != self.capture_target:
-                return False
-            self.captured = generation
-            self._capture_retry_at = 0.0
-            if self.meta.get("message", "").startswith("Live capture unavailable:"):
-                self.meta["message"] = ""
-            self.pending = (packet, headers, (step, time_value, revision))
-        return True
+            self.captured = 0
+            self._capture_retry_at = time.monotonic() + max(0.5, self.interval)
+            self.meta['message'] = ('Live capture unavailable: '+str(error))[:500]
+
+    def _transfer_loop(self):
+        while True:
+            self.transfer_event.wait(0.05)
+            self.transfer_event.clear()
+            with self.lock:
+                capture, self._queued_capture = self._queued_capture, None
+                history, self.history_pending = self.history_pending, None
+                configuration, self.configuration_pending = self.configuration_pending, None
+                if capture is None and history is None and configuration is None:
+                    if self.closed.is_set(): return
+                    continue
+                self._transfer_busy = True
+            try:
+                if configuration:
+                    self._request(f"/producer/{self.id}/configuration", configuration)
+                if history:
+                    try:
+                        self._request(f'/producer/{self.id}/history', history[0], history[1])
+                    except HTTPError as error:
+                        if error.code != 409: raise
+                if capture:
+                    started = time.perf_counter()
+                    packet = encode_capture(capture, self.name, self.max_snapshot_bytes)
+                    encoded_ms = (time.perf_counter()-started)*1000
+                    with self.lock:
+                        if capture.epoch != self._transport_epoch or capture.generation != self.capture_target:
+                            continue
+                        self.pending = packet
+                    started = time.perf_counter()
+                    self._request(f'/producer/{self.id}/snapshot', packet[0], packet[1])
+                    with self.lock:
+                        if capture.epoch == self._transport_epoch:
+                            self._last_published = packet[2]
+                            self._capture_stats.update(encodeMs=encoded_ms, publishMs=(time.perf_counter()-started)*1000)
+                            if self.capture_metrics_supported:
+                                self.meta['performance'] = {**self.meta.get('performance',{}), **self._capture_stats}
+                            if self.meta.get('message','').startswith('Live capture unavailable:'):
+                                self.meta['message'] = ''
+            except (ValueError, TypeError, IndexError) as error:
+                self._capture_failure(error)
+            except OSError as error:
+                self.last_error = str(error)
+                with self.lock:
+                    if configuration and not self.closed.is_set():
+                        self.configuration_pending = configuration
+                    self.captured = 0
+                    self._capture_retry_at = time.monotonic() + max(0.5, self.interval)
+            finally:
+                with self.lock:
+                    self.pending = None
+                    self._transfer_busy = False
 
     def recording(self, ctx):
         """Advertise existing exports, never enable storage implicitly."""
@@ -312,13 +311,34 @@ class SimulationPublisher:
 
     def post_step(self, ctx, state, step):
         self.recording(ctx)
+        if self.configuration_supported and self.configuration is None:
+            # Snapshot fixed setup once; adaptive dt remains a live status field.
+            try:
+                if not hasattr(ctx, "case") or not hasattr(ctx.spec, "toDict"):
+                    raise AttributeError("No resolved case configuration")
+                from warpSPH.configurations import configurationToDict
+                configuration = dict(schemaVersion=1, case=ctx.case.name,
+                    requested=getattr(ctx.spec,'configuration',None), spec=ctx.spec.toDict(),
+                    simulationConfig=configurationToDict(ctx.config), solverConfig=ctx.exportFunction(ctx.schemeConfig))
+                configuration = json.loads(json.dumps(configuration,allow_nan=False))
+            except (ImportError,AttributeError,TypeError,ValueError):
+                configuration = dict(case=self.name, solver=dict(scheme=str(ctx.scheme)),
+                    simulation=dict(dt=float(ctx.config.dt)), note='Full resolved configuration was not supplied by this adapter.')
+            with self.lock:
+                self.configuration = self.configuration_pending = configuration
+            self.transfer_event.set()
         pause_start = None
         while True:
             if self.stopping.is_set() or self.closed.is_set():
                 raise SimulationStopped("Stopped from the companion.")
+            video = self.video or {}
+            video_wait = video.get('active') and (video.get('orphaned') or
+                (float(state.t) >= video.get('nextTime',-1) and
+                 (video.get('ackStep',-1) < int(step) or video.get('ackTime',-1) < float(state.t))))
             paused = self.pausing.is_set()
+            held = paused or video_wait
             now = time.monotonic()
-            if paused and pause_start is None:
+            if held and pause_start is None:
                 pause_start = now
             if now - getattr(self, "_last_meta", 0) > 0.5 or getattr(self, "_paused", None) != paused:
                 simulation_time = float(state.t)
@@ -331,7 +351,8 @@ class SimulationPublisher:
                         timing["targetStep"] = max(0, int(limit_steps) + getattr(spec, "resumeStepOffset", 0) - 1)
                     elif getattr(spec, "tLimit", None) is not None:
                         timing["targetTime"] = float(spec.tLimit)
-                    telemetry["performance"] = timing
+                    with self.lock:
+                        telemetry["performance"] = {**timing, **(self._capture_stats if self.capture_metrics_supported else {})}
                 self._last_meta = now
                 self._paused = paused
                 self.update(
@@ -344,7 +365,7 @@ class SimulationPublisher:
                 )
             self._history(ctx)
             self._capture(ctx, state, step)
-            if not paused:
+            if not held:
                 if pause_start is not None:
                     self.timing.exclude_pause(time.monotonic() - pause_start)
                 return
@@ -353,6 +374,9 @@ class SimulationPublisher:
             self.closed.wait(0.02)
 
     def _capture(self, ctx, state, step):
+        video=self.video or {}
+        if video.get('active') and float(state.t) < video.get('nextTime',-1) and not self.meta.get('videoFinishing'):
+            return
         if not self.wants_snapshot:
             return
         with self.lock:
@@ -379,7 +403,10 @@ class SimulationPublisher:
                 for name in ("min", "max", "periodic")
             }
             self.snapshot(
-                arrays, step=int(step), time_value=float(state.t), domain=domain
+                arrays, step=int(step), time_value=float(state.t), domain=domain,
+                details=dict(dt=float(ctx.config.dt), scheme=str(ctx.scheme).split(".")[-1],
+                    kernel=str(getattr(ctx.config,'kernel','')).split('.')[-1],
+                    integrator=str(getattr(ctx.config,'integrationScheme','')).split('.')[-1])
             )
         except (ValueError, TypeError, IndexError) as error:
             # Viewing is optional: an unsupported capture must not kill a valid solver run.
@@ -387,9 +414,23 @@ class SimulationPublisher:
                 self._capture_retry_at = time.monotonic() + max(0.5, self.interval)
                 self.meta["message"] = ("Live capture unavailable: " + str(error))[:500]
 
+    def finish(self, ctx, state, step):
+        """Deliver the last rendered video frame before publishing completion."""
+        if not (self.video or {}).get('active'):
+            return
+        self.update(videoFinishing=True, time=float(state.t), step=int(step))
+        # Let the control worker request a final capture even when it falls
+        # between regular simulation-time frame boundaries.
+        while (self.video or {}).get('active') and (self.video or {}).get('ackTime',-1) < float(state.t):
+            self.post_step(ctx, state, step)
+            self.closed.wait(.02)
+        self.update(videoFinishing=False)
+
     def close(self, status="completed", message=""):
         self.closed.set()
+        self.transfer_event.set()
         self.thread.join(timeout=6)
+        self.transfer_thread.join(timeout=6)
         with self.lock:
             pending, self.pending = self.pending, None
             meta = {**self.meta, "status": status, "message": str(message)[:500]}
@@ -426,6 +467,7 @@ def run_live(case, *, name=None, runtime=None, **overrides):
     try:
         result = run(replace(case, postStep=post), **overrides)
         publisher.recording(result.ctx)
+        publisher.finish(result.ctx, result.state, result.nSteps)
         publisher.update(
             step=result.nSteps,
             time=float(result.state.t),

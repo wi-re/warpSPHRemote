@@ -532,3 +532,9 @@ cannot be repaired by refreshing the website. Older daemons lack the takeover
 capability, and the viewer explains that a companion update/restart is needed.
 
 See [reconnection verification](RECONNECTION.md) for reproduction commands.
+
+Buffered CPU snapshots, independent update pause, synchronized live/trajectory
+video export and read-only running configuration inspection are described in
+[Buffered capture and video](BUFFERED_CAPTURE_AND_VIDEO.md). Restart the daemon
+and start new simulations after updating to negotiate these adapter capabilities;
+existing Python processes retain their already-imported implementation.

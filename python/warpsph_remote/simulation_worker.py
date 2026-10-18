@@ -139,6 +139,7 @@ def main():
         else:
             result = run(managed_case, **overrides)
         publisher.recording(result.ctx)
+        publisher.finish(result.ctx, result.state, result.nSteps)
         publisher.update(
             step=result.nSteps,
             time=float(result.state.t),

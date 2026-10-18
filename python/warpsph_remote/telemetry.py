@@ -119,7 +119,7 @@ def validate_telemetry(data):
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError('Invalid telemetry number.')
     if 'performance' in data:
-        numeric(data['performance'], ('stepMs', 'simulationRate', 'targetTime', 'targetStep'))
+        numeric(data['performance'], ('stepMs', 'simulationRate', 'targetTime', 'targetStep', 'captureMs', 'encodeMs', 'publishMs', 'captureBytes', 'captureStep'))
     if 'resources' in data:
         resources = data['resources']
         if not isinstance(resources, dict):

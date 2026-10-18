@@ -98,6 +98,9 @@ class Manager:
             or len(data["name"]) > 160
         ):
             raise ValueError("A simulation needs a short display name.")
+        capabilities=data.get('capabilities',[])
+        if not isinstance(capabilities,list) or len(capabilities)>32 or any(not isinstance(v,str) or len(v)>80 for v in capabilities):
+            raise ValueError('Invalid producer capabilities.')
         recovery = data.get("reconnect", False)
         if any(type(data.get(k, False)) is not bool for k in ("reconnect", "paused", "managed")):
             raise ValueError("Invalid producer recovery flags.")
@@ -125,10 +128,16 @@ class Manager:
                     recovered=recovery,
                     pause=bool(recovery and data.get("paused")))
                 self.runs[key] = run
+            if recovery and isinstance(data.get('video'), dict) and data['video'].get('active'):
+                interval = data['video'].get('interval',.04)
+                if type(interval) not in (int,float) or not math.isfinite(interval) or interval<=0:
+                    raise ValueError('Invalid recovered video interval.')
+                run['video'] = dict(active=True, interval=interval, nextTime=-1, ackTime=-1, ackStep=-1, orphaned=True)
             run.update(
                 name=data["name"],
                 pid=data.get("pid"),
                 registered=True,
+                capabilities=capabilities,
                 updatedAt=time.time(),
                 capture=False,
                 captureGeneration=0,
@@ -165,9 +174,13 @@ class Manager:
             "registered",
             "performance",
             "resources",
+            "streamPaused", "video",
+            "captureInterval",
         )
         row = {k: run[k] for k in keys if k in run}
         row["pauseRequested"] = bool(run.get("pause"))
+        row["configurationAvailable"] = bool(run.get("configuration"))
+        row["videoSupported"] = "synchronizedVideo" in run.get("capabilities",[])
         if run.get("recording"):
             row["recording"] = {"enabled": True, "mode": run["recording"]["mode"]}
         row["visualized"] = bool(
@@ -190,7 +203,7 @@ class Manager:
             "message",
             "recording",
             "performance",
-            "resources",
+            "resources", "videoFinishing",
         }
         if not isinstance(data, dict) or set(data) - allowed:
             raise ValueError("Invalid simulation status.")
@@ -225,6 +238,8 @@ class Manager:
             or len(data.get("message", "")) > 500
         ):
             raise ValueError("Status message too long.")
+        if "videoFinishing" in data and type(data["videoFinishing"]) is not bool:
+            raise ValueError("Invalid final capture flag.")
         if "recording" in data:
             recording = data["recording"]
             if (not isinstance(recording, dict) or set(recording) - {"path", "mode", "domain", "name"}
@@ -235,10 +250,17 @@ class Manager:
         with self.lock:
             r = self.runs[key]
             r.update(data, updatedAt=time.time())
+            video = r.get("video", {})
+            if video.get("active") and data.get("videoFinishing") and video.get("ackTime", -1) < data.get("time", 0):
+                video["nextTime"] = -1
+                if r.get("lease") and r.get("snapshot") is None:
+                    r["capture"] = True
             self.expire(r)
             self.touch()
             return dict(
-                capture=bool(r.get("capture")),
+                capture=bool(r.get("capture")) and not r.get("streamPaused", False),
+                captureInterval=0 if r.get("video",{}).get("active") else r.get("captureInterval", 0.5),
+                video=r.get("video"),
                 attached=bool(r.get("lease")),
                 captureSequence=r.get("captureGeneration", 0),
                 staticRevision=r.get("staticRevision"),
@@ -248,8 +270,19 @@ class Manager:
                 historyRequest=(r.get("historyPending") or {}).get("request"),
             )
 
+    def viewer_lost(self, r):
+        video = r.get("video", {})
+        if video.get("active"):
+            # Recorded runs can recover their video offline; otherwise keep the
+            # integrator at a safe boundary until a viewer explicitly releases it.
+            if r.get("recording"):
+                video["active"] = False
+            else:
+                video["orphaned"] = True
+
     def expire(self, r):
         if r.get("lease") and time.monotonic() - r["leaseAt"] > 20:
+            self.viewer_lost(r)
             r.update(
                 lease=None,
                 capture=False,
@@ -271,7 +304,7 @@ class Manager:
                     "The simulation is still starting. Attach once it registers."
                 )
             # Validate the destination before releasing any existing connection.
-            if r.get("status") in ("completed", "failed", "stopped") and not r.get("snapshot"):
+            if r.get("status") in ("completed", "failed", "stopped") and not r.get("snapshot") and r.get("lease") != viewer:
                 raise Conflict("This run has ended; attach while it is running.")
             for other in self.runs.values():
                 self.expire(other)
@@ -280,9 +313,13 @@ class Manager:
                 raise ViewerConflict("A viewer already owns the live connection.")
             for other in self.runs.values():
                 if other is not r and other.get("lease") and (takeover or other["lease"] == viewer):
+                    self.viewer_lost(other)
                     other.update(lease=None, capture=False, snapshot=None, static=None,
                                  staticRevision=None, metadata=None)
             if r.get("lease") != viewer:
+                if r.get('video',{}).get('active'):
+                    r['video']['orphaned']=True
+                r.update(streamPaused=False, captureInterval=0.5)
                 # Invalidate producer uploads prepared for the displaced lease.
                 r["captureGeneration"] = r.get("captureGeneration", 0) + 1
                 if r.get("snapshot") is None:
@@ -294,8 +331,48 @@ class Manager:
             r.update(
                 lease=viewer,
                 leaseAt=time.monotonic(),
-                capture=r.get("snapshot") is None,
+                capture=r.get("snapshot") is None and not r.get("streamPaused", False),
             )
+            self.touch()
+            return self.public(r)
+
+    def video_capture(self, key, viewer, data):
+        if not isinstance(data, dict) or set(data) - {'active', 'interval'} or type(data.get('active')) is not bool:
+            raise ValueError('Invalid video capture settings.')
+        interval = data.get('interval', .04)
+        if type(interval) not in (int,float) or not math.isfinite(interval) or interval <= 0:
+            raise ValueError('Video simulation interval must be positive.')
+        with self.lock:
+            r = self.owned(key, viewer)
+            if data['active'] and 'synchronizedVideo' not in r.get('capabilities',[]):
+                raise Conflict('Restart this simulation with an updated adapter to synchronize video capture.')
+            if data['active'] and r.get('status') in ('completed','failed','stopped'):
+                raise Conflict('The simulation has ended; export its recorded trajectory instead.')
+            r['video'] = dict(active=data['active'], interval=interval, nextTime=-1, ackTime=-1, ackStep=-1, orphaned=False)
+            r['captureGeneration'] = r.get('captureGeneration',0)+1
+            r.update(snapshot=None, static=None, staticRevision=None, streamPaused=False,
+                capture=data['active'] or r.get('status') not in ('completed','failed','stopped'))
+            self.touch()
+            return self.public(r)
+
+    def streaming(self, key, viewer, data):
+        if not isinstance(data, dict) or set(data) - {'paused', 'interval'}:
+            raise ValueError('Invalid streaming settings.')
+        if 'paused' in data and type(data['paused']) is not bool:
+            raise ValueError('Invalid transfer pause setting.')
+        if 'interval' in data and (type(data['interval']) not in (int,float)
+                or not math.isfinite(data['interval']) or data['interval'] < 0):
+            raise ValueError('Capture interval must be finite and nonnegative.')
+        with self.lock:
+            r = self.owned(key, viewer)
+            if r.get('video',{}).get('active'):
+                raise Conflict('Finish video capture before changing live transfer settings.')
+            if 'paused' in data and data['paused'] != r.get('streamPaused', False):
+                r['captureGeneration'] = r.get('captureGeneration',0) + 1
+                r.update(streamPaused=data['paused'], capture=not data['paused'] and
+                    r.get('snapshot') is None and r.get('status') not in ('completed','stopped','failed'))
+            if 'interval' in data:
+                r['captureInterval'] = float(data['interval'])
             self.touch()
             return self.public(r)
 
@@ -589,8 +666,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Request body exceeds its limit.")
         return self.rfile.read(n)
 
-    def json_body(self):
-        data = json.loads(self.body())
+    def json_body(self, limit=65536):
+        data = json.loads(self.body(limit))
         if not isinstance(data, dict):
             raise ValueError("Expected a JSON object.")
         return data
@@ -620,7 +697,7 @@ class Handler(BaseHTTPRequestHandler):
                         "presets": self.manager.available_cases(refresh=parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]),
                         "loopbackOnly": True,
                         "maxSnapshotBytes": self.manager.max_snapshot_bytes,
-                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery"],
+                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo"],
                     }
                 )
             if parts == ["v1", "configuration"]:
@@ -645,6 +722,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(body, kind)
             if len(parts) == 4 and parts[:2] == ["v1", "runs"]:
                 key, action = parts[2:]
+                if action == "configuration":
+                    with self.manager.lock:
+                        configuration = self.manager.runs[key].get("configuration")
+                    if configuration is None:
+                        raise Conflict("The simulation has not published its configuration yet.")
+                    return self.send_json(configuration)
                 with self.manager.lock:
                     r = self.manager.owned(key, self.headers.get("X-Viewer-Id"))
                     if action == "snapshot":
@@ -682,9 +765,15 @@ class Handler(BaseHTTPRequestHandler):
                 key = data.pop("id", None)
                 key = self.manager.register(data, key)
                 return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"],
-                    "features": ["telemetry", "producerRecovery"]}, 201)
+                    "features": ["telemetry", "producerRecovery", "bufferedCapture", "configurationInspection", "synchronizedVideo"]}, 201)
             if len(parts) == 3 and parts[0] == "producer":
                 key, action = parts[1:]
+                if action == "configuration":
+                    configuration = self.json_body(1024*1024)
+                    json.dumps(configuration, allow_nan=False)
+                    with self.manager.lock:
+                        self.manager.runs[key]["configuration"] = configuration
+                    return self.send_json({"accepted": True})
                 if action == "status":
                     return self.send_json(self.manager.status(key, self.json_body()))
                 if action == "history":
@@ -711,6 +800,10 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(data, dict) or set(data) - {"takeover"}:
                         raise ValueError("Invalid attachment request.")
                     return self.send_json(self.manager.attach(key, viewer, data.get("takeover", False)))
+                if action == "video":
+                    return self.send_json(self.manager.video_capture(key, viewer, data))
+                if action == "stream":
+                    return self.send_json(self.manager.streaming(key, viewer, data))
                 if action in ("pause", "resume"):
                     self.manager.pause(key, action == "pause")
                     return self.send_json({"pauseRequested": action == "pause"})
@@ -725,13 +818,19 @@ class Handler(BaseHTTPRequestHandler):
                             or r.get("snapshot") is None
                         ):
                             raise Conflict("Snapshot acknowledgement is stale.")
+                        video = r.get('video',{})
+                        if video.get('active'):
+                            meta = r.get('metadata') or {}
+                            video.update(ackTime=meta.get('time',0), ackStep=meta.get('step',0),
+                                nextTime=meta.get('time',0)+video['interval'])
                         r["captureGeneration"] = r.get("captureGeneration", 0) + 1
                         r.update(
                             snapshot=None,
-                            capture=r.get("status")
+                            capture=not r.get("streamPaused", False) and r.get("status")
                             not in ("completed", "failed", "stopped"),
                         )
                     elif action == "detach":
+                        self.manager.viewer_lost(r)
                         r.update(
                             lease=None,
                             capture=False,

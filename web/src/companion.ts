@@ -40,11 +40,19 @@ export interface Simulation {
   message?: string;
   pauseRequested?: boolean;
   recording?: { enabled: boolean; mode: string };
+  configurationAvailable?: boolean;
+  videoSupported?: boolean;
+  video?: { active: boolean; interval: number; orphaned?: boolean };
   performance?: {
     stepMs?: number;
     simulationRate?: number;
     targetTime?: number;
     targetStep?: number;
+    captureMs?: number;
+    encodeMs?: number;
+    publishMs?: number;
+    captureBytes?: number;
+    captureStep?: number;
   };
   resources?: Resources;
 }
@@ -58,11 +66,19 @@ export function liveConnectionStatus(run: Simulation): string {
 }
 export interface SimulationControl {
   sourceId: string;
+  setVideo?: (active: boolean, interval: number) => Promise<void>;
   status: string;
   pauseRequested: boolean;
   canPause: boolean;
   busy: boolean;
+  inspectConfiguration?: () => Promise<unknown>;
+  configurationAvailable?: boolean;
   toggle: () => void;
+  transfersPaused?: boolean;
+  toggleTransfers?: () => void;
+  captureInterval?: number;
+  canSetCaptureInterval?: boolean;
+  setCaptureInterval?: (seconds: number) => void;
   run?: Simulation;
   observedAt?: number;
   transfer?: FrameTransfer;
@@ -274,6 +290,12 @@ export class CompanionClient {
     );
     this.statics = undefined;
   }
+  async configurationOfRun(id: string) {
+    return (await this.request(`/v1/runs/${id}/configuration`)).json();
+  }
+  async streaming(id: string, settings: { paused: boolean; interval: number }) {
+    await this.request(`/v1/runs/${id}/stream`, settings);
+  }
   async pause(id: string, paused: boolean) {
     await this.request(`/v1/runs/${id}/${paused ? "pause" : "resume"}`, {});
   }
@@ -314,6 +336,9 @@ export class CompanionClient {
   }
   async stop(id: string) {
     await this.request(`/v1/runs/${id}/stop`, {});
+  }
+  async videoCapture(id: string, active: boolean, interval: number) {
+    return this.request(`/v1/runs/${id}/video`, { active, interval });
   }
   async ack(id: string, sequence: number) {
     await this.request(`/v1/runs/${id}/ack`, { sequence });
@@ -365,6 +390,7 @@ export class CompanionClient {
         staticBytes,
         durationMs: elapsed,
         receivedAt: Date.now(),
+        step: info.step,
         totalBytes: dynamicBuffer.byteLength + staticBytes,
       },
       sequence,

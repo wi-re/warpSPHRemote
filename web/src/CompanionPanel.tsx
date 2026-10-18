@@ -99,6 +99,11 @@ export function CompanionPanel({
   const [attached, setAttached] = useState(""),
     [notice, setNotice] = useState<Simulation | null>(null);
   const [observedAt, setObservedAt] = useState(Date.now);
+  const [transfersPaused, setTransfersPaused] = useState(false);
+  const [captureInterval, setCaptureInterval] = useState(0.5);
+  const intervalTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const [transfer, setTransfer] = useState<FrameTransfer>();
   const [controlBusy, setControlBusy] = useState("");
   const controlRequest = useRef("");
@@ -111,6 +116,11 @@ export function CompanionPanel({
     reader?: LiveSource;
     waiting: boolean;
     transfer?: FrameTransfer;
+    transfersPaused: boolean;
+    captureInterval: number;
+    download?: AbortController;
+    settingsQueue: Promise<unknown>;
+    video: boolean;
   } | null>(null);
   const connection = useRef<AbortController | null>(null);
   const callbacks = useRef({
@@ -277,15 +287,74 @@ export function CompanionPanel({
       setControlBusy("");
     }
   }
+  function sendStreamingSettings(session: NonNullable<typeof active.current>) {
+    if (!features.includes("streaming")) return;
+    session.settingsQueue = session.settingsQueue
+      .catch(() => {})
+      .then(async () => {
+        if (active.current !== session) return;
+        await session.client.streaming(session.id, {
+          paused: session.transfersPaused,
+          interval: session.captureInterval,
+        });
+      })
+      .catch((error) => {
+        if (active.current === session) reportError(error, session.client);
+      });
+  }
+  function toggleTransfers() {
+    const session = active.current;
+    if (!session) return;
+    session.transfersPaused = !session.transfersPaused;
+    setTransfersPaused(session.transfersPaused);
+    if (session.transfersPaused) session.download?.abort();
+    sendStreamingSettings(session);
+  }
+  function changeCaptureInterval(seconds: number) {
+    const session = active.current;
+    if (!session || !Number.isFinite(seconds) || seconds < 0) return;
+    session.captureInterval = seconds;
+    setCaptureInterval(seconds);
+    clearTimeout(intervalTimer.current);
+    intervalTimer.current = setTimeout(
+      () => sendStreamingSettings(session),
+      200,
+    );
+  }
   useEffect(() => {
     const run = runs.find((row) => row.id === attached);
     callbacks.current.onControl(
       run && client
         ? {
             sourceId: `live-${run.id}`,
+            setVideo:
+              features.includes("synchronizedVideo") && run.videoSupported
+                ? async (enabled, interval) => {
+                    const session = active.current;
+                    if (!session || session.id !== run.id)
+                      throw new Error("Reconnect the simulation first.");
+                    session.video = enabled;
+                    session.transfersPaused = false;
+                    setTransfersPaused(false);
+                    await session.settingsQueue;
+                    try {
+                      await client.videoCapture(run.id, enabled, interval);
+                    } catch (error) {
+                      session.video = false;
+                      throw error;
+                    }
+                  }
+                : undefined,
             run,
             observedAt,
             transfer,
+            transfersPaused,
+            toggleTransfers,
+            captureInterval,
+            canSetCaptureInterval: features.includes("streaming"),
+            setCaptureInterval: changeCaptureInterval,
+            configurationAvailable: run.configurationAvailable,
+            inspectConfiguration: () => client.configurationOfRun(run.id),
             status: run.status,
             pauseRequested: !!run.pauseRequested,
             canPause: canPauseSimulation(run, features),
@@ -294,7 +363,17 @@ export function CompanionPanel({
           }
         : null,
     );
-  }, [runs, attached, client, features, controlBusy, transfer, observedAt]);
+  }, [
+    runs,
+    attached,
+    client,
+    features,
+    controlBusy,
+    transfer,
+    observedAt,
+    transfersPaused,
+    captureInterval,
+  ]);
   async function forgetSavedPairing() {
     cancelConnection();
     const removed = forgetPairing();
@@ -457,6 +536,7 @@ export function CompanionPanel({
       stopped = true;
       abort.abort();
       clearTimeout(timer);
+      clearTimeout(intervalTimer.current);
       retryConnection.current = null;
     };
   }, [client]);
@@ -534,6 +614,10 @@ export function CompanionPanel({
         abort: new AbortController(),
         reader: undefined as LiveSource | undefined,
         waiting: false,
+        transfersPaused: false,
+        captureInterval: 0.5,
+        settingsQueue: Promise.resolve(),
+        video: false,
       };
       active.current = session;
       setAttached(id);
@@ -541,6 +625,8 @@ export function CompanionPanel({
       setNotice(null);
       onClose();
       setTransfer(undefined);
+      setTransfersPaused(false);
+      setCaptureInterval(0.5);
       setTakeoverRequest(null);
       function connectionLost(error: unknown) {
         if (daemonUnavailable(client, error)) return true;
@@ -575,8 +661,23 @@ export function CompanionPanel({
       const pump = async () => {
         try {
           while (!session.abort.signal.aborted) {
-            if (!session.waiting) {
-              const snapshot = await client.snapshot(id, session.abort.signal);
+            if (!session.waiting && !session.transfersPaused) {
+              const download = new AbortController();
+              session.download = download;
+              let snapshot;
+              try {
+                snapshot = await client.snapshot(
+                  id,
+                  AbortSignal.any([session.abort.signal, download.signal]),
+                );
+              } catch (error) {
+                if (download.signal.aborted && !session.abort.signal.aborted)
+                  continue;
+                throw error;
+              } finally {
+                session.download = undefined;
+              }
+              if (session.transfersPaused) continue;
               if (snapshot) {
                 if (snapshot.transfer) {
                   const previous = session.transfer;
@@ -600,7 +701,7 @@ export function CompanionPanel({
                   }
                   session.waiting = false;
                 };
-                if (session.reader?.sameState(snapshot)) {
+                if (!session.video && session.reader?.sameState(snapshot)) {
                   await ack();
                 } else {
                   const first = !session.reader;

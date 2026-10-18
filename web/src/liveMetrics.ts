@@ -2,6 +2,7 @@ import type { Simulation } from "./companion";
 
 export interface FrameTransfer {
   bytes: number;
+  step?: number;
   staticBytes: number;
   durationMs: number;
   receivedAt: number;

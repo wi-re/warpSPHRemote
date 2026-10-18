@@ -7,6 +7,7 @@ import {
   remainingSeconds,
   transferRate,
 } from "./liveMetrics";
+import { NumberControl } from "./NumberControl";
 import { formatNumber } from "./data";
 
 export function LiveMetrics({ control }: { control: SimulationControl }) {
@@ -51,8 +52,14 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
         <dd>{run?.time !== undefined ? formatNumber(run.time, 5) : "—"}</dd>
         <dt>Time step Δt</dt>
         <dd>{run?.dt !== undefined ? formatNumber(run.dt, 5) : "—"}</dd>
+        <dt>Live updates</dt>
+        <dd>
+          {control.transfersPaused
+            ? "Paused · solver independent"
+            : "Following snapshots"}
+        </dd>
         <dt title="Rolling completed-step wall throughput, including simulation output overhead; deliberate pauses excluded.">
-          Time / step
+          Wall time / step
         </dt>
         <dd>{p?.stepMs !== undefined ? `${p.stepMs.toFixed(2)} ms` : "—"}</dd>
         <dt>Remaining estimate</dt>
@@ -81,9 +88,41 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
             : "—"}
         </dd>
       </dl>
+      {run?.video?.active && (
+        <p className="subtle-note">
+          Synchronized video holds the solver until frames are rendered. Step
+          throughput and ETA exclude deliberate capture holds.
+        </p>
+      )}
       <details className="live-metrics-detail" open>
         <summary>Frame transfer</summary>
         <dl className="properties">
+          <dt title="Time spent preserving an owned CPU copy at a completed simulation step, including GPU-to-CPU synchronization.">
+            State → CPU copy
+          </dt>
+          <dd>
+            {p?.captureMs !== undefined ? `${p.captureMs.toFixed(1)} ms` : "—"}
+          </dd>
+          <dt title="Validation, hashing and packet encoding on the transfer worker; the simulation does not wait for this.">
+            Background encoding
+          </dt>
+          <dd>
+            {p?.encodeMs !== undefined ? `${p.encodeMs.toFixed(1)} ms` : "—"}
+          </dd>
+          <dt>Adapter → daemon</dt>
+          <dd>
+            {p?.publishMs !== undefined ? `${p.publishMs.toFixed(1)} ms` : "—"}
+          </dd>
+          <dt>Owned CPU state</dt>
+          <dd>{memorySize(p?.captureBytes)}</dd>
+          <dt title="How far the simulation has advanced beyond the last downloaded snapshot.">
+            Steps since snapshot
+          </dt>
+          <dd>
+            {run?.step !== undefined && transfer?.step !== undefined
+              ? Math.max(0, run.step - transfer.step).toLocaleString()
+              : "—"}
+          </dd>
           <dt>Downloaded</dt>
           <dd>{megabytes(transfer?.bytes, 3)}</dd>
           <dt title="Full response bodies, including any newly fetched static identity data; excludes decoding and rendering.">
@@ -99,6 +138,24 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
           <dt>This attachment</dt>
           <dd>{megabytes(transfer?.totalBytes, 3)}</dd>
         </dl>
+        <label className="live-capture-interval">
+          Minimum capture interval (s)
+          <NumberControl
+            aria-label="Minimum capture interval"
+            value={control.captureInterval ?? 0.5}
+            min={0}
+            step={0.1}
+            disabled={
+              !control.canSetCaptureInterval || !!control.run?.video?.active
+            }
+            onValueChange={(value) => control.setCaptureInterval?.(value)}
+          />
+        </label>
+        <p className="subtle-note">
+          A CPU copy is captured after acknowledgement, subject to this minimum
+          interval. Zero adds no interval. Encoding and transfer run in the
+          background.
+        </p>
       </details>
       <details className="live-metrics-detail" open>
         <summary>Simulation hardware{staleResources ? " · stale" : ""}</summary>

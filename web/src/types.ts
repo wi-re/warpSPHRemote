@@ -22,6 +22,10 @@ export interface Source {
   liveConnected?: boolean;
   liveRevision?: number;
   liveStep?: number;
+  scheme?: string;
+  kernel?: string;
+  integrator?: string;
+  dt?: number;
 }
 export interface Frame {
   index: number;

@@ -1019,6 +1019,10 @@ export class ParticleRenderer {
       return [v.x, v.y];
     });
   }
+  captureCanvas() {
+    this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement;
+  }
   exportImage() {
     this.renderer.render(this.scene, this.camera);
     const link = document.createElement("a");
