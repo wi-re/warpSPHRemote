@@ -1,3 +1,4 @@
+import { LaunchWizard } from "./LaunchWizard";
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
@@ -37,7 +38,10 @@ interface PendingAttachment {
   client: CompanionClient;
   reason: "launch" | "monitor" | "manual";
 }
+export type CompanionSection = "connection" | "running" | "history" | "launch";
 interface Props {
+  section: CompanionSection;
+  onConnection: (connected: boolean) => void;
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -48,6 +52,8 @@ interface Props {
 }
 export function CompanionPanel({
   open,
+  section,
+  onConnection,
   onOpen,
   onClose,
   sourceId,
@@ -79,18 +85,10 @@ export function CompanionPanel({
     [busy, setBusy] = useState(false);
   const [attached, setAttached] = useState(""),
     [notice, setNotice] = useState<Simulation | null>(null);
-  const [presetId, setPresetId] = useState("gresho"),
-    [scheme, setScheme] = useState("CRKSPH"),
-    [variant, setVariant] = useState("standard");
-  const [showEnded, setShowEnded] = useState(false);
   const [controlBusy, setControlBusy] = useState("");
   const controlRequest = useRef("");
   const [features, setFeatures] = useState<string[]>([]);
-  const [record, setRecord] = useState(false);
-  const [exportInterval, setExportInterval] = useState(0.05);
   const historySession = useRef<AbortController | null>(null);
-  const [nx, setNx] = useState(128),
-    [duration, setDuration] = useState(3);
   const active = useRef<{
     id: string;
     client: CompanionClient;
@@ -120,7 +118,19 @@ export function CompanionPanel({
     enqueueAttachment,
   };
   const known = useRef<Set<string> | null>(null);
-  const preset = presets.find((p) => p.id === presetId);
+  useEffect(() => onConnection(!!client), [client, onConnection]);
+  useEffect(() => {
+    if (open && !client && saved && !connection.current && !error)
+      void connect(saved.endpoint, saved.token);
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePanel();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [open]);
   async function connect(address = endpoint, secret = token) {
     connection.current?.abort();
     const attempt = new AbortController();
@@ -505,28 +515,12 @@ export function CompanionPanel({
       setBusy(false);
     }
   }
-  function selectPreset(p: Preset) {
-    setPresetId(p.id);
-    setScheme(p.schemes[0]);
-    setVariant(Object.keys(p.variants)[0]);
-    setNx(p.nx);
-    setDuration(p.duration);
-  }
-  async function launch() {
-    if (!client || !preset) return;
+  async function launch(spec: object) {
+    if (!client) return;
     setBusy(true);
     setError("");
     try {
-      const run = await client.launch({
-        preset: preset.id,
-        scheme,
-        variant,
-        nx,
-        duration,
-        ...(features.includes("recordedHistory")
-          ? { record, exportInterval }
-          : {}),
-      });
+      const run = await client.launch(spec);
       if (connectedClient.current !== client) return;
       setRuns((old) => [...old.filter((row) => row.id !== run.id), run]);
       enqueueAttachment(run, "launch");
@@ -536,6 +530,14 @@ export function CompanionPanel({
       setBusy(false);
     }
   }
+  const title = !client
+    ? "Connect to a daemon"
+    : {
+        connection: "Daemon connection",
+        running: "Running simulations",
+        history: "Simulation history",
+        launch: "Run a simulation",
+      }[section];
   const connectingRun = pending?.run ?? awaitingFrame;
   return (
     <>
@@ -575,15 +577,17 @@ export function CompanionPanel({
             className="modal companion-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Local simulations"
+            aria-label={title}
             onClick={(e) => e.stopPropagation()}
           >
             <header className="companion-heading">
               <div>
                 <div className="eyebrow">LOCAL COMPANION</div>
-                <h2>Your simulations</h2>
+                <h2>{title}</h2>
                 <p>
-                  Run familiar cases, inspect progress and attach this viewer.
+                  {!client
+                    ? "Pair once, then choose the simulation task you want."
+                    : "Your daemon manages the available cases and resident simulations."}
                 </p>
               </div>
               <button
@@ -715,46 +719,75 @@ export function CompanionPanel({
               </section>
             ) : (
               <>
-                <div className="companion-connection">
-                  <span className="tiny-dot" /> Connected · {client.endpoint}
-                  <button
-                    onClick={async () => {
-                      connectedClient.current = null;
-                      setClient(null);
-                      setRuns([]);
-                      await detach();
-                      historySession.current?.abort();
-                    }}
-                  >
-                    Disconnect
-                  </button>
-                  <button onClick={() => void forgetSavedPairing()}>
-                    Forget pairing
-                  </button>
-                  {storageMessage && (
-                    <small role="status">{storageMessage}</small>
-                  )}
-                </div>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={monitor}
-                    onChange={(e) => {
-                      const enabled = e.target.checked;
-                      monitorEnabled.current = enabled;
-                      setMonitor(enabled);
-                      rememberMonitor(enabled);
-                      if (enabled) known.current = null;
-                      else if (pendingAttachment.current?.reason === "monitor")
-                        cancelAttachment();
-                    }}
-                  />
-                  Automatically watch new simulations
-                </label>
-                <small>
-                  Monitor mode switches this view to the newest active launch,
-                  including simulations started outside this page.
-                </small>
+                {section === "connection" && (
+                  <>
+                    <div className="companion-connection">
+                      <span className="tiny-dot" /> Connected ·{" "}
+                      {client.endpoint}
+                      <button
+                        onClick={async () => {
+                          connectedClient.current = null;
+                          setClient(null);
+                          setRuns([]);
+                          await detach();
+                          historySession.current?.abort();
+                        }}
+                      >
+                        Disconnect
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          setError("");
+                          try {
+                            const info = await client.session(undefined, true);
+                            setPresets(info.presets);
+                            setFeatures(info.features || []);
+                          } catch (e) {
+                            setError((e as Error).message);
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Refresh available cases
+                      </button>
+                      <button onClick={() => void forgetSavedPairing()}>
+                        Forget pairing
+                      </button>
+                      {storageMessage && (
+                        <small role="status">{storageMessage}</small>
+                      )}
+                    </div>
+                  </>
+                )}
+                {section === "running" && (
+                  <>
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={monitor}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          monitorEnabled.current = enabled;
+                          setMonitor(enabled);
+                          rememberMonitor(enabled);
+                          if (enabled) known.current = null;
+                          else if (
+                            pendingAttachment.current?.reason === "monitor"
+                          )
+                            cancelAttachment();
+                        }}
+                      />
+                      Automatically watch new simulations
+                    </label>
+                    <small>
+                      Monitor mode switches this view to the newest active
+                      launch, including simulations started outside this page.
+                    </small>
+                  </>
+                )}
                 {pending && (
                   <p role="status">
                     Waiting to connect to {pending.run.name}…{" "}
@@ -763,294 +796,204 @@ export function CompanionPanel({
                     </button>
                   </p>
                 )}
-                <section className="companion-runs">
-                  <div className="section-heading">
-                    <Activity size={15} /> RESIDENT SIMULATIONS{" "}
-                    <small>{runs.length}</small>
-                  </div>
-                  {!runs.length && (
-                    <p className="empty-hint">
-                      No simulations yet. Launch a preset below, or register a
-                      simulation with <code>run_live(case, …)</code>.
-                    </p>
-                  )}
-                  <button
-                    className="text-button"
-                    onClick={() => setShowEnded((v) => !v)}
-                  >
-                    {showEnded
-                      ? "Hide finished simulations"
-                      : `Show ${runs.filter((r) => !["running", "starting", "paused"].includes(r.status)).length} finished simulations`}
-                  </button>
-                  {runs
-                    .filter(
+                {(section === "running" || section === "history") && (
+                  <section className="companion-runs">
+                    <div className="section-heading">
+                      <Activity size={15} />{" "}
+                      {section === "history"
+                        ? "DAEMON RUN HISTORY"
+                        : "ACTIVE SIMULATIONS"}{" "}
+                      <small>
+                        {
+                          runs.filter(
+                            (run) =>
+                              section === "history" ||
+                              ["running", "starting", "paused"].includes(
+                                run.status,
+                              ),
+                          ).length
+                        }
+                      </small>
+                    </div>
+                    {section === "history" && (
+                      <p>
+                        Run metadata for this daemon session. Replay is
+                        available only when trajectory recording was enabled.
+                      </p>
+                    )}
+                    {!runs.filter(
                       (run) =>
-                        showEnded ||
-                        run.id === attached ||
+                        section === "history" ||
                         ["running", "starting", "paused"].includes(run.status),
-                    )
-                    .sort(
-                      (a, b) =>
-                        Number(
-                          ["running", "starting", "paused"].includes(b.status),
-                        ) -
+                    ).length && (
+                      <p className="empty-hint">
+                        No simulations yet. Use Run simulation, or register a
+                        simulation with <code>run_live(case, …)</code>.
+                      </p>
+                    )}
+                    {runs
+                      .filter(
+                        (run) =>
+                          section === "history" ||
+                          ["running", "starting", "paused"].includes(
+                            run.status,
+                          ),
+                      )
+                      .sort(
+                        (a, b) =>
                           Number(
                             ["running", "starting", "paused"].includes(
-                              a.status,
+                              b.status,
                             ),
-                          ) || b.startedAt - a.startedAt,
-                    )
-                    .map((run) => (
-                      <article className="companion-run" key={run.id}>
-                        <div>
-                          <strong>{run.name}</strong>
-                          <span className={`run-state ${run.status}`}>
-                            {run.status}
-                            {run.stale ? " · no recent heartbeat" : ""}
-                            {attached === run.id ? " · attached" : ""}
-                          </span>
-                          <small>
-                            {new Date(
-                              run.startedAt * 1000,
-                            ).toLocaleTimeString()}{" "}
-                            · PID {run.pid ?? "—"} ·{" "}
-                            {run.scheme ?? "initializing"}
-                          </small>
-                          <div className="run-numbers">
-                            <span>
-                              Particles{" "}
-                              <b>{run.particles?.toLocaleString() ?? "—"}</b>
+                          ) -
+                            Number(
+                              ["running", "starting", "paused"].includes(
+                                a.status,
+                              ),
+                            ) || b.startedAt - a.startedAt,
+                      )
+                      .map((run) => (
+                        <article className="companion-run" key={run.id}>
+                          <div>
+                            <strong>{run.name}</strong>
+                            <span className={`run-state ${run.status}`}>
+                              {run.status}
+                              {run.stale ? " · no recent heartbeat" : ""}
+                              {attached === run.id ? " · attached" : ""}
                             </span>
-                            <span>
-                              Time{" "}
-                              <b>
-                                {run.time == null
-                                  ? "—"
-                                  : formatNumber(run.time, 5)}
-                              </b>
-                            </span>
-                            <span>
-                              Step <b>{run.step ?? "—"}</b>
-                            </span>
-                            <span>
-                              Δt{" "}
-                              <b>
-                                {run.dt == null ? "—" : formatNumber(run.dt, 4)}
-                              </b>
-                            </span>
-                          </div>
-                          {run.message && (
-                            <small className="inline-error">
-                              {run.message}
+                            <small>
+                              {new Date(
+                                run.startedAt * 1000,
+                              ).toLocaleTimeString()}{" "}
+                              · PID {run.pid ?? "—"} ·{" "}
+                              {run.scheme ?? "initializing"}
                             </small>
-                          )}
-                        </div>
-                        <div className="run-actions">
-                          {attached === run.id ? (
+                            <div className="run-numbers">
+                              <span>
+                                Particles{" "}
+                                <b>{run.particles?.toLocaleString() ?? "—"}</b>
+                              </span>
+                              <span>
+                                Time{" "}
+                                <b>
+                                  {run.time == null
+                                    ? "—"
+                                    : formatNumber(run.time, 5)}
+                                </b>
+                              </span>
+                              <span>
+                                Step <b>{run.step ?? "—"}</b>
+                              </span>
+                              <span>
+                                Δt{" "}
+                                <b>
+                                  {run.dt == null
+                                    ? "—"
+                                    : formatNumber(run.dt, 4)}
+                                </b>
+                              </span>
+                            </div>
+                            {!run.recording?.enabled && (
+                              <small>Trajectory not recorded</small>
+                            )}
+                            {run.message && (
+                              <small className="inline-error">
+                                {run.message}
+                              </small>
+                            )}
+                          </div>
+                          <div className="run-actions">
+                            {attached === run.id ? (
+                              <button
+                                className="secondary-button"
+                                onClick={() => void detach()}
+                              >
+                                <Unplug size={14} /> Detach
+                              </button>
+                            ) : (
+                              <button
+                                className="primary-button"
+                                disabled={
+                                  busy ||
+                                  !!controlBusy ||
+                                  !canPauseSimulation(run, features)
+                                }
+                                onClick={() => void attach(run.id)}
+                              >
+                                <Radio size={14} /> Watch live
+                              </button>
+                            )}
+                            {run.recording?.enabled && (
+                              <button
+                                className="secondary-button"
+                                disabled={busy}
+                                onClick={() => void viewHistory(run.id)}
+                              >
+                                <History size={14} /> View history
+                              </button>
+                            )}
+                            {features.includes("pause") &&
+                              ["running", "starting", "paused"].includes(
+                                run.status,
+                              ) && (
+                                <button
+                                  className="secondary-button"
+                                  disabled={
+                                    !run.registered ||
+                                    !["running", "starting", "paused"].includes(
+                                      run.status,
+                                    )
+                                  }
+                                  onClick={() => void togglePause(run)}
+                                >
+                                  {run.pauseRequested ? (
+                                    <Play size={14} />
+                                  ) : (
+                                    <Pause size={14} />
+                                  )}
+                                  {run.pauseRequested ? "Resume" : "Pause"}
+                                  {run.pauseRequested && run.status !== "paused"
+                                    ? " requested…"
+                                    : ""}
+                                </button>
+                              )}
                             <button
                               className="secondary-button"
-                              onClick={() => void detach()}
-                            >
-                              <Unplug size={14} /> Detach
-                            </button>
-                          ) : (
-                            <button
-                              className="primary-button"
                               disabled={
-                                busy ||
-                                !!controlBusy ||
-                                !canPauseSimulation(run, features)
-                              }
-                              onClick={() => void attach(run.id)}
-                            >
-                              <Radio size={14} /> Watch live
-                            </button>
-                          )}
-                          {run.recording?.enabled && (
-                            <button
-                              className="secondary-button"
-                              disabled={busy}
-                              onClick={() => void viewHistory(run.id)}
-                            >
-                              <History size={14} /> View history
-                            </button>
-                          )}
-                          {features.includes("pause") && (
-                            <button
-                              className="secondary-button"
-                              disabled={
-                                !run.registered ||
                                 !["running", "starting", "paused"].includes(
                                   run.status,
                                 )
                               }
-                              onClick={() => void togglePause(run)}
+                              onClick={() => {
+                                void client
+                                  .stop(run.id)
+                                  .catch((e) => setError(e.message));
+                              }}
                             >
-                              {run.pauseRequested ? (
-                                <Play size={14} />
-                              ) : (
-                                <Pause size={14} />
-                              )}
-                              {run.pauseRequested ? "Resume" : "Pause"}
-                              {run.pauseRequested && run.status !== "paused"
-                                ? " requested…"
-                                : ""}
+                              <Square size={12} /> Stop
                             </button>
-                          )}
-                          <button
-                            className="secondary-button"
-                            disabled={
-                              !["running", "starting", "paused"].includes(
-                                run.status,
-                              )
-                            }
-                            onClick={() => {
-                              void client
-                                .stop(run.id)
-                                .catch((e) => setError(e.message));
-                            }}
-                          >
-                            <Square size={12} /> Stop
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  <small>
-                    Without an attached viewer, simulations send status only.
-                    Live diagnostics sample displayed snapshots (last 600);
-                    Recording is optional. View history reads exported frames
-                    while the simulation runs or is paused; Watch live returns
-                    to current snapshots.
-                  </small>
-                </section>
-                <section className="companion-cases">
-                  <div className="section-heading">
-                    <Play size={15} /> START A PRESET
-                  </div>
-                  <p>
-                    Uses warpSPH installed with the daemon’s simulation Python.
-                    One managed preset runs at a time.
-                  </p>
-                  <div className="case-gallery">
-                    {presets.map((p) => (
-                      <button
-                        key={p.id}
-                        className={
-                          presetId === p.id ? "case-card selected" : "case-card"
-                        }
-                        onClick={() => selectPreset(p)}
-                        aria-pressed={presetId === p.id}
-                      >
-                        <img
-                          src={`${import.meta.env.BASE_URL}cases/${p.image}.svg`}
-                          alt=""
-                        />
-                        <span>{p.name}</span>
-                        <small>Schematic</small>
-                      </button>
-                    ))}
-                  </div>
-                  {preset && (
-                    <>
-                      <p>{preset.description}</p>
-                      <div className="companion-form">
-                        <label>
-                          Solver
-                          <select
-                            value={scheme}
-                            onChange={(e) => setScheme(e.target.value)}
-                          >
-                            {preset.schemes.map((s) => (
-                              <option key={s}>{s}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Variant
-                          <select
-                            value={variant}
-                            onChange={(e) => setVariant(e.target.value)}
-                          >
-                            {Object.keys(preset.variants).map((v) => (
-                              <option key={v}>{v}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Resolution (nx)
-                          <input
-                            type="number"
-                            min={8}
-                            max={preset.maxNx ?? 512}
-                            step={8}
-                            value={nx}
-                            onChange={(e) => setNx(+e.target.value)}
-                          />
-                        </label>
-                        <label>
-                          End time
-                          <input
-                            type="number"
-                            min={0.000001}
-                            max={10000}
-                            step={0.5}
-                            value={duration}
-                            onChange={(e) => setDuration(+e.target.value)}
-                          />
-                        </label>
-                      </div>
-                      {features.includes("recordedHistory") && (
-                        <label className="check-row">
-                          <input
-                            type="checkbox"
-                            checked={record}
-                            onChange={(e) => setRecord(e.target.checked)}
-                          />
-                          Record trajectory (uses disk space)
-                        </label>
-                      )}
-                      {features.includes("recordedHistory") && record && (
-                        <label>
-                          Export interval (simulation time)
-                          <input
-                            type="number"
-                            min={0.000001}
-                            max={10000}
-                            step={0.01}
-                            value={exportInterval}
-                            onChange={(e) => setExportInterval(+e.target.value)}
-                          />
-                        </label>
-                      )}
-                      <button
-                        className="primary-button"
-                        disabled={
-                          busy ||
-                          (record &&
-                            (!Number.isFinite(exportInterval) ||
-                              exportInterval < 0.000001 ||
-                              exportInterval > 10000)) ||
-                          !Number.isInteger(nx) ||
-                          nx < 8 ||
-                          nx > (preset.maxNx ?? 512) ||
-                          !Number.isFinite(duration) ||
-                          duration <= 0 ||
-                          runs.some(
-                            (r) =>
-                              r.createdBy === "daemon" &&
-                              ["starting", "running", "paused"].includes(
-                                r.status,
-                              ),
-                          )
-                        }
-                        onClick={() => void launch()}
-                      >
-                        <Play size={15} />{" "}
-                        {busy ? "Starting…" : `Run ${preset.name}`}
-                      </button>
-                    </>
-                  )}
-                </section>
+                          </div>
+                        </article>
+                      ))}
+                    <small>
+                      Without an attached viewer, simulations send status only.
+                      Live diagnostics sample displayed snapshots (last 600);
+                      Recording is optional. View history reads exported frames
+                      while the simulation runs or is paused; Watch live returns
+                      to current snapshots.
+                    </small>
+                  </section>
+                )}
+                {section === "launch" && (
+                  <LaunchWizard
+                    client={client}
+                    presets={presets}
+                    features={features}
+                    runs={runs}
+                    busy={busy}
+                    onLaunch={launch}
+                  />
+                )}
               </>
             )}
           </section>

@@ -1,4 +1,5 @@
-import { CompanionPanel } from "./CompanionPanel";
+import { ProfilePlots } from "./ProfilePlots";
+import { CompanionPanel, type CompanionSection } from "./CompanionPanel";
 import { LiveSource, type SimulationControl } from "./companion";
 import { reduceDiagnostic } from "./sources/core";
 import { NumberControl } from "./NumberControl";
@@ -161,6 +162,10 @@ export default function App() {
     null,
   );
   const [companionOpen, setCompanionOpen] = useState(false);
+  const [companionSection, setCompanionSection] =
+    useState<CompanionSection>("running");
+  const [daemonConnected, setDaemonConnected] = useState(false);
+  const [profilesOpen, setProfilesOpen] = useState(false);
   const [sources, setSources] = useState<Source[]>([]),
     [sourceId, setSourceId] = useState("");
   const source = sources.find((s) => s.id === sourceId);
@@ -874,6 +879,7 @@ export default function App() {
         help ||
         settingsOpen ||
         companionOpen ||
+        profilesOpen ||
         ftleOpen
       )
         return;
@@ -910,6 +916,7 @@ export default function App() {
     settingsOpen,
     ftleOpen,
     companionOpen,
+    profilesOpen,
     simulationControl,
     error,
   ]);
@@ -1293,13 +1300,7 @@ export default function App() {
             <FolderOpen size={15} />
             Open trajectory
           </button>
-          <button
-            className="secondary-button"
-            onClick={() => setCompanionOpen(true)}
-            aria-label="Local simulations"
-          >
-            <Activity size={15} /> Local simulations
-          </button>
+
           <IconButton label="Viewer settings" onClick={showSettings}>
             <Settings2 size={18} />
           </IconButton>
@@ -1315,6 +1316,30 @@ export default function App() {
           </IconButton>
         </div>
       </header>
+      <nav className="simulation-toolbar" aria-label="Simulation tasks">
+        {(
+          [
+            ["running", "Running simulations"],
+            ["history", "Run history"],
+            ["launch", "Run simulation"],
+            [
+              "connection",
+              daemonConnected ? "Daemon connected" : "Connect daemon",
+            ],
+          ] as const
+        ).map(([section, label]) => (
+          <button
+            key={section}
+            className="secondary-button"
+            onClick={() => {
+              setCompanionSection(section);
+              setCompanionOpen(true);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
       <div className={`workspace ${inspector ? "" : "inspector-hidden"}`}>
         <aside
           className="analysis-panel"
@@ -1455,7 +1480,12 @@ export default function App() {
                   : "Detached snapshot"
                 : "Viewing recorded data"}
               <br />
-              <button onClick={() => setCompanionOpen(true)}>
+              <button
+                onClick={() => {
+                  setCompanionSection("running");
+                  setCompanionOpen(true);
+                }}
+              >
                 {source?.live ? "Simulation manager" : "Connect a simulation"}
               </button>
             </span>
@@ -2359,6 +2389,16 @@ export default function App() {
                 Spatial FTLE map
               </button>
 
+              <button
+                className="secondary-button"
+                disabled={!source}
+                onClick={() => {
+                  setPlaying(false);
+                  setProfilesOpen(true);
+                }}
+              >
+                Profile / scatter plots
+              </button>
               <div
                 className="quantity-analysis-tabs"
                 role="group"
@@ -2502,10 +2542,35 @@ export default function App() {
           </button>
         </span>
       </footer>
+      {profilesOpen && source && (
+        <ProfilePlots
+          key={sourceId}
+          source={source}
+          reader={registry.current.get(sourceId)!}
+          frame={frame}
+          theme={theme}
+          onClose={() => setProfilesOpen(false)}
+          onPick={(uid, particleIndex) => {
+            setSelection({
+              sourceId,
+              frame: displayedIndex,
+              index: particleIndex,
+              uid: uid ?? undefined,
+            });
+            setTraceUid(uid ?? "");
+            if (uid) materialPick.current(uid, displayedIndex, sourceId);
+          }}
+        />
+      )}
       <CompanionPanel
+        section={companionSection}
+        onConnection={setDaemonConnected}
         open={companionOpen}
         onControl={setLiveControl}
-        onOpen={() => setCompanionOpen(true)}
+        onOpen={() => {
+          setCompanionSection("running");
+          setCompanionOpen(true);
+        }}
         onClose={() => setCompanionOpen(false)}
         sourceId={sourceId}
         onFrame={(reader, first) => {

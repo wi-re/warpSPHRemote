@@ -21,6 +21,7 @@ import time
 from urllib.parse import urlsplit, parse_qs
 import uuid
 from .catalogue import CATALOGUE, validate_launch
+from .configuration import query_solver
 from .protocol import validate_packet
 
 MAX_PACKET = 128 * 1024 * 1024
@@ -73,6 +74,8 @@ class Manager:
         self.runs = OrderedDict()
         self.revision = 0
         self.closed = False
+        self.configuration_cache = {}
+        self.catalogue = None
 
     def touch(self):
         self.revision += 1
@@ -309,8 +312,25 @@ class Manager:
             )
             self.touch()
 
+    def available_cases(self, refresh=False):
+        if refresh:
+            self.catalogue = None
+            self.configuration_cache.clear()
+        if self.catalogue is None:
+            try:
+                result = query_solver(self.python, '--catalogue', {})
+            except ValueError as error:
+                result = {'error': str(error)}
+            self.catalogue = result.get('presets') or [{**c, 'available': False, 'configurable': False,
+                'unavailableReason': result.get('error', 'Could not discover installed cases.')} for c in CATALOGUE]
+        return self.catalogue
+
     def launch(self, data):
-        spec = validate_launch(data)
+        spec = validate_launch(data, self.available_cases())
+        if 'configuration' in spec:
+            checked = query_solver(self.python, '--validate', spec)
+            if not checked.get('valid'):
+                raise ValueError(checked.get('error', 'Invalid solver configuration.'))
         with self.lock:
             if any(
                 r.get("process") and r["process"].poll() is None
@@ -345,7 +365,7 @@ class Manager:
                 start_new_session=True,
             )
             output.close()
-            case = next(c for c in CATALOGUE if c["id"] == spec["preset"])
+            case = next(c for c in self.available_cases() if c["id"] == spec["preset"])
             self.runs[key] = dict(
                 id=key,
                 name=case["name"],
@@ -559,11 +579,19 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "version": 1,
                         "revision": self.manager.revision,
-                        "presets": CATALOGUE,
+                        "presets": self.manager.available_cases(refresh=parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]),
                         "loopbackOnly": True,
-                        "features": ["pause", "recordedHistory"],
+                        "features": ["pause", "recordedHistory", "configuration"],
                     }
                 )
+            if parts == ["v1", "configuration"]:
+                query = parse_qs(urlsplit(self.path).query)
+                spec = validate_launch({'preset': query.get('preset', [''])[0],
+                    **({'scheme': query['scheme'][0]} if 'scheme' in query else {})}, self.manager.available_cases())
+                key = (spec['preset'], spec['scheme'])
+                if key not in self.manager.configuration_cache:
+                    self.manager.configuration_cache[key] = query_solver(self.manager.python, '--describe', spec)
+                return self.send_json(self.manager.configuration_cache[key])
             if parts == ["v1", "runs"]:
                 with self.manager.lock:
                     rows = [self.manager.public(r) for r in self.manager.runs.values()]

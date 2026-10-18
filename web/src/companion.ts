@@ -12,7 +12,12 @@ export interface Preset {
   duration: number;
   maxNx?: number;
   variants: Record<string, object>;
-  image: string;
+  image: string | null;
+  family?: string;
+  available?: boolean;
+  unavailableReason?: string;
+  configurable?: boolean;
+  nativeVariants?: boolean;
 }
 export interface Simulation {
   id: string;
@@ -169,10 +174,11 @@ export class CompanionClient {
   }
   async session(
     signal?: AbortSignal,
+    refresh = false,
   ): Promise<{ version: number; presets: Preset[]; features?: string[] }> {
     const value = await (
       await this.request(
-        "/v1/session",
+        refresh ? "/v1/session?refresh=1" : "/v1/session",
         undefined,
         signal,
         companionPairingTimeout,
@@ -186,8 +192,20 @@ export class CompanionClient {
     return (await (await this.request("/v1/runs", undefined, signal)).json())
       .runs;
   }
+  async configuration(preset: string, scheme: string, signal?: AbortSignal) {
+    return (
+      await this.request(
+        `/v1/configuration?preset=${encodeURIComponent(preset)}&scheme=${encodeURIComponent(scheme)}`,
+        undefined,
+        signal,
+        65000,
+      )
+    ).json();
+  }
   async launch(spec: object) {
-    return (await (await this.request("/v1/runs", spec)).json()) as Simulation;
+    return (await (
+      await this.request("/v1/runs", spec, undefined, 65000)
+    ).json()) as Simulation;
   }
   async attach(id: string) {
     this.statics = undefined;

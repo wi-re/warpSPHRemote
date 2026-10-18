@@ -24,6 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--python', required=True)
+    parser.add_argument('--port', type=int, default=18768)
     parser.add_argument('--seconds', type=float, default=900)
     args = parser.parse_args()
     if not np.isfinite(args.seconds) or args.seconds <= 0:
@@ -33,10 +34,10 @@ def main():
         parser.error('choose a fresh output directory outside source')
     manager = Manager(root, python=args.python)
     manager.token = 'auto-monitor-test-token'
-    server = ThreadingHTTPServer(('127.0.0.1', 18768), partial(Handler, manager=manager))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), partial(Handler, manager=manager))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     descriptor = root / 'daemon.json'
-    descriptor.write_text(json.dumps(dict(endpoint='http://127.0.0.1:18768', producerToken=manager.producer_token)))
+    descriptor.write_text(json.dumps(dict(endpoint=f'http://127.0.0.1:{server.server_port}', producerToken=manager.producer_token)))
     descriptor.chmod(0o600)
     axis = np.linspace(0, 1, 16, dtype=np.float32)
     positions = np.stack(np.meshgrid(axis, axis), axis=-1).reshape(-1, 2)
@@ -71,7 +72,7 @@ def main():
             pass
         finally:
             publisher.close('stopped')
-    print('Isolated companion: http://127.0.0.1:18768 · token auto-monitor-test-token', flush=True)
+    print(f'Isolated companion: http://127.0.0.1:{server.server_port} · token auto-monitor-test-token', flush=True)
     seen = set()
     deadline = time.monotonic() + args.seconds
     try:

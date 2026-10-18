@@ -25,6 +25,7 @@ from warpsph_remote.protocol import encode_frame
 @pytest.fixture
 def api(tmp_path):
     m = Manager(tmp_path / "private")
+    m.catalogue = CATALOGUE
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, manager=m))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -76,7 +77,7 @@ def test_authentication_and_browser_producer_separation(api):
         assert e.value.code == 401
     session=json.load(call("/v1/session"))
     assert session["loopbackOnly"]
-    assert set(session["features"]) == {"pause", "recordedHistory"}
+    assert set(session["features"]) == {"pause", "recordedHistory", "configuration"}
     assert json.load(call("/producer/runs", {"name": "test"}, m.producer_token))["id"]
 
 

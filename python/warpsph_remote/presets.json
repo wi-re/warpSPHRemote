@@ -23,7 +23,8 @@
       }
     },
     "image": "gresho",
-    "maxNx": 512
+    "maxNx": 512,
+    "family": "compressible"
   },
   {
     "id": "rt",
@@ -31,14 +32,21 @@
     "description": "Gravity-driven heavy/light interface instability.",
     "module": "compressible.rayleighTaylor",
     "factory": "rayleighTaylorCase",
-    "schemes": ["CRKSPH", "CompSPH", "Monaghan", "GSPH", "InutsukaGSPH"],
+    "schemes": [
+      "CRKSPH",
+      "CompSPH",
+      "Monaghan",
+      "GSPH",
+      "InutsukaGSPH"
+    ],
     "nx": 128,
     "duration": 10,
     "variants": {
       "standard": {}
     },
     "image": "rt",
-    "maxNx": 256
+    "maxNx": 256,
+    "family": "compressible"
   },
   {
     "id": "tgv-wc",
@@ -46,7 +54,11 @@
     "description": "Periodic decaying vortices with recorded velocity, pressure and density.",
     "module": "periodic.tgvWeaklyCompressible",
     "factory": "tgvWeaklyCompressibleCase",
-    "schemes": ["deltaSPH", "sun2017DeltaSPH", "artificialCompressible"],
+    "schemes": [
+      "deltaSPH",
+      "sun2017DeltaSPH",
+      "artificialCompressible"
+    ],
     "nx": 128,
     "duration": 2,
     "variants": {
@@ -61,7 +73,8 @@
       }
     },
     "image": "tgv",
-    "maxNx": 512
+    "maxNx": 512,
+    "family": "weakly-compressible"
   },
   {
     "id": "tgv",
@@ -82,7 +95,8 @@
       "standard": {}
     },
     "image": "tgv",
-    "maxNx": 512
+    "maxNx": 512,
+    "family": "incompressible"
   },
   {
     "id": "khh",
@@ -105,7 +119,8 @@
       "standard": {}
     },
     "image": "khh",
-    "maxNx": 512
+    "maxNx": 512,
+    "family": "compressible"
   },
   {
     "id": "random",
@@ -113,7 +128,11 @@
     "description": "Seeded unforced periodic WCSPH velocity field.",
     "module": "periodic.randomFlow",
     "factory": "randomFlowCase",
-    "schemes": ["deltaSPH", "sun2017DeltaSPH", "artificialCompressible"],
+    "schemes": [
+      "deltaSPH",
+      "sun2017DeltaSPH",
+      "artificialCompressible"
+    ],
     "nx": 128,
     "duration": 6,
     "variants": {
@@ -126,7 +145,8 @@
       }
     },
     "image": "random",
-    "maxNx": 512
+    "maxNx": 512,
+    "family": "weakly-compressible"
   },
   {
     "id": "sloshing",
@@ -134,13 +154,18 @@
     "description": "Moving tank with free surface and pressure probes.",
     "module": "freeSurface.sloshingTank",
     "factory": "sloshingTankCase",
-    "schemes": ["deltaSPH", "sun2017DeltaSPH", "artificialCompressible"],
+    "schemes": [
+      "deltaSPH",
+      "sun2017DeltaSPH",
+      "artificialCompressible"
+    ],
     "nx": 128,
     "duration": 7,
     "variants": {
       "standard": {}
     },
     "image": "sloshing",
-    "maxNx": 384
+    "maxNx": 384,
+    "family": "free-surface"
   }
 ]

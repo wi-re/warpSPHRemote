@@ -3377,3 +3377,151 @@ kbd {
 .companion-modal p {
   margin-bottom: 12px;
 }
+
+.simulation-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.profiles-modal {
+  width: min(1200px, 96vw);
+  max-width: 1200px;
+}
+.profile-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 16px 0;
+  padding: 14px;
+}
+.profile-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.profile-controls label,
+.configuration-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.profile-chart {
+  height: 330px;
+  width: 100%;
+}
+.profile-card .section-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.profile-card .section-heading .text-button {
+  margin-left: auto;
+}
+.family-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+.family-gallery .case-card {
+  padding: 25px 15px;
+  min-height: 120px;
+}
+.wizard-progress {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.wizard-progress button {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.wizard-progress button[aria-current="step"] {
+  color: var(--mint);
+  border-color: currentColor;
+}
+.launch-wizard > button,
+.launch-wizard > details {
+  margin: 12px 0;
+}
+.configuration-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  margin: 12px 0;
+}
+.configuration-fields fieldset {
+  grid-column: 1/-1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.configuration-field small {
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+.configuration-field textarea {
+  width: 100%;
+  min-height: 70px;
+}
+.parameter-group {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.case-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100px;
+  background: linear-gradient(135deg, #274b60, #426e66);
+  color: white;
+  padding: 10px;
+}
+.case-card:disabled {
+  opacity: 0.55;
+}
+@media (max-width: 850px) {
+  .simulation-toolbar {
+    width: 100%;
+  }
+  .simulation-toolbar button {
+    flex: 1;
+    font-size: 11px;
+  }
+  .profile-chart {
+    height: 280px;
+  }
+  .wizard-progress button {
+    font-size: 11px;
+  }
+}
+
+/* Simulation tasks stay readable beside the compact trajectory toolbar. */
+.simulation-toolbar {
+  flex-shrink: 0;
+  justify-content: flex-end;
+  padding: 6px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+@media (max-width: 700px) {
+  .simulation-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 6px 14px;
+    gap: 5px;
+  }
+  .simulation-toolbar .secondary-button {
+    width: auto;
+    min-width: 0;
+    font-size: 11px;
+    padding: 5px 8px;
+    height: 30px;
+  }
+}

@@ -2,12 +2,13 @@
 
 import json
 import math
+from .configuration import restricted_configuration
 from pathlib import Path
 
 CATALOGUE = json.loads(Path(__file__).with_name("presets.json").read_text())
 
 
-def validate_launch(data):
+def validate_launch(data, catalogue=None):
     if not isinstance(data, dict) or set(data) - {
         "preset",
         "scheme",
@@ -17,13 +18,16 @@ def validate_launch(data):
         "steps",
         "record",
         "exportInterval",
+        "configuration",
     }:
         raise ValueError("Use a registered preset and its bounded parameters.")
-    case = next((c for c in CATALOGUE if c["id"] == data.get("preset")), None)
+    case = next((c for c in (CATALOGUE if catalogue is None else catalogue) if c["id"] == data.get("preset")), None)
     if case is None:
         raise ValueError("Unknown simulation preset.")
+    if case.get("available") is False:
+        raise ValueError(case.get("unavailableReason", "Case unavailable in this environment."))
     scheme, variant = data.get("scheme", case["schemes"][0]), data.get(
-        "variant", "standard"
+        "variant", next(iter(case["variants"]))
     )
     if scheme not in case["schemes"] or variant not in case["variants"]:
         raise ValueError("Unsupported scheme or case variant.")
@@ -50,7 +54,8 @@ def validate_launch(data):
     if (type(export_interval) not in (int, float) or not math.isfinite(export_interval)
             or not 0.000001 <= export_interval <= 10000):
         raise ValueError("Export interval must be finite and between 1e-6 and 10000.")
-    return dict(
+    configuration = restricted_configuration(data["configuration"]) if "configuration" in data else None
+    result = dict(
         preset=case["id"],
         scheme=scheme,
         variant=variant,
@@ -60,3 +65,6 @@ def validate_launch(data):
         record=record,
         exportInterval=export_interval,
     )
+    if configuration is not None:
+        result["configuration"] = configuration
+    return result

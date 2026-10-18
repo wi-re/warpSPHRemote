@@ -240,3 +240,10 @@ token-authenticated loopback HTTP. Opt-in trajectory export makes the growing
 recorded history seekable alongside the live view. Preset launches attach
 automatically; optional monitor mode follows newly launched external runs. Recorded-file viewing remains independent of Python/warpSPH.
 See [installation, integration and limitations](reports/LOCAL_COMPANION.md).
+
+The main page separates daemon connection, running simulations, run history, and
+launching. The daemon discovers its installed case catalogue; the staged launcher
+uses its parameter schemas when available. Generic coordinate, radial and vector
+profile plots are available under **Quantity analysis → Profile / scatter plots**.
+See [profiles and simulation workflows](reports/PROFILES_AND_SIMULATION_WORKFLOWS.md)
+for controls, configuration requirements and reproduction checks.
