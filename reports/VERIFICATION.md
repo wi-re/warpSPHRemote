@@ -1,7 +1,15 @@
 # Trajectory viewer verification
 
-Verified locally on 2026-10-17. This is an initial recorded-particle viewer, not
-completion of the longer visualization roadmap.
+This report preserves the original 2026-10-17 checks and later dated follow-ups.
+Its early test counts and milestone scope are historical. For the current
+implemented/partial/missing inventory use [status and roadmap](ROADMAP.md), and
+for the current data paths use [architecture](ARCHITECTURE.md).
+
+The 2026-10-18 consolidation audited revision `c0241c6`: its CI passed Python,
+TypeScript and production-build checks. Video, initial-frame launch, live controls,
+restart recovery and GPU work have separate reproduction reports linked from the
+inventory. This documentation audit did not rerun simulations or establish broader
+browser/driver compatibility.
 
 ## Automated checks
 
@@ -50,35 +58,19 @@ Screenshots and transient logs are outside Git under
 [storage and reproduction](README.md). The original plotting and simulator
 repositories were used read-only. Their recordings are not included here.
 
-## Known limits
+## Current limitations
 
-- WebGL2 only; WebGPU and worker-side rendering/GPU upload are not yet implemented.
-  File decoding, diagnostic scans, and pressure histories run in workers. Display
-  preparation and GPU upload still use the main thread and can interrupt interaction.
-- 2D grids and instantaneous streamlines are implemented. 3D slices/volumes,
-  LIC, surface reconstruction, LCS, linked panels and numerical spatial axis ticks
-  remain future work.
-- Float32 display buffers limit coordinate/value precision; source diagnostics
-  use float64 accumulation. Large UID probing remains exact, while UID coloring
-  is approximate. UID traces use exact identities across frames; there is no multi-particle
-  material-neighbourhood analysis or picking acceleration structure. Probing scans projected particles and has a 10-pixel
-  center-distance threshold; overlapping candidates are selected by screen
-  distance, not frontmost sphere intersection.
-- Shader symmetric-log scale is fixed at 1. Palette previews/colorbar gradients
-  use representative stops, while the GPU uses the full 256-entry tables.
-- The reference box is initial particle bounds, not necessarily the simulation
-  domain. Camera refits are explicit during playback. Very dense physical
-  particles can be subpixel.
-- Columnar legacy HDF5 assumes initial combined metadata remains row-aligned.
-  Changing counts with missing per-frame metadata fail explicitly; same-count
-  unrecorded reordering cannot be detected. Only the first frame determines
-  selectable field names; missing fields on later frames produce an error.
-- Files must be finished recordings. Live capture, HDF5 concurrent writes,
-  daemon discovery/autostart, simulation controls, static-field transport caching,
-  and networking optimization are intentionally deferred.
-- This preview is installed from source; frontend assets are not packaged in a
-  distributable Python wheel yet. One browser-local file copy and its frame/field can now be restored. Other
-  sources, probes, trace definitions and rendering settings remain session-local.
+See the maintained [practical gaps and priorities](ROADMAP.md#partial-features-and-practical-gaps).
+The initial preview's missing-feature list has been retired: WebGPU compute,
+LIC, material neighbourhoods, live capture/control, static-field caching, remembered
+visual settings and restart recovery have since been implemented. Drawing remains
+WebGL2, and 1D ingestion, reconstructed 3D fields, complete workspaces, durable
+finished-run indexing, comparison views and general LCS remain missing.
+
+Unchanged numerical limits include float32 display precision, row-identity
+requirements in legacy HDF5, projected-distance particle picking and initial
+particle bounds used as a reference box. See the relevant source/feature reports
+before interpreting derived results as solver-native operators or validated physics.
 
 ## Static browser milestone
 

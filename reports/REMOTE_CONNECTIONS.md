@@ -1,5 +1,10 @@
 # Remote companion connections
 
+**Parked as of 2026-10-18.** Direct HTTPS is implemented but is not the recommended
+next setup step. Keep using the working localhost/SSH-forwarding workflow. The
+implementation is retained and incidental starts remain local-only. This report
+preserves optional setup details for later; see [current priorities](ROADMAP.md).
+
 The viewer can connect directly to an explicitly started HTTPS listener on the
 simulation host. The existing localhost endpoint and SSH forwarding remain
 available. A single daemon manages both endpoints and the same simulations;

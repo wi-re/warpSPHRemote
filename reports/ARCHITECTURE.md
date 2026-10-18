@@ -1,135 +1,118 @@
-# Trajectory-first architecture
+# Current architecture
 
-## Milestone boundary
+Updated 2026-10-18. [Status and priorities](ROADMAP.md) is the feature inventory;
+linked reports below define numerical and lifecycle details.
 
-Exercise rendering and UI/UX on existing trajectories before implementing live
-simulation capture. There are no simulator changes, daemon auto-start semantics,
-control hooks, live subscriptions, or cloud services in this milestone.
+## Browser sources and rendering
 
-## Components
+`web/src/sources/client.ts` defines the acquisition boundary: metadata, requested
+frame, diagnostics/probes, exact-UID temporal/material reads, reconstructed fields,
+LIC and scalar analysis. The renderer never imports a solver. Sources include
+browser-local files/demos, optional same-origin Python file service, live companion
+snapshots and companion recorded-history replay.
 
-`web/src/sources/client.ts` defines the trajectory-source interface used by the UI:
-metadata, requested frame, diagnostic batch, probe batch, UID trace batch,
-reconstructed-field request, and close. The default
-`BrowserSource` creates one module worker per recording. Opening a local file
-passes a browser `File` handle to that worker; it never sends its contents to an
-HTTP endpoint. The two analytical sources use this same worker path.
+Browser files are read in a module worker. HDF5 uses h5wasm WORKERFS and requested
+frame slicing; NPZ snapshots are decompressed individually. Native identity types
+remain exact until display preparation. Bounded caches and prioritized jobs keep
+foreground requests ahead of scans; synchronous reads already started may finish
+after cancellation, but stale results cannot replace the selected frame.
+See [formats](BROWSER_FILES.md) and [pacing](RECONSTRUCTION_PACING.md).
 
-`reader.worker.ts` mounts an HDF5 File in Emscripten WORKERFS for random access;
-`hdf5.ts` indexes legacy columns, nested states, checkpoints, or stacked frame
-datasets and slices only the requested frame. `npz.ts` decompresses one snapshot
-at a time. Native numeric dtype is preserved until display conversion. Raw cache
-retention is capped at two frames and 64 MiB, excluding temporary decode buffers
-and the library's own memory. At most four non-demo recordings remain open.
+`renderer.ts` draws WebGL2 instanced discs/sphere impostors, reconstructed textures,
+flow overlays, material traces and selection. It owns camera/controls and reuses
+buffers where possible. Paused unchanged scenes do not continually redraw; LIC
+animation is an intentional exception. Source coordinates stay unwrapped; periodic
+mapping is presentation-only. GPU uploads/display preparation and projected
+particle picking still use the main thread.
 
-`ServiceSource` is an explicit `?service=1` alternative for the existing same-origin
-Python WPR1 API. The service remains loopback-only and does not render. It depends
-only on NumPy/h5py; there is no simulator dependency in either file-reading path.
-The renderer receives typed frames independently of how they were acquired.
+Grid reconstruction and normalized velocity derivatives have independent CPU
+reference and WebGPU worker implementations. The GPU index uses cell counts,
+prefix scans and contiguous cell ranges, not linked lists or a fixed neighbour
+capacity. Cooperative batches yield/cancel expensive work without arbitrary
+candidate-count rejection. Completed grids are read back for WebGL2 drawing and
+CPU streamline integration; this is not a shared WebGPU renderer. LIC has CPU/GPU
+compute with renderer-side animation. See [WebGPU](WEBGPU.md),
+[derivatives](VELOCITY_DERIVATIVES.md) and [LIC](LIC.md).
 
-`web/src/renderer.ts` implements instanced camera-facing quads, circular coverage,
-3D sphere surface depth, palette lookup, normalization, and physical marker
-sizes in custom GPU shaders. Three.js provides graphics resource and camera
-management. Geometry buffers are updated in place for constant particle counts;
-old GPU resources are disposed when population size changes. The scene redraws
-on changes; a paused, untouched viewer does not submit renders every RAF tick.
-Browser GPU work still shares hardware with a local GPU simulation.
+React owns UI state; Plotly owns curves/scatter/FFT displays. Generic profiles use
+separate bounded workers. Material fits/maps use exact recorded UID motion and
+quality masks; they are not a general velocity-integrated LCS solver.
+See [profiles](PROFILES_AND_SIMULATION_WORKFLOWS.md) and
+[material contracts](MATERIAL_MOTION.md).
 
-React owns the surrounding interface; Plotly owns diagnostic histories.
-Coloring changes operate on retained arrays. Selecting another field requests
-that field from the source. PNG export currently captures only the GPU canvas.
+## Local simulation acquisition and control
 
-## WPR1 frame format
+The optional Linux companion (`daemon.py`) owns a singleton registry, authenticated
+viewer/control endpoints, installed-case discovery and managed process launch.
+Its ordinary endpoint is loopback HTTP; SSH forwards this without changing the
+protocol. Pairing persists per OS user/system. A single viewer lease can be
+explicitly taken over. The browser separates connection, running runs, history
+and staged launch tasks.
 
-- Four magic bytes `WPR1`, then a little-endian uint32 JSON-header byte length.
-- UTF-8 JSON header with `version: 1`, frame `index`, simulation `time`, and
-  `arrays` descriptors. Each descriptor gives `dtype`, `shape`, byte `offset`,
-  and byte count.
-- Pad the header to a multiple of 8 bytes. Array offsets are relative to the
-  payload start after that padding. Each array begins on an 8-byte boundary.
-- Numerical arrays are little-endian float32, int32, or int64. Float64 source
-  display values are downcast to float32; diagnostics are calculated from source
-  arrays using float64 accumulation. Int64 identity stays exact through browser
-  `BigInt64Array`; display coloring of integers uses float32 and is approximate
-  for large identities. Unsigned identities above signed int64 are rejected.
+`publisher.py`/`simulation_worker.py` integrate at consistent solver boundaries.
+Unwatched runs send metadata, not particle states. Normal live capture holds one
+owned CPU copy while a background worker checks/encodes/publishes it; controls and
+resource sampling have their own worker. The next capture follows viewer ACK and
+the configured minimum interval. Static identity arrays are revisioned and fetched
+separately rather than copied over the viewer connection every frame.
 
-A frame contains positions and available kinds, IDs, masses, supports, densities,
-and the requested field. Static metadata is currently retransmitted. Caching
-static metadata across the wire is deliberately deferred until live transport
-is designed. WPR1 is an initial internal contract, not a released interoperability
-standard. It assumes a little-endian browser platform.
+Pause simulation and pause updates are independent. Paused identical boundaries
+do not cause repeated reconstruction. Producers re-register after daemon restart,
+including paused and video-held runs; completed run metadata is still in-memory.
+See [companion](LOCAL_COMPANION.md), [recovery](RECONNECTION.md),
+[metrics](LIVE_METRICS.md) and [buffering](BUFFERED_CAPTURE_AND_VIDEO.md).
 
-## Playback and concurrency
+Case availability/schema discovery runs in the daemon-selected installed solver
+Python. Browser overrides are finite, sparse, bounded configuration data; the
+companion owns executable, device, paths and lifecycle. The solver resolves and
+validates its own versioned configuration before launch. No browser-supplied Python,
+shell or arbitrary output paths are accepted. `warpSPHCases` reference/figure
+metadata is not integrated yet.
 
-Playback requests one next frame after the current frame has loaded. Inter-frame
-delay follows recorded time divided by playback speed; frame-index sources use
-100 ms per frame at speed 1. Read and preparation time adds to that interval.
-Playback never tries to catch up by queuing timestep requests. Manual seeks and
-field/source changes cancel stale browser requests; already-started server reads
-may complete, with expensive server operations limited to three at a time.
+Recording is off by default. When enabled, the adapter exposes its existing
+exports as history. Active HDF5 readers run between writes on the producer thread;
+this is not arbitrary concurrent HDF5/SWMR access. Finished history can be read by
+the daemon after the writer closes. Browsing history does not change pause state.
 
-Historical diagnostics run in bounded eight-frame batches; current-frame reads
-have priority. Each worker has a single in-flight operation and a priority queue.
-Aborting discards queued work and rejects the caller immediately; a synchronous
-HDF5 read already running can finish before the next operation starts. Stale
-responses cannot replace a newer frame. Display buffers are copied before being
-transferred, preserving the raw cache. Large JS preparation/GPU upload still
-runs on the main thread.
+Direct HTTPS has a separate explicitly enabled listener/token; incidental starts
+cannot enable it. This optional networking branch is parked: use localhost/SSH.
+See [transport implementation](REMOTE_CONNECTIONS.md) only if it is needed later.
 
-Pressure probes sample current frames automatically. An explicit scan calculates
-all configured probes in four-frame batches with lower priority, cancellation,
-and generation invalidation when a definition or source changes. Click targets
-carry recorded frame indices; seeking does not infer indices from uniform dt.
-No-pressure/dry samples are null and Plotly does not connect gaps. Definitions
-use fixed stored coordinates; IDW (1/r²) and nearest-neighbour within a finite
-radius are approximate sampling choices, not solver-kernel reconstruction.
-UID traces scan four-frame batches for an exact ID, preserving unwrapped
-positions and gaps when the ID is absent. Renderer-only periodic mapping applies
-to typed display buffers; pressure queries use minimum-image distances. Domain
-metadata is explicit, never inferred from observed extents. Wrapped traces split
-at seams. Trace targets persist while playback changes the centered frame window.
+## Packets, histories and scientific semantics
 
-Histories cost O(probes × frames × particles) work and O(probes × frames) storage.
-All current histories and definitions live only in the tab session.
+WPR1 is an internal versioned binary packet: magic, little-endian JSON header
+length, UTF-8 descriptors, padding and aligned numerical arrays. Float32 display
+values, int32 and exact signed int64 IDs are supported. Float64 source values may
+be downcast for display; numerical reductions use source arrays with float64
+accumulation where supported. No public interoperability standard is promised.
+Packet allocation budgets are configurable and independent of a fixed particle
+count; GPU limits and available CPU/browser memory still apply.
 
-A later live source can provide metadata and requested numerical snapshots to
-this boundary. It will need explicit pending-capture/owned-snapshot semantics,
-identity revisions, and a separate diagnostic history policy. No current file
-reader needs to become a simulation integrator.
+Live display is a sampled stream, not a complete trajectory. Bounded live metric
+and pressure histories contain displayed snapshots only. Complete temporal
+analysis needs opt-in particle recording or a future diagnostic recording path.
+Missing identities, invalid numerical samples and dry probe regions produce gaps.
+Kind 0 defines fluid reductions; missing mass/pressure/energy is not fabricated.
+Total energy currently means kinetic + internal, excluding potential energy.
+Viewer reconstruction kernels/derivatives are not assumed to match the solver's
+CRK or other correction operators.
 
-## Scientific semantics
+## Retention and export
 
-Kind 0 is fluid, kind 1 boundary, and kinds greater than 1 are controlled by the
-ghost visibility setting. Fluid values determine automatic limits. Passive kinds
-are gray. Positions must be finite. Bad numerical field values remain gray and
-are excluded from automatic limits; nonpositive log samples are also excluded.
-The current linear/symmetric-log rules are documented in the README.
+IndexedDB retains one local recording copy plus independent demo caches. A small
+localStorage view record saves supported rendering/analysis settings. Profile
+cards are separately keyed by source name. Camera, probes and material selections
+are not a portable workspace. This is stored file data, not a live filesystem
+handle, and browser quota/eviction applies.
 
-The reference box follows the first frame's particle extent. It is not a physical
-domain declaration. Current-frame fitting does not continuously reset the camera.
-Clipping is a particle visibility operation, not SPH field reconstruction.
+Video uses an explicit viewport/metadata composition and WebCodecs VP8/WebM.
+Offline export waits for rendered frames. Live export gates due solver boundaries
+on render/encode ACKs, including configured initial t=0 and final handoff.
+Unrecorded viewer dropout holds the solver until explicit recovery/release;
+recorded runs can continue for offline regeneration. Encoded output stays in
+browser memory until download. Ordinary PNG still captures only the GPU canvas.
+See [video contracts and verification](BUFFERED_CAPTURE_AND_VIDEO.md).
 
-## Session retention and grid computation
-
-`session.ts` stores one browser-local File/Blob snapshot in IndexedDB, replacing
-it atomically. No origin uploads occur. A small localStorage record saves frame
-and field, keyed by file names/sizes/modification times. Startup restoration loses
-to explicit user interaction; it cannot replace a file opened during startup.
-Quota/storage errors are visible and nonfatal. Opt-out/forget removes the stored
-copy. This is not a live filesystem handle and does not observe external changes.
-
-`grid.ts` is a renderer-independent CPU reference for volume-weighted normalized
-2D SPH reconstruction and masked instantaneous streamlines. Browser sources run
-it in their worker; requests are abortable/invalidated at the UI boundary and
-have priority over historical scans. A synchronous computation in progress may
-finish before the next job. One bounded-resolution grid is retained in the worker;
-LUT, normalization and camera changes do not require reconstructing particle data.
-The renderer uploads a scalar float texture and line geometry. WebGPU compute,
-shared compute/render device buffers and core operator parity remain planned in
-[ROADMAP.md](ROADMAP.md).
-
-## Deferred visualization work
-
-3D slice/volume reconstruction, LIC, reconstructed surfaces, arbitrary clipping planes, linked multi-view
-layouts, multi-particle temporal tracking, accurate data-space axis ticks, colorbar-
-inclusive publication exports, and a WebGPU backend remain separate work items.
+No generated states, images, videos, logs or builds belong in source apart from
+explicitly curated demo product data. [Evidence storage](README.md) describes the
+external development tree and reproduction commands.

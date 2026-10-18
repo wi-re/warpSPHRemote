@@ -2,7 +2,10 @@
 
 The static viewer remains usable without Python or warpSPH. The optional Linux
 companion adds discovery, preset process management and one attached live viewer.
-It is not a simulation editor, cloud scheduler or remote execution service.
+It provides managed case setup and execution, not arbitrary simulation code or a
+cloud scheduler. Use localhost/SSH forwarding for normal operation. Direct HTTPS
+is implemented as an explicit opt-in but further networking work is parked;
+see the [consolidated status and priorities](ROADMAP.md).
 
 ## Install and start
 
@@ -213,8 +216,10 @@ analysis use the recording source. Its frame index refreshes every two seconds
 while that source remains selected. **Watch live** switches to current snapshots.
 Switching views neither resumes a paused solver nor enables recording. History
 is still available in **Show finished simulations** after a clean stop/completion,
-as long as the daemon session and export files remain available. A page refresh
-requires pairing again, then selecting the run's history.
+as long as the daemon session and export files remain available. After a page
+refresh, remembered pairing can reconnect on demand; select the run's history
+again. Finished run metadata does not survive daemon restart even when its files
+remain on disk; surviving active producers re-register separately.
 
 The existing HDF5 trajectory layout is not SWMR. For an active producer, the
 daemon forwards one bounded history request to the simulation adapter; it reads

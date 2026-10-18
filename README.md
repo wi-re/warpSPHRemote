@@ -3,9 +3,14 @@
 A local trajectory studio for SPH simulations. Open an existing recording,
 choose a field, and explore it in an independent browser GPU renderer.
 
-The first milestone is **recorded trajectory visualization**. Simulation
-integration comes after the rendering and interaction model have been exercised
-on real data. No changes to warpSPH, warpSPHCore, or warpSPHPlotting are required.
+Recorded-file viewing and optional live simulation monitoring are implemented.
+The viewer stays independent of the solver; an optional Linux companion supplies
+live snapshots, controls, case launching and opt-in recorded history. Use localhost
+or SSH forwarding for the normal connection workflow.
+
+See the [current feature inventory, gaps and next priorities](reports/ROADMAP.md).
+This is the consolidated status; individual reports retain their historical
+measurements and numerical contracts.
 
 ## Open on the web
 
@@ -90,8 +95,10 @@ folder. An optional `measurements.json` may be included with NPZ snapshots.
 In Python service mode a native run directory or NPZ snapshot directory may be passed. Frames are ordered
 numerically and read on demand, rather than loaded into memory as a trajectory.
 Only numerical datasets are read; simulator configuration callables are never
-restored. Finished recordings are the supported input; concurrent HDF5 writes
-and tailing a running simulation are not implemented.
+restored. Direct browser/file-service inputs must be finished recordings.
+Live snapshots and safe reading of a running simulation's exported history are
+provided separately by the optional companion; arbitrary concurrent HDF5 reading
+is not supported.
 
 Legacy HDF5 combined metadata assumes the recording preserves row identity.
 Changing particle counts require per-frame metadata; incompatible initial
@@ -118,7 +125,9 @@ are explicitly identified as such; particle selection is confined to one frame.
   inverse-distance weighting within a radius. No nearby fluid means a gap.
   Coordinates and radius use recorded units; no pressure is inferred from density.
   Sampling uses fixed stored coordinates; no tank-motion transform is inferred.
-  Periodic domains use minimum-image distances. Probes and histories are session-local; live acquisition and history export remain future work.
+  Periodic domains use minimum-image distances. Probe definitions and samples are
+  session-local. Live probes sample displayed snapshots (last 600), while recorded
+  history can be scanned completely; a dedicated portable probe export is missing.
 - Optional per-particle UID trace with separate past/future recorded-frame windows.
   Activate the plot's **Pick a particle (P)** tool, select a particle, and enable
   **Trace** in its bottom-right card. Past and future
@@ -128,15 +137,18 @@ are explicitly identified as such; particle selection is confined to one frame.
   **Wrap display coordinates** to compare wrapped and original coordinates.
   Recording arrays and trace samples remain unwrapped and unchanged.
 - 2D reconstructed scalar grids, alone or with particles; Wendland C2/C4,
-  128/256/512 cells on the longest side, volume weighting and Shepard normalization.
+  preset or custom resolution on the longest side, volume weighting and Shepard normalization.
   Fluid coverage masks leave unsupported regions transparent. Requires recorded
-  mass, density and compact cutoff supports; categorical fields are rejected.
+  mass, density and compact cutoff supports; categorical quantities use particle
+  display rather than reconstruction.
 - Instantaneous velocity streamlines over the reconstructed field, with regular
   or picked fixed-position seeds. Midpoint integration runs in both directions,
   stops at invalid coverage, and splits periodic crossings. Overlay these with
   recorded UID traces to compare frozen-frame flow and temporal particle motion.
-- PNG export of the GPU scene. The exported canvas does **not** currently include
-  HTML labels, the colorbar, or the diagnostics chart.
+- PNG export of the GPU scene (without HTML labels, colorbar or chart).
+- Offline and synchronized live VP8/WebM video with viewport metadata, colorbar
+  and axes. Launch paused, configure the true initial frame, then Play to capture
+  it before advancing. See [video requirements and recovery](reports/BUFFERED_CAPTURE_AND_VIDEO.md).
 
 Units follow the stored arrays. Kinetic energy is `0.5 * sum(m * |v|²)` over
 kind-0 fluid particles, maximum speed is a fluid-only maximum, and mean density
@@ -214,14 +226,15 @@ npm run bench:gpu
 The browser also provides `?gpu-check=1` to run the numerical suite in a worker
 on the client's adapter. No simulator, Python, or application server is required.
 
-[Roadmap: LIC, material tracks, FTLE/LCS and WebGPU operators](reports/ROADMAP.md),
+[Current feature inventory and prioritized roadmap](reports/ROADMAP.md),
 [architecture and scope](reports/ARCHITECTURE.md),
 [verification and known limits](reports/VERIFICATION.md), and
 [evidence storage](reports/README.md) describe the current boundary.
 
 Material analysis: pick a particle → **Track neighbourhood**, then use the bottom
-**Material motion** tab for frozen UID sets, separation/local FTLE and **Spatial FTLE
-map**. LIC is available in the right field controls with CPU/WebGPU backends.
+**Material motion** tab for frozen UID sets and separation/local FTLE. The right
+**Quantity analysis** controls open the separate spatial FTLE map. LIC is available
+in the right field controls with CPU/WebGPU backends, including frozen-field animation.
 See [material-motion contracts and limitations](reports/MATERIAL_MOTION.md) and
 [LIC verification/performance](reports/LIC.md).
 
@@ -264,3 +277,13 @@ for upgrade requirements and shutdown behavior.
 Local companion pairing now persists per OS user/system across restarts. Retrieve
 it after an implicit launch with `warpsph-companion --show-token`. Stop the daemon
 and use `warpsph-companion --rotate-token` when you deliberately want a new token.
+
+## Useful next work
+
+The next focus is repeatable analysis and practical case validation: portable
+setup/analysis recipes, case-supplied profile/reference plots, a durable finished
+run/recording library, and lightweight diagnostic logging without full particle
+recording. Comparison views and complete still/data exports follow. General 1D
+and reconstructed 3D views, shared GPU rendering and validated LCS methods are
+separate gaps; direct remote HTTPS work is parked in favour of SSH forwarding.
+See [scope, acceptance criteria and implementation order](reports/ROADMAP.md).
