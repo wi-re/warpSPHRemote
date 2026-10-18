@@ -13,12 +13,21 @@ import {
 import {
   CompanionClient,
   companionConnectionMessage,
+  CompanionHTTPError,
+  canPauseSimulation,
+  type SimulationControl,
   LiveSource,
   RecordedSource,
   takePairing,
   type Preset,
   type Simulation,
 } from "./companion";
+import {
+  recallPairing,
+  rememberPairing,
+  forgetPairing,
+  samePairingEndpoint,
+} from "./pairing";
 import type { TrajectorySource } from "./sources/client";
 import { formatNumber } from "./data";
 
@@ -29,6 +38,7 @@ interface Props {
   sourceId: string;
   onFrame: (reader: TrajectorySource, first: boolean) => void;
   onDetached: (id: string) => void;
+  onControl: (control: SimulationControl | null) => void;
 }
 export function CompanionPanel({
   open,
@@ -37,9 +47,15 @@ export function CompanionPanel({
   sourceId,
   onFrame,
   onDetached,
+  onControl,
 }: Props) {
-  const [endpoint, setEndpoint] = useState("http://127.0.0.1:8766"),
-    [token, setToken] = useState("");
+  const [saved, setSaved] = useState(recallPairing);
+  const [remember, setRemember] = useState(true);
+  const [storageMessage, setStorageMessage] = useState("");
+  const [endpoint, setEndpoint] = useState(
+      saved?.endpoint ?? "http://127.0.0.1:8766",
+    ),
+    [token, setToken] = useState(saved?.token ?? "");
   const [client, setClient] = useState<CompanionClient | null>(null),
     [presets, setPresets] = useState<Preset[]>([]);
   const [runs, setRuns] = useState<Simulation[]>([]),
@@ -51,6 +67,8 @@ export function CompanionPanel({
     [scheme, setScheme] = useState("CRKSPH"),
     [variant, setVariant] = useState("standard");
   const [showEnded, setShowEnded] = useState(false);
+  const [controlBusy, setControlBusy] = useState("");
+  const controlRequest = useRef("");
   const [features, setFeatures] = useState<string[]>([]);
   const [record, setRecord] = useState(false);
   const [exportInterval, setExportInterval] = useState(0.05);
@@ -65,8 +83,22 @@ export function CompanionPanel({
     waiting: boolean;
   } | null>(null);
   const connection = useRef<AbortController | null>(null);
-  const callbacks = useRef({ onFrame, onDetached, sourceId, onOpen });
-  callbacks.current = { onFrame, onDetached, sourceId, onOpen };
+  const callbacks = useRef({
+    onFrame,
+    onDetached,
+    sourceId,
+    onOpen,
+    onControl,
+    connect,
+  });
+  callbacks.current = {
+    onFrame,
+    onDetached,
+    sourceId,
+    onOpen,
+    onControl,
+    connect,
+  };
   const known = useRef<Set<string> | null>(null);
   const preset = presets.find((p) => p.id === presetId);
   async function connect(address = endpoint, secret = token) {
@@ -83,15 +115,88 @@ export function CompanionPanel({
       setFeatures(session.features || []);
       known.current = null;
       setClient(next);
+      if (remember) {
+        const value = { endpoint: next.endpoint, token: secret.trim() };
+        if (rememberPairing(value)) {
+          setSaved(value);
+          setStorageMessage("");
+        } else
+          setStorageMessage(
+            "Browser storage is unavailable; pairing is kept only in this tab.",
+          );
+      }
     } catch (error) {
-      if (connection.current === attempt && !attempt.signal.aborted)
+      if (connection.current === attempt && !attempt.signal.aborted) {
         setError(companionConnectionMessage(error));
+        if (
+          error instanceof CompanionHTTPError &&
+          error.status === 401 &&
+          saved &&
+          saved.token === secret.trim() &&
+          samePairingEndpoint(saved, address)
+        ) {
+          forgetPairing();
+          setSaved(null);
+        }
+      }
     } finally {
       if (connection.current === attempt) {
         connection.current = null;
         setBusy(false);
       }
     }
+  }
+  async function togglePause(run: Simulation) {
+    if (!client || controlRequest.current || !canPauseSimulation(run, features))
+      return;
+    const next = !run.pauseRequested;
+    controlRequest.current = run.id;
+    setControlBusy(run.id);
+    try {
+      await client.pause(run.id, next);
+      setRuns((old) =>
+        old.map((row) =>
+          row.id === run.id ? { ...row, pauseRequested: next } : row,
+        ),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+      callbacks.current.onOpen();
+    } finally {
+      controlRequest.current = "";
+      setControlBusy("");
+    }
+  }
+  useEffect(() => {
+    const run = runs.find((row) => row.id === attached);
+    callbacks.current.onControl(
+      run && client
+        ? {
+            sourceId: `live-${run.id}`,
+            status: run.status,
+            pauseRequested: !!run.pauseRequested,
+            canPause: canPauseSimulation(run, features),
+            busy: !!controlBusy,
+            toggle: () => void togglePause(run),
+          }
+        : null,
+    );
+  }, [runs, attached, client, features, controlBusy]);
+  async function forgetSavedPairing() {
+    cancelConnection();
+    const removed = forgetPairing();
+    setSaved(null);
+    setRemember(false);
+    setStorageMessage(
+      removed
+        ? ""
+        : "Browser storage could not be cleared. Clear this site's storage in your browser to forget pairing.",
+    );
+    await detach();
+    historySession.current?.abort();
+    setClient(null);
+    setToken("");
+    setRuns([]);
   }
   function cancelConnection() {
     const attempt = connection.current;
@@ -113,7 +218,9 @@ export function CompanionPanel({
       setEndpoint(pairing.endpoint);
       setToken(pairing.token);
       callbacks.current.onOpen();
-      void detach().then(() => connect(pairing.endpoint, pairing.token));
+      void detach().then(() =>
+        callbacks.current.connect(pairing.endpoint, pairing.token),
+      );
     };
     consume();
     window.addEventListener("hashchange", consume);
@@ -164,17 +271,22 @@ export function CompanionPanel({
     const current = active.current;
     if (current?.reader && sourceId !== `live-${attached}`) void detach();
   }, [sourceId]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const release = () => {
+      const current = active.current;
+      active.current = null;
+      current?.abort.abort();
+      if (current) void current.client.detach(current.id, true).catch(() => {});
+    };
+    window.addEventListener("pagehide", release);
+    return () => {
+      window.removeEventListener("pagehide", release);
       connection.current?.abort();
       historySession.current?.abort();
       connection.current = null;
-      const current = active.current;
-      current?.abort.abort();
-      if (current) void current.client.detach(current.id).catch(() => {});
-    },
-    [],
-  );
+      release();
+    };
+  }, []);
   async function attach(id: string) {
     historySession.current?.abort();
     if (!client) return;
@@ -366,7 +478,16 @@ export function CompanionPanel({
                     Address
                     <input
                       value={endpoint}
-                      onChange={(e) => setEndpoint(e.target.value)}
+                      onChange={(e) => {
+                        const address = e.target.value;
+                        if (
+                          saved &&
+                          token === saved.token &&
+                          !samePairingEndpoint(saved, address)
+                        )
+                          setToken("");
+                        setEndpoint(address);
+                      }}
                       autoComplete="off"
                       spellCheck={false}
                       disabled={busy}
@@ -398,6 +519,35 @@ export function CompanionPanel({
                     </button>
                   )}
                 </div>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setRemember(e.target.checked);
+                      if (!e.target.checked) {
+                        if (forgetPairing()) {
+                          setSaved(null);
+                          setStorageMessage("");
+                        } else
+                          setStorageMessage(
+                            "Browser storage could not be cleared. Clear this site's storage in your browser to forget pairing.",
+                          );
+                      }
+                    }}
+                  />
+                  Remember pairing on this browser
+                </label>
+                {saved && (
+                  <button
+                    className="text-button"
+                    onClick={() => void forgetSavedPairing()}
+                  >
+                    Forget pairing
+                  </button>
+                )}
+                {storageMessage && <p role="status">{storageMessage}</p>}
                 {busy && (
                   <p role="status">
                     Waiting for the companion or your browser’s access
@@ -418,8 +568,9 @@ export function CompanionPanel({
                   </p>
                 </details>
                 <small>
-                  Token stays in this tab’s memory. The companion in this
-                  release listens only on localhost.
+                  Remembered pairing stays in this browser's site storage.
+                  Restarting the companion rotates its token. The companion
+                  listens only on localhost.
                 </small>
               </section>
             ) : (
@@ -431,12 +582,17 @@ export function CompanionPanel({
                       await detach();
                       historySession.current?.abort();
                       setClient(null);
-                      setToken("");
                       setRuns([]);
                     }}
                   >
                     Disconnect
                   </button>
+                  <button onClick={() => void forgetSavedPairing()}>
+                    Forget pairing
+                  </button>
+                  {storageMessage && (
+                    <small role="status">{storageMessage}</small>
+                  )}
                 </div>
                 <section className="companion-runs">
                   <div className="section-heading">
@@ -533,10 +689,8 @@ export function CompanionPanel({
                               className="primary-button"
                               disabled={
                                 busy ||
-                                !run.registered ||
-                                !["running", "starting", "paused"].includes(
-                                  run.status,
-                                )
+                                !!controlBusy ||
+                                !canPauseSimulation(run, features)
                               }
                               onClick={() => void attach(run.id)}
                             >
@@ -561,11 +715,7 @@ export function CompanionPanel({
                                   run.status,
                                 )
                               }
-                              onClick={() =>
-                                void client
-                                  .pause(run.id, !run.pauseRequested)
-                                  .catch((e) => setError(e.message))
-                              }
+                              onClick={() => void togglePause(run)}
                             >
                               {run.pauseRequested ? (
                                 <Play size={14} />

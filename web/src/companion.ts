@@ -35,6 +35,24 @@ export interface Simulation {
   pauseRequested?: boolean;
   recording?: { enabled: boolean; mode: string };
 }
+export interface SimulationControl {
+  sourceId: string;
+  status: string;
+  pauseRequested: boolean;
+  canPause: boolean;
+  busy: boolean;
+  toggle: () => void;
+}
+export function canPauseSimulation(
+  run: Simulation | undefined,
+  features: string[],
+) {
+  return (
+    !!run?.registered &&
+    features.includes("pause") &&
+    ["running", "starting", "paused"].includes(run.status)
+  );
+}
 export interface Snapshot {
   frame: Frame;
   metadata: Source;
@@ -119,6 +137,7 @@ export class CompanionClient {
     data?: object,
     signal?: AbortSignal,
     timeoutMs = companionRequestTimeout,
+    keepalive = false,
   ) {
     const init: RequestInit & { targetAddressSpace?: string } = {
       method: data ? "POST" : "GET",
@@ -126,6 +145,7 @@ export class CompanionClient {
         ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
         : AbortSignal.timeout(timeoutMs),
       cache: "no-store",
+      keepalive,
       headers: {
         Authorization: `Bearer ${this.token}`,
         "X-Viewer-Id": this.viewer,
@@ -173,8 +193,14 @@ export class CompanionClient {
     this.statics = undefined;
     await this.request(`/v1/runs/${id}/attach`, {});
   }
-  async detach(id: string) {
-    await this.request(`/v1/runs/${id}/detach`, {});
+  async detach(id: string, keepalive = false) {
+    await this.request(
+      `/v1/runs/${id}/detach`,
+      {},
+      undefined,
+      companionRequestTimeout,
+      keepalive,
+    );
     this.statics = undefined;
   }
   async pause(id: string, paused: boolean) {

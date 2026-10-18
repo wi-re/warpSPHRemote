@@ -1,5 +1,5 @@
 import { CompanionPanel } from "./CompanionPanel";
-import { LiveSource } from "./companion";
+import { LiveSource, type SimulationControl } from "./companion";
 import { reduceDiagnostic } from "./sources/core";
 import { NumberControl } from "./NumberControl";
 import { defaultAnalysis, type AnalysisPreferences } from "./sources/analysis";
@@ -157,10 +157,15 @@ const friendlyName = (source: Source) =>
     .replace(/^sod$/, "Sod shock tube");
 
 export default function App() {
+  const [liveControl, setLiveControl] = useState<SimulationControl | null>(
+    null,
+  );
   const [companionOpen, setCompanionOpen] = useState(false);
   const [sources, setSources] = useState<Source[]>([]),
     [sourceId, setSourceId] = useState("");
   const source = sources.find((s) => s.id === sourceId);
+  const simulationControl =
+    source?.live && liveControl?.sourceId === source.id ? liveControl : null;
   const [presentation, setPresentation] = useState<Presentation | null>(null),
     [index, setIndex] = useState(0),
     [field, setField] = useState("velocities");
@@ -868,12 +873,16 @@ export default function App() {
         open ||
         help ||
         settingsOpen ||
+        companionOpen ||
         ftleOpen
       )
         return;
       if (e.code === "Space") {
         e.preventDefault();
-        if (source) setPlaying((v) => !v);
+        if (source?.live) {
+          if (simulationControl?.canPause && !simulationControl.busy)
+            simulationControl.toggle();
+        } else if (source && source.frames > 1 && !error) setPlaying((v) => !v);
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
@@ -894,7 +903,16 @@ export default function App() {
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [source, open, help, settingsOpen, ftleOpen]);
+  }, [
+    source,
+    open,
+    help,
+    settingsOpen,
+    ftleOpen,
+    companionOpen,
+    simulationControl,
+    error,
+  ]);
   useEffect(() => {
     if (!open && !help && !settingsOpen) return;
     const previous = document.activeElement as HTMLElement;
@@ -1727,15 +1745,40 @@ export default function App() {
               </IconButton>
               <button
                 className="play-button"
-                aria-label={playing ? "Pause playback" : "Play trajectory"}
-                disabled={!source || source.frames < 2 || !!error}
+                aria-label={
+                  source?.live
+                    ? simulationControl?.pauseRequested
+                      ? "Resume simulation"
+                      : "Pause simulation"
+                    : playing
+                      ? "Pause playback"
+                      : "Play trajectory"
+                }
+                title={
+                  source?.live && !simulationControl?.canPause
+                    ? "Reconnect with an updated companion to control an active simulation"
+                    : undefined
+                }
+                disabled={
+                  source?.live
+                    ? !simulationControl?.canPause || simulationControl.busy
+                    : !source || source.frames < 2 || !!error
+                }
                 onClick={() => {
+                  if (source?.live) {
+                    simulationControl?.toggle();
+                    return;
+                  }
                   if (source && index === source.frames - 1 && !loop)
                     setIndex(0);
                   setPlaying((v) => !v);
                 }}
               >
-                {playing ? (
+                {(
+                  source?.live
+                    ? simulationControl && !simulationControl.pauseRequested
+                    : playing
+                ) ? (
                   <Pause size={17} fill="currentColor" />
                 ) : (
                   <Play size={17} fill="currentColor" />
@@ -1767,6 +1810,19 @@ export default function App() {
                       ? (frame?.liveRevision ?? source.liveRevision)
                       : String(displayedIndex + 1).padStart(3, "0")}
                   </strong>
+                  {source?.live && simulationControl && (
+                    <span className="muted">
+                      {" "}
+                      ·{" "}
+                      {simulationControl.status === "paused"
+                        ? simulationControl.pauseRequested
+                          ? "Paused"
+                          : "Resuming…"
+                        : simulationControl.pauseRequested
+                          ? "Pausing…"
+                          : simulationControl.status}
+                    </span>
+                  )}
                   {index !== displayedIndex && (
                     <span className="muted"> → {index + 1}</span>
                   )}
@@ -1802,6 +1858,7 @@ export default function App() {
             <select
               className="speed-select"
               aria-label="Playback speed"
+              disabled={!source || !!source.live}
               value={speed}
               onChange={(e) => setSpeed(+e.target.value)}
             >
@@ -1813,6 +1870,7 @@ export default function App() {
             </select>
             <IconButton
               label="Loop playback"
+              disabled={!source || !!source.live}
               active={loop}
               onClick={() => setLoop((v) => !v)}
             >
@@ -2446,6 +2504,7 @@ export default function App() {
       </footer>
       <CompanionPanel
         open={companionOpen}
+        onControl={setLiveControl}
         onOpen={() => setCompanionOpen(true)}
         onClose={() => setCompanionOpen(false)}
         sourceId={sourceId}

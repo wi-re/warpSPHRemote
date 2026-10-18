@@ -68,8 +68,16 @@ The interpreter path is fixed when the handler is installed; reinstall it after
 moving/deleting that environment.
 
 The handoff token is in a URL fragment, never a query string. The viewer removes
-that fragment from history immediately and keeps the token only in tab memory;
-it is not saved in localStorage/IndexedDB or shared view links. Avoid sharing a
+that fragment from history immediately. After successful pairing, the viewer
+remembers the endpoint/token in this browser's localStorage by default, as
+requested for reconnecting between sessions. Uncheck **Remember pairing on this
+browser** to keep it in memory only. **Disconnect** retains remembered pairing;
+**Forget pairing** clears it and disconnects. Credentials are never added to
+shared view links. Browser storage is scoped to the viewer origin and stores
+the bearer token as readable JSON; it is not an OS credential vault. Changing
+the address clears the prefilled saved token so it cannot follow a new server.
+Restarting the companion rotates the token; a rejected saved token is removed
+and must be replaced from the terminal. Avoid sharing a
 handoff URL. `warpsph-remote-open --print-url` is available for an explicit manual
 handoff; treat its output as a credential.
 
@@ -113,8 +121,10 @@ response, so older companions retain their existing launch/live behavior.
 
 In **Local simulations**, **Pause** requests a hold at the next completed-step
 publisher callback. The row shows `paused` only after the simulation acknowledges
-it. **Resume** continues the integrator; viewport playback remains a separate
-control. Pausing during initial compilation takes effect at the first callback.
+it. **Resume** continues the integrator. The main plot's play/pause button and
+Space shortcut control the simulation in live mode; recorded trajectories retain
+their normal playback controls. The live transport shows Pausing/Paused/Resuming
+status and disables recording-only speed/loop/seek controls. Pausing during initial compilation takes effect at the first callback.
 The publisher keeps heartbeats, live capture, history requests and cooperative
 stop active while paused.
 
@@ -199,7 +209,10 @@ snapshot samples** in browser memory. These are irregular samples: skipped solve
 steps are not implicitly reconstructed or integrated. No full trajectory is
 retained; time scrubbing, temporal particle/material traces and FTLE require a
 recording and are disabled in live mode. Detach leaves the last displayed snapshot
-available for inspection. Reloading the page requires pairing again.
+available for inspection. After reloading, remembered pairing prefills the
+connection form; choose Connect and Watch live again. Reload/close sends a
+best-effort authenticated lease release so reattachment can happen immediately.
+If the browser cannot deliver that request, the usual 20-second expiry applies.
 
 ## Preset execution
 
@@ -318,3 +331,32 @@ Evidence is stored outside source under
 The local browser preview also verified recorded-history seeking, switching to
 live grid viewing while paused, stopping through the manager and an unchecked
 recording option by default. No browser console errors were observed.
+
+## Live transport and remembered pairing follow-up (2026-10-18)
+
+The disabled button reported in the live plot was still wired to recorded-file
+playback (`frames < 2`). It now shares the manager's simulation pause/resume
+commands, independent of renderer errors and the one-frame live source. Command
+errors are shown in the manager; stopped/detached runs and older daemon versions
+cannot issue controls. Pairing storage saves only successfully validated
+credentials, supports explicit forgetting and handles blocked browser storage.
+
+93 TypeScript tests and the production build passed. Browser verification with
+an isolated 256-particle producer exercised the main transport's enabled Pause
+and Resume controls, a stable acknowledged paused step, remembered address/token
+after reload, reconnect without re-entry, immediate live reattachment after
+pagehide lease release and explicit forgetting. This is an acquisition/UI
+regression check; no numerical solver changes were made. Evidence lives under
+`../warpSPHDevelopment/remote/live-controls-pairing-20261018/`.
+
+To reproduce the browser check without a solver:
+
+```bash
+python examples/live_controls_fixture.py \
+  --output ../warpSPHDevelopment/remote/new-controls-fixture
+```
+
+The fixture uses localhost port 18767 and the synthetic token printed in its
+terminal. Connect from the viewer, Watch live, pause/resume from the plot, reload
+and reconnect without entering credentials, then Forget pairing and reload.
+Its fixed token protects synthetic test data only; it is not a production daemon.

@@ -315,3 +315,25 @@ test("recorded history uses authenticated frame reads, retains exact IDs and reu
     globalThis.fetch = original;
   }
 });
+
+test("page-exit detach keeps the authenticated lease release alive", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), "http://127.0.0.1:8766/v1/runs/run/detach");
+    assert.equal(init?.method, "POST");
+    assert.equal(init?.keepalive, true);
+    assert.equal(
+      (init?.headers as Record<string, string>).Authorization,
+      "Bearer test-token",
+    );
+    return new Response("{}");
+  };
+  try {
+    await new CompanionClient("http://127.0.0.1:8766", "test-token").detach(
+      "run",
+      true,
+    );
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
