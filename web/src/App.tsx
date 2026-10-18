@@ -843,8 +843,11 @@ export default function App() {
               }
             })
             .catch((error) => {
-              setVideoError(String(error));
-              void finishVideo();
+              // Preserve an unacknowledged live frame on encoder failure. Only
+              // explicit Finish/release may let an unrecorded solver advance.
+              setVideoError(
+                `${String(error)} · Finish & save video to keep the encoded portion and release capture.`,
+              );
             });
         }
       } else if (reader instanceof LiveSource)
