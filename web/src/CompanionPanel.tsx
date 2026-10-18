@@ -1,3 +1,5 @@
+import { RunAgainButton } from "./RunAgainButton";
+import { rerunDraft, type RerunDraft } from "./rerun";
 import { RunReport } from "./RunReport";
 import type { FrameTransfer } from "./liveMetrics";
 import { LaunchWizard } from "./LaunchWizard";
@@ -49,6 +51,7 @@ interface PendingAttachment {
 export type CompanionSection = "connection" | "running" | "history" | "launch";
 interface Props {
   section: CompanionSection;
+  onSection: (section: CompanionSection) => void;
   onConnection: (connected: boolean) => void;
   open: boolean;
   onOpen: () => void;
@@ -62,6 +65,7 @@ interface Props {
 export function CompanionPanel({
   open,
   section,
+  onSection,
   onConnection,
   onOpen,
   onClose,
@@ -71,8 +75,12 @@ export function CompanionPanel({
   onControl,
   prepareVideo,
 }: Props) {
+  const [rerun, setRerun] = useState<(RerunDraft & { key: number }) | null>(
+    null,
+  );
+  const rerunSerial = useRef(0);
   const backdropPress = useRef(false);
-  const [reportRun, setReportRun] = useState<Simulation | null>(null);
+  const [reportSelection, setReportRun] = useState<Simulation | null>(null);
   const [offlineMessage, setOfflineMessage] = useState("");
   const offline = useRef(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -102,6 +110,9 @@ export function CompanionPanel({
   const [runs, setRuns] = useState<Simulation[]>([]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const reportRun =
+    runs.find((r) => r.id === reportSelection?.id) ?? reportSelection;
+
   const [attached, setAttached] = useState(""),
     [notice, setNotice] = useState<Simulation | null>(null);
   const [observedAt, setObservedAt] = useState(Date.now);
@@ -183,6 +194,7 @@ export function CompanionPanel({
     cancelAttachment();
     setClient(null);
     setRuns([]);
+    setRerun(null);
     setBusy(true);
     setError("");
     try {
@@ -847,6 +859,17 @@ export function CompanionPanel({
       setBusy(false);
     }
   }
+  function runAgain(run: Simulation) {
+    try {
+      const draft = rerunDraft(run, presets, features);
+      setRerun({ ...draft, key: ++rerunSerial.current });
+      setReportRun(null);
+      setError("");
+      onSection("launch");
+    } catch (error) {
+      reportError(error, client);
+    }
+  }
   async function launch(spec: object) {
     if (!client || offline.current) return;
     setBusy(true);
@@ -1286,6 +1309,15 @@ export function CompanionPanel({
                         : undefined
                     }
                     onClose={() => setReportRun(null)}
+                    runAgainAction={
+                      <RunAgainButton
+                        run={reportRun}
+                        presets={presets}
+                        features={features}
+                        busy={busy || !!offlineMessage}
+                        onRunAgain={runAgain}
+                      />
+                    }
                   />
                 )}
                 {(section === "running" || section === "history") && (
@@ -1401,6 +1433,13 @@ export function CompanionPanel({
                             )}
                           </div>
                           <div className="run-actions">
+                            <RunAgainButton
+                              run={run}
+                              presets={presets}
+                              features={features}
+                              busy={busy || !!offlineMessage}
+                              onRunAgain={runAgain}
+                            />
                             <button
                               className="secondary-button"
                               disabled={!features.includes("runLibrary")}
@@ -1525,6 +1564,8 @@ export function CompanionPanel({
                 )}
                 <div hidden={section !== "launch"}>
                   <LaunchWizard
+                    key={rerun?.key ?? 0}
+                    initial={rerun ?? undefined}
                     client={client}
                     presets={presets}
                     features={features}

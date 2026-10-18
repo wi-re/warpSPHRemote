@@ -3360,6 +3360,7 @@ export default function App() {
       )}
       <CompanionPanel
         section={companionSection}
+        onSection={setCompanionSection}
         onConnection={setDaemonConnected}
         open={companionOpen}
         onControl={setLiveControl}

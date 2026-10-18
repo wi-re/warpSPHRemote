@@ -1,3 +1,12 @@
+import {
+  classicIntegrators,
+  integratorIssue as checkIntegrator,
+  dimensionChoices,
+  resolutionLimit,
+  integratorChoices,
+  withoutParameters,
+} from "./launchParameters";
+import { unsupportedOverrides, type RerunDraft } from "./rerun";
 import { videoPlan, videoPlanText, validCadence } from "./recording";
 import { memorySize } from "./liveMetrics";
 import { NumberControl } from "./NumberControl";
@@ -23,6 +32,7 @@ export function LaunchWizard({
   runs,
   busy,
   onLaunch,
+  initial,
 }: {
   client: CompanionClient;
   presets: Preset[];
@@ -30,33 +40,78 @@ export function LaunchWizard({
   runs: Simulation[];
   busy: boolean;
   onLaunch: (spec: object) => Promise<void>;
+  initial?: RerunDraft;
 }) {
   const form = useRef<HTMLFormElement>(null);
-  const [step, setStep] = useState(0),
-    [family, setFamily] = useState(""),
-    [chosen, setChosen] = useState<Preset | null>(null);
-  const [scheme, setScheme] = useState(""),
-    [variant, setVariant] = useState(""),
-    [nx, setNx] = useState(128),
-    [duration, setDuration] = useState(3);
-  const [record, setRecord] = useState(false),
-    [interval, setIntervalValue] = useState(0.05);
-  const [exportMode, setExportMode] = useState<"time" | "steps">("time"),
-    [exportEverySteps, setExportEverySteps] = useState(10);
-  const [videoMode, setVideoMode] = useState<"time" | "steps">("time"),
-    [videoEverySteps, setVideoEverySteps] = useState(10);
-  const [measurementInterval, setMeasurementInterval] = useState(0);
-  const [measurements, setMeasurements] = useState(false);
-  const [startPaused, setStartPaused] = useState(false);
-  const [captureVideo, setCaptureVideo] = useState(false),
-    [videoFPS, setVideoFPS] = useState(30),
-    [videoInterval, setVideoInterval] = useState(0.04);
+  const [from, setFrom] = useState(initial?.name);
+  const [stepLimit, setStepLimit] = useState<number | undefined>(
+    initial?.spec.steps ?? undefined,
+  );
+  const [step, setStep] = useState(initial ? 3 : 0),
+    [family, setFamily] = useState(
+      presets.find((p) => p.id === initial?.spec.preset)?.family ?? "",
+    ),
+    [chosen, setChosen] = useState<Preset | null>(
+      presets.find((p) => p.id === initial?.spec.preset) ?? null,
+    );
+  const [scheme, setScheme] = useState(initial?.spec.scheme ?? ""),
+    [variant, setVariant] = useState(initial?.spec.variant ?? ""),
+    [nx, setNx] = useState(initial?.spec.nx ?? 128),
+    [duration, setDuration] = useState(initial?.spec.duration ?? 3);
+  const [record, setRecord] = useState(initial?.spec.record ?? false),
+    [interval, setIntervalValue] = useState(
+      initial?.spec.exportInterval ?? 0.05,
+    );
+  const [exportMode, setExportMode] = useState<"time" | "steps">(
+      initial?.spec.exportEverySteps !== undefined ? "steps" : "time",
+    ),
+    [exportEverySteps, setExportEverySteps] = useState(
+      initial?.spec.exportEverySteps ?? 10,
+    );
+  const [videoMode, setVideoMode] = useState<"time" | "steps">(
+      initial?.spec.video?.everySteps !== undefined ? "steps" : "time",
+    ),
+    [videoEverySteps, setVideoEverySteps] = useState(
+      initial?.spec.video?.everySteps ?? 10,
+    );
+  const [measurementInterval, setMeasurementInterval] = useState(
+    initial?.spec.diagnosticInterval ?? 0,
+  );
+  const [measurements, setMeasurements] = useState(
+    initial?.spec.measurements ?? false,
+  );
+  const [startPaused, setStartPaused] = useState(initial?.spec.paused ?? false);
+  const [captureVideo, setCaptureVideo] = useState(!!initial?.spec.video),
+    [videoFPS, setVideoFPS] = useState(initial?.spec.video?.fps ?? 30),
+    [videoInterval, setVideoInterval] = useState(
+      initial?.spec.video?.interval ?? 0.04,
+    );
   const [schema, setSchema] = useState<ParameterSchema | null>(null),
-    [loading, setLoading] = useState(false),
+    [loading, setLoading] = useState(
+      !!initial &&
+        features.includes("configuration") &&
+        chosen?.configurable !== false,
+    ),
     [error, setError] = useState("");
-  const [params, setParams] = useState<Record<string, any>>({}),
-    [solver, setSolver] = useState<Record<string, any>>({}),
-    [simulation, setSimulation] = useState<Record<string, any>>({});
+  const [params, setParams] = useState<Record<string, any>>(() =>
+      structuredClone(initial?.spec.configuration?.params ?? {}),
+    ),
+    [solver, setSolver] = useState<Record<string, any>>(() =>
+      structuredClone(initial?.spec.configuration?.solver ?? {}),
+    ),
+    [simulation, setSimulation] = useState<Record<string, any>>(() =>
+      structuredClone(initial?.spec.configuration?.simulation ?? {}),
+    );
+  const dimension = simulation.dim ?? chosen?.dimension ?? 2;
+  const maxNx = chosen ? resolutionLimit(chosen, dimension) : 512;
+  const timestepNames = [
+    "integrationScheme",
+    "dt",
+    "adaptiveDt",
+    "cflFactor",
+    "minDt",
+    "maxDt",
+  ];
   const families = [...new Set(presets.map((p) => p.family || "other"))];
   const labels: Record<string, string> = {
     compressible: "Compressible",
@@ -81,7 +136,12 @@ export function LaunchWizard({
     setSchema(null);
     setError("");
     client
-      .configuration(chosen.id, scheme, abort.signal)
+      .configuration(
+        chosen.id,
+        scheme,
+        abort.signal,
+        chosen.dimensions ? dimension : undefined,
+      )
       .then((result) => {
         if (abort.signal.aborted) return;
         setSchema(result.schema || null);
@@ -97,12 +157,14 @@ export function LaunchWizard({
         if (!abort.signal.aborted) setLoading(false);
       });
     return () => abort.abort();
-  }, [chosen, scheme, client, features]);
+  }, [chosen, scheme, client, features, dimension]);
   function choose(p: Preset) {
     if (chosen?.id === p.id) {
       setStep(2);
       return;
     }
+    setFrom(undefined);
+    setStepLimit(undefined);
     setChosen(p);
     setScheme(p.schemes[0]);
     setVariant(Object.keys(p.variants)[0]);
@@ -124,11 +186,38 @@ export function LaunchWizard({
       r.createdBy === "daemon" &&
       ["starting", "running", "paused"].includes(r.status),
   );
+  const savedIssues =
+    from && schema
+      ? [
+          ...unsupportedOverrides(properties?.params, params, "params"),
+          ...unsupportedOverrides(properties?.solver, solver, "solver"),
+          ...unsupportedOverrides(
+            properties?.simulation,
+            simulation,
+            "simulation",
+          ),
+        ]
+      : [];
+  const awaitingSavedSchema =
+    !!from &&
+    !schema &&
+    [params, solver, simulation].some((v) => Object.keys(v).length > 0);
+  const integratorIssue = checkIntegrator(
+    properties?.simulation?.properties?.integrationScheme,
+    simulation.integrationScheme,
+  );
   const invalid =
+    !!integratorIssue ||
+    savedIssues.length > 0 ||
+    awaitingSavedSchema ||
+    (stepLimit !== undefined &&
+      (!Number.isInteger(stepLimit) ||
+        stepLimit < 1 ||
+        stepLimit > 10000000)) ||
     !chosen ||
     !Number.isInteger(nx) ||
     nx < 8 ||
-    nx > (chosen.maxNx ?? 512) ||
+    nx > maxNx ||
     !Number.isFinite(duration) ||
     duration < 0.000001 ||
     duration > 10000 ||
@@ -147,8 +236,7 @@ export function LaunchWizard({
             exportEverySteps < 1 ||
             exportEverySteps > 1e9))));
   const resolvedDuration = chosen?.derivedEndTime ? undefined : duration;
-  const targetSteps =
-    typeof simulation.nSteps === "number" ? simulation.nSteps : undefined;
+  const targetSteps = stepLimit;
   const initialDT =
     typeof simulation.dt === "number" && simulation.dt > 0
       ? simulation.dt
@@ -172,9 +260,7 @@ export function LaunchWizard({
     exportMode === "steps"
       ? videoPlan(1, 0, stepCount, exportEverySteps).frames
       : videoPlan(1, 0, resolvedDuration, interval).frames;
-  const roughFrameBytes =
-    nx ** (chosen?.dimension ?? 2) * (8 * (chosen?.dimension ?? 2) + 24) +
-    32768;
+  const roughFrameBytes = nx ** dimension * (8 * dimension + 24) + 32768;
   const roughTotal =
     trajectoryFrames === undefined
       ? undefined
@@ -185,6 +271,35 @@ export function LaunchWizard({
       className="launch-wizard"
       onSubmit={(e) => e.preventDefault()}
     >
+      {from && (
+        <p className="capture-estimate" role="status">
+          Run again · {from}. Previous launch settings are loaded below. Review
+          them, then press Run to start a new simulation.
+        </p>
+      )}
+      {savedIssues.length > 0 && (
+        <p role="alert">
+          Saved overrides are no longer editable on this daemon:{" "}
+          {savedIssues.join(", ")}.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setParams({});
+              setSolver({});
+              setSimulation({});
+            }}
+          >
+            Reset parameter overrides
+          </button>
+        </p>
+      )}
+      {awaitingSavedSchema && !loading && (
+        <p role="alert">
+          The saved parameter overrides require a configuration schema from this
+          daemon. They have been retained; launching is disabled until they can
+          be reviewed.
+        </p>
+      )}
       <nav className="wizard-progress" aria-label="Launch steps">
         {titles.map((t, i) => (
           <button
@@ -284,6 +399,30 @@ export function LaunchWizard({
           <p>{chosen.description}</p>
           <div className="companion-form">
             <label>
+              Dimension
+              <select
+                aria-label="Simulation dimension"
+                value={dimension}
+                disabled={dimensionChoices(chosen).length === 1 || loading}
+                onChange={(e) => {
+                  const dim = Number(e.target.value);
+                  setSimulation((s) => ({ ...s, dim }));
+                  setNx((n) => Math.min(n, resolutionLimit(chosen, dim)));
+                }}
+              >
+                {dimensionChoices(chosen).map((d) => (
+                  <option key={d} value={d}>
+                    {d}D
+                  </option>
+                ))}
+              </select>
+              <small>
+                {dimensionChoices(chosen).length === 1
+                  ? "Fixed by the installed case sampler."
+                  : "Spatial dimensions. Resolution is per axis."}
+              </small>
+            </label>
+            <label>
               Solver
               <select
                 value={scheme}
@@ -305,7 +444,9 @@ export function LaunchWizard({
                   setVariant(e.target.value);
                   setParams({});
                   setSolver({});
-                  setSimulation({});
+                  setSimulation((s) =>
+                    s.dim === undefined ? {} : { dim: s.dim },
+                  );
                 }}
               >
                 {Object.keys(chosen.variants).map((v) => (
@@ -356,6 +497,93 @@ export function LaunchWizard({
           )}
           {step === 3 && (
             <>
+              {stepLimit !== undefined && (
+                <div className="launch-number-field">
+                  <label htmlFor="launch-step-limit">Step limit</label>
+                  <NumberControl
+                    id="launch-step-limit"
+                    aria-label="Step limit"
+                    min={1}
+                    max={10000000}
+                    step={1}
+                    value={stepLimit}
+                    onValueChange={setStepLimit}
+                  />
+                  <small>
+                    The previous run used a step limit instead of end time.
+                  </small>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setStepLimit(undefined)}
+                  >
+                    Use end time instead
+                  </button>
+                </div>
+              )}
+              {properties?.simulation?.properties?.integrationScheme && (
+                <section className="launch-number-field">
+                  <label htmlFor="launch-timestepper">
+                    Timestepper · integration method
+                  </label>
+                  <select
+                    id="launch-timestepper"
+                    value={simulation.integrationScheme ?? ""}
+                    onChange={(e) =>
+                      setSimulation((s) => {
+                        const next = { ...s };
+                        if (e.target.value)
+                          next.integrationScheme = e.target.value;
+                        else delete next.integrationScheme;
+                        return next;
+                      })
+                    }
+                  >
+                    <option value="">
+                      Case / variant default ·{" "}
+                      {variantConfiguration.simulation?.integrationScheme ??
+                        properties.simulation.properties.integrationScheme
+                          .default}
+                    </option>
+                    {integratorChoices(
+                      properties.simulation.properties.integrationScheme,
+                      simulation.integrationScheme,
+                    ).map((v) => (
+                      <option key={v} value={v}>
+                        {classicIntegrators[v] ?? v}
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    {
+                      properties.simulation.properties.integrationScheme
+                        .description
+                    }
+                    . Choose a method, or inherit the case / variant default.
+                  </small>
+                  {integratorIssue && (
+                    <p className="inline-error" role="alert">
+                      {integratorIssue}
+                    </p>
+                  )}
+                  <ConfigurationFields
+                    schema={{
+                      type: "object",
+                      properties: Object.fromEntries(
+                        Object.entries(properties.simulation.properties).filter(
+                          ([k]) =>
+                            timestepNames.includes(k) &&
+                            k !== "integrationScheme",
+                        ),
+                      ),
+                    }}
+                    defaults={variantConfiguration.simulation || {}}
+                    value={simulation}
+                    onChange={setSimulation}
+                    scheme={scheme}
+                  />
+                </section>
+              )}
               <div className="launch-run-controls">
                 <section className="launch-number-field">
                   <label htmlFor="launch-resolution">Resolution (nx)</label>
@@ -363,7 +591,7 @@ export function LaunchWizard({
                     id="launch-resolution"
                     aria-label="Resolution (nx)"
                     min={8}
-                    max={chosen.maxNx ?? 512}
+                    max={maxNx}
                     step={1}
                     value={nx}
                     onValueChange={setNx}
@@ -374,8 +602,8 @@ export function LaunchWizard({
                     role="group"
                     aria-label="Resolution presets"
                   >
-                    {[...new Set([32, 64, 128, 256, 512, chosen.maxNx ?? 512])]
-                      .filter((n) => n <= (chosen.maxNx ?? 512))
+                    {[...new Set([32, 64, 128, 256, 512, maxNx])]
+                      .filter((n) => n <= maxNx)
                       .map((n) => (
                         <button
                           type="button"
@@ -386,12 +614,16 @@ export function LaunchWizard({
                           {n}
                         </button>
                       ))}
-                    <button type="button" onClick={() => setNx(chosen.nx)}>
-                      Default · {chosen.nx}
+                    <button
+                      type="button"
+                      onClick={() => setNx(Math.min(chosen.nx, maxNx))}
+                    >
+                      Default · {Math.min(chosen.nx, maxNx)}
                     </button>
                   </div>
                   <small>
-                    Enter any whole number from 8 to {chosen.maxNx ?? 512}, or
+                    {dimension}D · nx per axis; geometry determines the total
+                    particle count. Enter any whole number from 8 to {maxNx}, or
                     drag ↕. Hold Shift for finer adjustment.
                   </small>
                 </section>
@@ -424,11 +656,14 @@ export function LaunchWizard({
                   <summary>
                     <span>
                       General simulation parameters
-                      <small>Time stepping, kernel and discretization</small>
+                      <small>Kernel and spatial discretization</small>
                     </span>
                   </summary>
                   <ConfigurationFields
-                    schema={properties.simulation}
+                    schema={withoutParameters(properties.simulation, [
+                      "dim",
+                      ...timestepNames,
+                    ])}
                     defaults={variantConfiguration.simulation || {}}
                     value={simulation}
                     onChange={setSimulation}
@@ -677,6 +912,7 @@ export function LaunchWizard({
                       variant,
                       nx,
                       duration,
+                      ...(stepLimit !== undefined ? { steps: stepLimit } : {}),
                       ...(features.includes("videoFromStart")
                         ? { paused: startPaused || captureVideo }
                         : {}),

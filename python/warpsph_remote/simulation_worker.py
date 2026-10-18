@@ -47,7 +47,7 @@ def configured_spec(case, spec, entry):
     duration_parameter=getattr(case,'simulationParameters',{}).get('tLimit')
     if duration_parameter and duration_parameter.readOnly: simulation.pop('tLimit',None)
     if entry.get('nativeVariants'):
-        simulation['dim'] = entry['dimension']
+        simulation.setdefault('dim', entry['dimension'])
     if spec.get('steps') is not None:
         simulation['nSteps'] = spec['steps']
     return RunConfiguration(case.name, simulation=simulation,
@@ -57,7 +57,7 @@ def configured_spec(case, spec, entry):
 
 
 def configuration_query():
-    from .configuration import SIMULATION_FIELDS
+    from .configuration import SIMULATION_FIELDS, validate_classic_integrator
     try:
         catalogue = load_catalogue()
         if sys.argv[1] == '--catalogue':
@@ -69,13 +69,23 @@ def configuration_query():
             from warpSPH.runner import configurationSchema, prepareContext
             if sys.argv[1] == '--describe':
                 from dataclasses import replace
-                described_case = replace(case, defaults={**case.defaults, 'dim':c['dimension']}) if c.get('nativeVariants') else case
+                described_case = replace(case, defaults={**case.defaults, 'dim':spec.get('configuration', {}).get('simulation', {}).get('dim', c['dimension'])})
                 schema = configurationSchema(described_case, spec['scheme'])
                 sim = schema['properties']['simulation']['properties']
+                context = prepareContext(case, configured_spec(case, spec, c))
+                if getattr(context.schemeConfig, 'compatibleEnergy', False):
+                    excluded = {'symplecticEuler', 'semiImplicitEuler', 'leapFrog', 'velocityVerlet'}
+                    method = sim['integrationScheme']
+                    method['enum'] = [v for v in method['enum'] if v not in excluded]
+                    method['description'] += '. Compatible-energy updates require RK stage weights; classic mechanics drivers are unavailable with this solver'
+                if spec['scheme'] in ('MFM', 'MFV'):
+                    from warpSPH.schemes.exactDelta import EXACT_DELTA_INTEGRATOR_NAMES
+                    sim['integrationScheme'].update(enum=list(EXACT_DELTA_INTEGRATOR_NAMES), default='forwardEuler', description='This solver owns its full step and requires a single-evaluation Euler integrator.')
                 schema['properties']['simulation']['properties'] = {k:v for k,v in sim.items() if k in SIMULATION_FIELDS}
                 result = dict(supported=True, schema=schema)
             else:
-                prepareContext(case, configured_spec(case, spec, c))
+                resolved = configured_spec(case, spec, c)
+                validate_classic_integrator(prepareContext(case, resolved), resolved)
                 result = dict(valid=True)
     except Exception as e:
         result = dict(supported=False, valid=False, error=str(e))

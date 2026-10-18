@@ -554,3 +554,10 @@ SQLite library; managed logs/exports also use that data directory. Resource and
 probe recording does not enable particle trajectories. See
 [usage, paths, limits and verification](ONE_DIMENSION_AND_RUN_LIBRARY.md).
 Earlier session-only history/2D-only notes in dated reports describe older versions.
+
+## Dimension, timestepper and repeat runs (2026-10-18)
+
+The launch wizard now exposes the case's supported **Dimension** and a prominent
+**Timestepper · integration method**, with Δt/adaptive controls beside it.
+Finished managed runs have **Run again** to review the saved launch settings.
+See [usage, constraints and regeneration](LAUNCH_PARAMETERS_AND_RERUN.md).

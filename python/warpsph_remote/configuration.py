@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 # The companion owns paths, device selection, output, and managed run lifecycle.
-SIMULATION_FIELDS = {'dt', 'adaptiveDt', 'cflFactor', 'minDt', 'maxDt', 'n_h',
+SIMULATION_FIELDS = {'dim', 'integrationScheme', 'dt', 'adaptiveDt', 'cflFactor', 'minDt', 'maxDt', 'n_h',
                      'kernel', 'supportMode', 'gradientMode', 'laplacianMode',
                      'samplingScheme', 'densityCorrection', 'calibrateNormalization',
                      'verletScale', 'execution', 'iterationChecks', 'krylovCheckEvery'}
@@ -55,6 +55,26 @@ def installed_catalogue():
         coverage = {c['id']: c for c in configurationCatalogue()['cases']}
     except ImportError:
         coverage = {}
+    from warpSPH.runner.configuration import simulationParameters
+    dimension_parameter = simulationParameters()['dim']
+
+    def dimensions_for(case, ready):
+        default = case.defaults.get('dim', 2)
+        descriptor = case.simulationParameters.get('dim', dimension_parameter)
+        choices = descriptor.choices or (default,)
+        if not ready or descriptor.readOnly:
+            choices = (default,)
+        return [d for d in choices if d in (1, 2, 3)]
+
+    def dimension_fields(entry, case):
+        dimensions = dimensions_for(case, entry['configurable'])
+        entry['dimensions'] = dimensions
+        entry['maxNxByDimension'] = {
+            str(d): (entry.get('maxNx', 512) if d == entry['dimension']
+                     else 128 if d == 3 else 16384 if d == 1 else 512)
+            for d in dimensions
+        }
+
     entries, represented = [], set()
     for c in CATALOGUE:
         entry = dict(c)
@@ -67,6 +87,7 @@ def installed_catalogue():
             entry['configurable'] = coverage.get(case.name, {}).get('status') == 'ready'
             if entry['configurable']:
                 entry['schemes'] = [s for s in c['schemes'] if s in case.supportedSchemes]
+            dimension_fields(entry, case)
         except (ImportError, AttributeError) as e:
             entry.update(available=False, unavailableReason=str(e), configurable=False)
         entries.append(entry)
@@ -77,8 +98,7 @@ def installed_catalogue():
         status = coverage.get(name, {})
         ready = status.get('status') == 'ready'
         dim = case.defaults.get('dim', 2)
-        descriptor = getattr(case, 'simulationParameters', {}).get('dim')
-        dimensions = [d for d in (descriptor.choices if descriptor and descriptor.choices else (dim,)) if d in (1, 2, 3)]
+        dimensions = dimensions_for(case, ready)
         dim = dim if dim in dimensions else (dimensions[0] if dimensions else dim)
         available = bool(dimensions) and status.get('status') != 'invalid'
         hook_module = getattr(case.buildSystem, '__module__', '')
@@ -92,4 +112,15 @@ def installed_catalogue():
             available=available, configurable=ready,
             unavailableReason=None if available else
                 (status.get('error') or 'This case does not advertise a supported 1D/2D/3D setup.')))
+        dimension_fields(entries[-1], case)
     return entries
+
+
+def validate_classic_integrator(context, spec):
+    """Known classic mechanics drivers do not supply compatible-energy RK weights.
+
+    This is deliberately not an audit of the full integrator registry.
+    """
+    method = spec.integrationScheme
+    if method in {'symplecticEuler', 'semiImplicitEuler', 'leapFrog', 'velocityVerlet'} and getattr(context.schemeConfig, 'compatibleEnergy', False):
+        raise ValueError('This timestepper does not provide the RK stage weights required by compatibleEnergy. Select RK2/RK4, or a solver without compatibleEnergy.')

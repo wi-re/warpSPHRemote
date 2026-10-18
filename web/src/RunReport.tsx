@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CompanionClient, type Simulation } from "./companion";
 import { loadPlotly } from "./Chart";
 import { formatNumber } from "./data";
@@ -14,11 +14,13 @@ export function RunReport({
   run,
   onClose,
   onTime,
+  runAgainAction,
 }: {
   client: CompanionClient;
   run: Simulation;
   onClose: () => void;
   onTime?: (t: number) => void;
+  runAgainAction?: ReactNode;
 }) {
   const [rows, setRows] = useState<Measurement[]>([]),
     [error, setError] = useState(""),
@@ -176,6 +178,7 @@ export function RunReport({
     <section className="run-report inspector-section">
       <div className="section-heading">
         <h3>{run.name} · retained run diagnostics</h3>
+        {runAgainAction}
         <button className="secondary-button compact" onClick={onClose}>
           Close report
         </button>

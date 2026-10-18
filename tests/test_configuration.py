@@ -53,3 +53,35 @@ def test_missing_solver_is_reported_as_unavailable_without_breaking_pairing(tmp_
     m=Manager(tmp_path/'runtime')
     assert all(c['available'] is False for c in m.available_cases())
     assert all('not installed' in c['unavailableReason'] for c in m.available_cases())
+
+
+def test_dimension_selection_obeys_installed_case_and_per_axis_limits():
+    entry = dict(id='sedov',schemes=['CRKSPH'],variants={'default':{}},nx=512,duration=1,
+                 dimension=1,dimensions=[1,2,3],maxNx=16384,maxNxByDimension={'1':16384,'2':512,'3':128})
+    data=dict(preset='sedov',nx=256,configuration={'simulation':{'dim':2,'integrationScheme':'rungeKutta4'}})
+    assert validate_launch(data,[entry])['configuration']==data['configuration']
+    with pytest.raises(ValueError,match='3D'):
+        validate_launch({**data,'configuration':{'simulation':{'dim':3}}},[entry])
+    for dim in (0,4,True,2.0,'2'):
+        with pytest.raises(ValueError,match='dimension'):
+            validate_launch({**data,'configuration':{'simulation':{'dim':dim}}},[entry])
+    entry['dimensions']=[1]
+    with pytest.raises(ValueError,match='dimension'):
+        validate_launch(data,[entry])
+    # Older catalogues remain fixed to their advertised default dimension.
+    entry.pop('dimensions')
+    with pytest.raises(ValueError,match='dimension'):
+        validate_launch(data,[entry])
+
+
+def test_classic_integrator_conflicts_fail_before_startup():
+    from types import SimpleNamespace
+    from warpsph_remote.configuration import validate_classic_integrator
+    ctx=SimpleNamespace(schemeConfig=SimpleNamespace(compatibleEnergy=True))
+    for method in ('symplecticEuler','semiImplicitEuler','leapFrog','velocityVerlet'):
+        with pytest.raises(ValueError,match='stage weights'):
+            validate_classic_integrator(ctx,SimpleNamespace(integrationScheme=method))
+    for method in ('rungeKutta2','rungeKutta4'):
+        validate_classic_integrator(ctx,SimpleNamespace(integrationScheme=method))
+    ctx.schemeConfig.compatibleEnergy=False
+    validate_classic_integrator(ctx,SimpleNamespace(integrationScheme='symplecticEuler'))

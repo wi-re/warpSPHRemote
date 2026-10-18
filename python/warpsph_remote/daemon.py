@@ -776,8 +776,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["v1", "configuration"]:
                 query = parse_qs(urlsplit(self.path).query)
                 spec = validate_launch({'preset': query.get('preset', [''])[0],
-                    **({'scheme': query['scheme'][0]} if 'scheme' in query else {})}, self.manager.available_cases())
-                key = (spec['preset'], spec['scheme'])
+                    **({'scheme': query['scheme'][0]} if 'scheme' in query else {}),
+                    **({'configuration': {'simulation': {'dim': int(query['dim'][0])}}, 'nx': 8} if 'dim' in query else {})}, self.manager.available_cases())
+                key = (spec['preset'], spec['scheme'], spec.get('configuration', {}).get('simulation', {}).get('dim'))
                 if key not in self.manager.configuration_cache:
                     self.manager.configuration_cache[key] = query_solver(self.manager.python, '--describe', spec)
                 return self.send_json(self.manager.configuration_cache[key])

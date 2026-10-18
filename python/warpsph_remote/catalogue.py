@@ -59,9 +59,14 @@ def validate_launch(data, catalogue=None):
         data.get("duration", case["duration"]),
         data.get("steps"),
     )
-    if type(nx) is not int or not 8 <= nx <= case.get("maxNx", 512):
+    configuration = restricted_configuration(data['configuration']) if 'configuration' in data else None
+    dim = (configuration or {}).get('simulation', {}).get('dim', case.get('dimension', 2))
+    if type(dim) is not int or dim not in case.get('dimensions', [case.get('dimension', 2)]):
+        raise ValueError('Unsupported dimension for this case.')
+    max_nx = case.get('maxNxByDimension', {}).get(str(dim), case.get('maxNx', 512))
+    if type(nx) is not int or not 8 <= nx <= max_nx:
         raise ValueError(
-            f"Resolution nx must be 8–{case.get('maxNx',512)} for this case."
+            f"Resolution nx must be 8–{max_nx} for this {dim}D case."
         )
     if (
         type(duration) not in (int, float)
@@ -80,7 +85,6 @@ def validate_launch(data, catalogue=None):
         raise ValueError("Export interval must be finite and between 1e-6 and 10000.")
     if 'paused' in data and type(data['paused']) is not bool:
         raise ValueError('Launch paused must be a boolean.')
-    configuration = restricted_configuration(data["configuration"]) if "configuration" in data else None
     result = dict(
         preset=case["id"],
         scheme=scheme,

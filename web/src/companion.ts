@@ -1,3 +1,4 @@
+import type { LaunchSettings } from "./rerun";
 import type { PressureProbe } from "./sources/probes";
 import type { Measurement } from "./runMeasurements";
 import type { FrameTransfer, Resources } from "./liveMetrics";
@@ -16,6 +17,8 @@ export interface Preset {
   derivedEndTime?: boolean;
   maxNx?: number;
   dimension?: number;
+  dimensions?: number[];
+  maxNxByDimension?: Record<string, number>;
   variants: Record<string, object>;
   image: string | null;
   family?: string;
@@ -38,6 +41,7 @@ export interface StorageEstimate {
   estimated: boolean;
 }
 export interface Simulation {
+  launch?: LaunchSettings;
   frameBuffer?: { ready: boolean; bytes: number; ageSeconds: number };
   pipeline?: Pipeline;
   storageEstimate?: StorageEstimate;
@@ -344,10 +348,15 @@ export class CompanionClient {
     return (await (await this.request("/v1/runs", undefined, signal)).json())
       .runs;
   }
-  async configuration(preset: string, scheme: string, signal?: AbortSignal) {
+  async configuration(
+    preset: string,
+    scheme: string,
+    signal?: AbortSignal,
+    dimension?: number,
+  ) {
     return (
       await this.request(
-        `/v1/configuration?preset=${encodeURIComponent(preset)}&scheme=${encodeURIComponent(scheme)}`,
+        `/v1/configuration?preset=${encodeURIComponent(preset)}&scheme=${encodeURIComponent(scheme)}${dimension === undefined ? "" : `&dim=${dimension}`}`,
         undefined,
         signal,
         65000,
