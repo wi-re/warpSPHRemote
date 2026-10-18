@@ -359,3 +359,59 @@ test("live connection notice distinguishes startup, first frame, and capture fai
     "waiting for a producer heartbeat…",
   );
 });
+
+test("identical live safe boundaries do not trigger another visualization update", () => {
+  const f = decodeFrame(
+    packet({
+      positions: { data: new Float32Array([0, 0]), shape: [1, 2] },
+      UIDs: { data: new Int32Array([1]), shape: [1] },
+      kinds: { data: new Int32Array([0]), shape: [1] },
+      masses: { data: new Float32Array([1]), shape: [1] },
+    }),
+  );
+  f.step = 20;
+  const metadata = {
+    id: "live-run",
+    dimension: 2,
+    fields: [],
+    bounds: [
+      [0, 0],
+      [1, 1],
+    ],
+    identity: "UIDs",
+    frames: 1,
+    times: [0.1],
+    timeKind: "simulation",
+    name: "paused",
+    format: "Live simulation",
+  } as const;
+  const snapshot = {
+    frame: f,
+    metadata: {
+      ...metadata,
+      fields: [],
+      bounds: [
+        [0, 0],
+        [1, 1],
+      ],
+      times: [0.1],
+    },
+    sequence: 1,
+  } as Snapshot;
+  const source = new LiveSource(snapshot, async () => {});
+  assert.ok(
+    source.sameState({
+      ...snapshot,
+      sequence: 2,
+      frame: { ...f, arrays: { ...f.arrays } },
+    }),
+  );
+  assert.ok(!source.sameState({ ...snapshot, frame: { ...f, step: 21 } }));
+  assert.ok(!source.sameState({ ...snapshot, frame: { ...f, time: 0.2 } }));
+  assert.ok(
+    !source.sameState({
+      ...snapshot,
+      frame: { ...f, arrays: { ...f.arrays, UIDs: { ...f.arrays.UIDs } } },
+    }),
+  );
+});

@@ -171,6 +171,8 @@ export default function App() {
   const source = sources.find((s) => s.id === sourceId);
   const simulationControl =
     source?.live && liveControl?.sourceId === source.id ? liveControl : null;
+  const [reconstructionWarning, setReconstructionWarning] = useState("");
+  const [retryRevision, setRetryRevision] = useState(0);
   const [presentation, setPresentation] = useState<Presentation | null>(null),
     [index, setIndex] = useState(0),
     [field, setField] = useState("velocities");
@@ -712,6 +714,7 @@ export default function App() {
     const abort = new AbortController();
     setLoading(true);
     setError("");
+    setReconstructionWarning("");
     // Scrubbing coalesces requests; playback requests each complete display frame.
     const timer = setTimeout(
       () => {
@@ -729,6 +732,8 @@ export default function App() {
           .then((next) => {
             if (abort.signal.aborted) return;
             setPresentation(next);
+            setReconstructionWarning(next.warning ?? "");
+            if (next.warning) setPlaying(false);
             setFetchMs(performance.now() - t);
           })
           .catch((e) => {
@@ -747,7 +752,7 @@ export default function App() {
       clearTimeout(timer);
       abort.abort();
     };
-  }, [presentationKey]);
+  }, [presentationKey, retryRevision]);
   useEffect(() => {
     if (!presentation || !frame || !source || !engine.current) return;
     try {
@@ -1583,14 +1588,40 @@ export default function App() {
                 {fieldView.active ? "Reconstructing frame" : "Reading frame"}
               </div>
             )}
-            {(error || engineError) && (
-              <div className="scene-message error" role="alert">
-                <Info size={22} />
-                <strong>Unable to display this frame</strong>
-                <p>{engineError || error}</p>
-                <button className="secondary-button" onClick={showPicker}>
-                  Open another trajectory
-                </button>
+            {(error || engineError || reconstructionWarning) && (
+              <div className="scene-warning" role="alert">
+                <Info size={18} />
+                <div>
+                  <strong>
+                    {reconstructionWarning
+                      ? "Grid reconstruction unavailable"
+                      : "Could not update this view"}
+                  </strong>
+                  <p>{engineError || error || reconstructionWarning}</p>
+                  {reconstructionWarning && (
+                    <p>Showing particles. Your data remains loaded.</p>
+                  )}
+                  <div className="scene-warning-actions">
+                    {(!engineError || engine.current) && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => setRetryRevision((v) => v + 1)}
+                      >
+                        Retry
+                      </button>
+                    )}
+                    <button
+                      className="secondary-button"
+                      onClick={() => {
+                        setError("");
+                        setEngineError("");
+                        setReconstructionWarning("");
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
             {!frame && !loading && !error && !engineError && (

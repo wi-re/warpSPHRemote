@@ -55,13 +55,18 @@ suite requires matching validity masks and `|GPU-CPU|/(1+|CPU|) <= 8e-5` at ever
 finite sample. Values exactly at cutoff/coverage thresholds can differ with
 roundoff; no bitwise or threshold-boundary guarantee is made. Up to four selected
 field components are supported by this GPU path; wider fields fall back in Auto.
-Unsupported f32 scales, excessive work and device buffer/dispatch limits produce
-explicit errors or a reported CPU fallback. The CPU's own work limit still applies.
+Unsupported f32 scales and device buffer/dispatch limits produce explicit errors
+or a reported CPU fallback. There is no total candidate/work-count rejection for
+grid reconstruction; large CPU and GPU jobs use cooperative chunks.
 
 GPU capacity allocations, including retained scan scratch and readback, are capped
-at 192 MiB per source backend. A conservative candidate-visit estimate rejects
-pathological workloads above 160 million before dispatch; it never clips a cell's
-neighbors to stay within budget. Unavailable adapters, device loss and allocation/
+at 192 MiB per source backend. A conservative candidate-visit estimate schedules
+query ranges targeting 16 million visits per submission; it never clips neighbours
+or rejects an otherwise valid dataset because its total work exceeds that target.
+The compact index is built once. Each range reconstructs and differentiates its
+own cells, then yields through queue completion before the next range. CPU
+reconstruction uses the same accumulation order with cooperative yields every
+65,536 candidate visits. Both paths check cancellation between chunks. Unavailable adapters, device loss and allocation/
 validation failures cannot publish partial output. Serialized source jobs and
 existing presentation cancellation prevent stale results from replacing a newer
 frame. Closing a browser source terminates its worker; service sources close their
@@ -149,3 +154,10 @@ hash index becomes useful when the dense table is wasteful, especially in 3D.
 References: [WebGPU](https://www.w3.org/TR/webgpu/),
 [WGSL](https://www.w3.org/TR/WGSL/),
 [Dawn Node bindings](https://github.com/dawn-gpu/node-webgpu).
+
+## Large grids and frozen live frames (2026-10-18)
+
+The former 160M GPU candidate cap and 40M CPU work cap are removed. Long jobs keep
+the completed display visible until the matching result is ready. See
+[cooperative reconstruction and paused-frame verification](RECONSTRUCTION_PACING.md)
+for the actual triple-point check, cancellation tests and non-blocking error UX.

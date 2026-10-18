@@ -447,11 +447,15 @@ export function CompanionPanel({
                   await client.ack(id, snapshot.sequence);
                   session.waiting = false;
                 };
-                const first = !session.reader;
-                if (first) setAwaitingFrame(null);
-                if (session.reader) session.reader.update(snapshot, ack);
-                else session.reader = new LiveSource(snapshot, ack);
-                callbacks.current.onFrame(session.reader, first);
+                if (session.reader?.sameState(snapshot)) {
+                  await ack();
+                } else {
+                  const first = !session.reader;
+                  if (first) setAwaitingFrame(null);
+                  if (session.reader) session.reader.update(snapshot, ack);
+                  else session.reader = new LiveSource(snapshot, ack);
+                  callbacks.current.onFrame(session.reader, first);
+                }
               }
             }
             await new Promise((resolve) => setTimeout(resolve, 100));

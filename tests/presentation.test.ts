@@ -192,3 +192,50 @@ test("picked streamlines wait without blocking the field or LIC, then resume wit
   await show({ ...picked, seed: undefined });
   assert.deepEqual(requests[2].streams, picked.streams); // regular seeds still work
 });
+
+test("a reconstruction failure preserves the numerical frame and provides a recoverable warning", async () => {
+  const reader = {
+    metadata: { id: "recording" },
+    frame: async () => frame,
+    grid: async () => {
+      throw new Error("Device buffer limit");
+    },
+  };
+  const p = await loadPresentation(
+    reader,
+    7,
+    "densities",
+    "grid",
+    query,
+    "failed-grid",
+    new AbortController().signal,
+  );
+  assert.equal(p.frame, frame);
+  assert.equal(p.mode, "particles");
+  assert.equal(p.result, null);
+  assert.equal(p.warning, "Device buffer limit");
+});
+
+test("cancelled reconstruction failures cannot turn into particle fallback updates", async () => {
+  const abort = new AbortController();
+  const reader = {
+    metadata: { id: "recording" },
+    frame: async () => frame,
+    grid: async () => {
+      abort.abort();
+      throw new Error("cancelled work");
+    },
+  };
+  await assert.rejects(
+    loadPresentation(
+      reader,
+      7,
+      "densities",
+      "grid",
+      query,
+      "cancelled-grid",
+      abort.signal,
+    ),
+    { name: "AbortError" },
+  );
+});

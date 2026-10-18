@@ -340,6 +340,70 @@ export async function runChecks(report: (row: string) => void) {
         `PASS LIC ${scenario}: max absolute error ${worst.toExponential(2)}`,
       );
     }
+    // This valid all-to-all dataset exceeds the former total candidate cap.
+    // Constant fields/velocities give an independent oracle without a costly CPU sum.
+    for (const quantity of ["field", "divergence", "vorticity"] as const) {
+      const raw = fixture(257);
+      (raw.supports.data as Float64Array).fill(2);
+      (raw.test.data as Float64Array).fill(2.5);
+      for (let i = 0; i < 257; i++) {
+        raw.velocities.data[2 * i] = 0.1;
+        raw.velocities.data[2 * i + 1] = 0.2;
+      }
+      const source = {
+        domain: { min: [0, 0], max: [1, 1], periodic: [true, true] },
+      };
+      const result = await gpu.reconstruct(raw, source, "test", "magnitude", {
+        ...initialGrid,
+        resolution: 1024,
+        quantity,
+      });
+      const expected = quantity === "field" ? 2.5 : 0;
+      for (let i = 0; i < result.values.length; i++) {
+        if (
+          !Number.isFinite(result.values[i]) ||
+          Math.abs(result.values[i] - expected) > 3e-4
+        )
+          throw new Error(`Batched ${quantity}: incorrect cell ${i}`);
+      }
+      passed++;
+      report(
+        `PASS large batched ${quantity}: ${result.values.length} cells above former 160M candidate cap`,
+      );
+    }
+    // Abort after submission begins, then use the same device again.
+    const abort = new AbortController(),
+      cancelledRaw = fixture(257);
+    (cancelledRaw.supports.data as Float64Array).fill(2);
+    const cancelTimer = setTimeout(() => abort.abort(), 0);
+    try {
+      await gpu.reconstruct(
+        cancelledRaw,
+        { domain: { min: [0, 0], max: [1, 1], periodic: [true, true] } },
+        "test",
+        "magnitude",
+        { ...initialGrid, resolution: 1024 },
+        0,
+        0,
+        abort.signal,
+      );
+      throw new Error("Aborted GPU job executed");
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== "AbortError") throw error;
+    } finally {
+      clearTimeout(cancelTimer);
+    }
+    const reusable = await gpu.reconstruct(
+      fixture(),
+      { domain: { min: [0, 0], max: [1, 1], periodic: [true, true] } },
+      "test",
+      "magnitude",
+      initialGrid,
+    );
+    if (reusable.width !== initialGrid.resolution)
+      throw new Error("Device reuse after cancellation failed");
+    passed++;
+    report("PASS in-flight cancellation and device reuse");
     report(`COMPLETE: ${passed} GPU/CPU parity cases passed.`);
   } finally {
     gpu.close();

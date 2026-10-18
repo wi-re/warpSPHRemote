@@ -87,7 +87,7 @@ export function prepareParticles(
   const radius = span.map((x, c) =>
     Math.min(bins[c], Math.ceil(maxSupport / (x / bins[c]))),
   );
-  // Bound pathological all-to-all workloads rather than truncate neighbours.
+  // Estimate work to pace query submissions. Dense frames remain valid.
   const occupancy = new Uint32Array(bins[0] * bins[1]);
   for (let i = 0; i < n; i++)
     if (u[i * 12 + 10] & 1) {
@@ -104,17 +104,12 @@ export function prepareParticles(
     }
   let maxOccupancy = 0;
   for (const count of occupancy) maxOccupancy = Math.max(maxOccupancy, count);
-  const candidates =
-    width *
-    height *
+  const candidatesPerQuery =
     maxOccupancy *
     Math.min(bins[0], 2 * radius[0] + 1) *
     Math.min(bins[1], 2 * radius[1] + 1);
-  if (candidates > 160_000_000)
-    throw new Error(
-      "GPU neighbour workload exceeds the bounded query budget. Reduce resolution.",
-    );
-  const params = new ArrayBuffer(64),
+  const candidates = width * height * candidatesPerQuery;
+  const params = new ArrayBuffer(80),
     pf = new Float32Array(params),
     pu = new Uint32Array(params);
   pf.set(span, 0);
@@ -133,5 +128,15 @@ export function prepareParticles(
       : settings.quantity === "vorticity"
         ? 2
         : 0;
-  return { data, params, layout, bins, excluded, valid, candidates };
+  pu[17] = width * height;
+  return {
+    data,
+    params,
+    layout,
+    bins,
+    excluded,
+    valid,
+    candidates,
+    candidatesPerQuery,
+  };
 }

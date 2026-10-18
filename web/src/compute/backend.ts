@@ -1,6 +1,6 @@
 import { computeLIC, type LICSettings } from "../sources/lic";
 import {
-  reconstructGrid,
+  reconstructGridAsync,
   type GridData,
   type GridSettings,
 } from "../sources/grid";
@@ -32,6 +32,7 @@ export class GridBackend {
         settings,
         index,
         time,
+        signal,
       );
       signal?.throwIfAborted();
       return grid;
@@ -47,6 +48,7 @@ export class GridBackend {
     settings: GridSettings,
     index = 0,
     time = 0,
+    signal?: AbortSignal,
   ): Promise<GridData> {
     const mode = settings.backend ?? "auto";
     if (mode !== "cpu" && !this.failure) {
@@ -64,8 +66,18 @@ export class GridBackend {
           });
         return await (
           await this.gpu
-        ).reconstruct(raw, source, field, mapping, settings, index, time);
+        ).reconstruct(
+          raw,
+          source,
+          field,
+          mapping,
+          settings,
+          index,
+          time,
+          signal,
+        );
       } catch (error) {
+        signal?.throwIfAborted();
         const reason = error instanceof Error ? error.message : String(error);
         // A failed dataset must not permanently disable a working GPU for other frames/settings.
         if (
@@ -83,6 +95,7 @@ export class GridBackend {
           index,
           time,
           reason,
+          signal,
         );
       }
     }
@@ -96,9 +109,10 @@ export class GridBackend {
       index,
       time,
       mode === "cpu" ? undefined : this.failure,
+      signal,
     );
   }
-  private cpu(
+  private async cpu(
     raw: RawFrame,
     source: Pick<Source, "domain">,
     field: string,
@@ -107,9 +121,10 @@ export class GridBackend {
     index: number,
     time: number,
     reason?: string,
-  ): GridData {
+    signal?: AbortSignal,
+  ): Promise<GridData> {
     const start = performance.now(),
-      grid = reconstructGrid(
+      grid = await reconstructGridAsync(
         raw,
         source,
         field,
@@ -117,6 +132,7 @@ export class GridBackend {
         settings,
         index,
         time,
+        signal,
       );
     grid.compute = {
       backend: "cpu",

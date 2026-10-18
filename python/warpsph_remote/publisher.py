@@ -43,6 +43,7 @@ class SimulationPublisher:
         self.captured = 0
         self.static_revision = None
         self.pending = None
+        self._last_published = None
         self.meta = {
             "status": "starting",
             "step": 0,
@@ -102,6 +103,8 @@ class SimulationPublisher:
                         self._request(
                             f"/producer/{self.id}/snapshot", pending[0], pending[1]
                         )
+                        with self.lock:
+                            self._last_published = pending[2]
                     except HTTPError as e:
                         if e.code != 409:
                             raise  # detached/expired viewers may discard a capture
@@ -226,7 +229,7 @@ class SimulationPublisher:
             self._capture_retry_at = 0.0
             if self.meta.get("message", "").startswith("Live capture unavailable:"):
                 self.meta["message"] = ""
-            self.pending = (packet, headers)
+            self.pending = (packet, headers, (step, time_value, revision))
         return True
 
     def recording(self, ctx):
@@ -288,6 +291,9 @@ class SimulationPublisher:
     def _capture(self, ctx, state, step):
         if not self.wants_snapshot:
             return
+        with self.lock:
+            if self._last_published == (int(step), float(state.t), self.static_revision):
+                return
         s = state.state
         arrays = {
             name: getattr(s, name, None)

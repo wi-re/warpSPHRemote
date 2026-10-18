@@ -342,6 +342,17 @@ export class LiveSource extends ServiceSource {
     this.current = snapshot.frame;
     this.acknowledge = acknowledge;
   }
+  /** Older publishers may repeatedly capture the same immutable safe boundary. */
+  sameState(snapshot: Snapshot): boolean {
+    return (
+      this.current.step !== undefined &&
+      snapshot.frame.step === this.current.step &&
+      snapshot.frame.time === this.current.time &&
+      snapshot.frame.arrays.UIDs === this.current.arrays.UIDs &&
+      snapshot.frame.arrays.kinds === this.current.arrays.kinds &&
+      snapshot.frame.arrays.masses === this.current.arrays.masses
+    );
+  }
   update(snapshot: Snapshot, acknowledge: () => Promise<void>) {
     this.metadata = snapshot.metadata;
     this.current = snapshot.frame;

@@ -460,6 +460,20 @@ def test_paused_producer_serves_live_and_existing_history_then_stops(api, tmp_pa
         wait_for(lambda: m.runs[p.id].get("snapshot") is not None)
         assert m.runs[p.id]["metadata"]["time"] == .1
         assert worker.is_alive() and m.runs[p.id]["time"] == .1
+        # A paused producer holds the next request instead of recapturing the same state.
+        sequence = m.runs[p.id]["sequence"]
+        headers = {"X-Viewer-Id": "viewer-aaaaaaaaaaaa"}
+        call(f"/v1/runs/{p.id}/ack", {"sequence": sequence}, headers=headers).close()
+        wait_for(lambda: p.wants_snapshot)
+        time.sleep(.15)
+        assert m.runs[p.id]["sequence"] == sequence
+        assert m.runs[p.id]["snapshot"] is None
+        # Another lease still gets the current paused state, with fresh static data.
+        call(f"/v1/runs/{p.id}/detach", {}, headers=headers).close()
+        m.attach(p.id,"viewer-aaaaaaaaaaaa")
+        wait_for(lambda: m.runs[p.id]["snapshot"] is not None)
+        assert m.runs[p.id]["sequence"] > sequence
+
         call(f"/v1/runs/{p.id}/stop", {}).close()
         worker.join(3)
         assert not worker.is_alive() and not failures

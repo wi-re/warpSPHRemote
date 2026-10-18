@@ -8,9 +8,11 @@ import { tmpdir } from "node:os";
 const outfile = resolve(tmpdir(), `warpsph-gpu-check-${process.pid}.mjs`);
 await build({
   entryPoints: [
-    process.argv.includes("--recordings")
-      ? "examples/benchmark-webgpu.ts"
-      : "web/src/compute/checks.ts",
+    process.argv.includes("--fixture")
+      ? "examples/check-recorded-grid.ts"
+      : process.argv.includes("--recordings")
+        ? "examples/benchmark-webgpu.ts"
+        : "web/src/compute/checks.ts",
   ],
   outfile,
   bundle: true,

@@ -10,6 +10,7 @@ export interface Presentation {
   mode: FieldMode;
   result: FieldResult | null;
   key: string;
+  warning?: string;
 }
 
 /** A display update is complete only when its requested derived data is ready.
@@ -48,10 +49,15 @@ export async function loadPresentation(
       : continuousQuery;
   // Enqueue together so low-priority history work cannot slip between the
   // particle read and reconstruction. The worker reuses its raw-frame cache.
+  let warning: string | undefined;
   const [frame, result] = await Promise.all([
     reader.frame(index, field, signal),
     reconstruction
-      ? reader.grid(reconstruction, signal)
+      ? reader.grid(reconstruction, signal).catch((error: unknown) => {
+          signal.throwIfAborted();
+          warning = error instanceof Error ? error.message : String(error);
+          return null;
+        })
       : Promise.resolve(null),
   ]);
   signal.throwIfAborted();
@@ -59,8 +65,9 @@ export async function loadPresentation(
     sourceId: reader.metadata.id,
     frame,
     field,
-    mode: categorical ? "particles" : mode,
+    mode: categorical || warning ? "particles" : mode,
     result,
     key,
+    ...(warning ? { warning } : {}),
   };
 }

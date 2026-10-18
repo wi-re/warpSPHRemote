@@ -9,6 +9,7 @@ struct Parameters {
   bins: vec2u, radius: vec2u,
   periodic: vec2u, count: u32, kernel: u32,
   minCoverage: f32, components: u32, mapping: u32, quantity: u32,
+  queryOffset: u32, queryCount: u32, padding: vec2u,
 }
 struct Result { field: vec4f, velocity: vec2f, coverage: f32, flags: u32 }
 @group(0) @binding(0) var<storage, read> particles: array<Particle>;
@@ -43,8 +44,8 @@ fn scatterParticles(@builtin(global_invocation_id) id: vec3u) {
 fn wrap(x: i32, size: u32) -> u32 { return u32((x % i32(size) + i32(size)) % i32(size)); }
 @compute @workgroup_size(128)
 fn reconstruct(@builtin(global_invocation_id) id: vec3u) {
-  let i = id.x;
-  if (i >= p.size.x * p.size.y) { return; }
+  let i = p.queryOffset + id.x;
+  if (id.x >= p.queryCount || i >= p.size.x * p.size.y) { return; }
   let position = (vec2f(f32(i % p.size.x), f32(i / p.size.x)) + 0.5) / vec2f(p.size) * p.span;
   let cell = vec2i(floor(position / p.span * vec2f(p.bins)));
   var start = cell - vec2i(p.radius);
@@ -98,8 +99,8 @@ fn reconstruct(@builtin(global_invocation_id) id: vec3u) {
 // A separate pass reuses compact cell ranges and the completed mean velocity.
 @compute @workgroup_size(128)
 fn differentiate(@builtin(global_invocation_id) id: vec3u) {
-  let i = id.x;
-  if (i >= p.size.x * p.size.y) { return; }
+  let i = p.queryOffset + id.x;
+  if (id.x >= p.queryCount || i >= p.size.x * p.size.y) { return; }
   if ((results[i].flags & 2u) == 0u) { results[i].flags &= ~1u; return; }
   let position = (vec2f(f32(i % p.size.x), f32(i / p.size.x)) + 0.5) / vec2f(p.size) * p.span;
   let cell = vec2i(floor(position / p.span * vec2f(p.bins)));

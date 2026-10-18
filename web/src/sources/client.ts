@@ -140,6 +140,11 @@ export class BrowserSource implements TrajectorySource {
       const abort = () => {
         const i = this.queue.indexOf(job);
         if (i >= 0) this.queue.splice(i, 1);
+        if (this.current === job)
+          this.worker.postMessage({
+            operation: "cancel",
+            args: { id: job.id },
+          });
         job.cleanup();
         reject(new DOMException("Cancelled", "AbortError"));
       };

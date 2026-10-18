@@ -1,3 +1,4 @@
+import { queryBatches } from "./batches";
 import licShader from "./lic.wgsl?raw";
 import { validateLIC, type LICSettings } from "../sources/lic";
 import { GPUScan } from "./scan";
@@ -119,8 +120,10 @@ export class GPUGrid {
     settings: GridSettings,
     index = 0,
     time = 0,
+    signal?: AbortSignal,
   ): Promise<GridData> {
     if (this.dead) throw new Error(this.dead);
+    signal?.throwIfAborted();
     const started = performance.now();
     const prepared = prepareParticles(raw, source, field, mapping, settings);
     const { layout: g, data, params, bins, excluded } = prepared;
@@ -165,7 +168,7 @@ export class GPUGrid {
       );
       const uniform = this.buffer(
         "parameters",
-        64,
+        params.byteLength,
         GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       );
       readback = this.buffer(
@@ -184,24 +187,8 @@ export class GPUGrid {
         uniform,
         cursors,
       ];
-      const encoder = this.device.createCommandEncoder({
-        label: "SPH spatial index + reconstruction + readback",
-      });
-      // Separate passes establish the required global ordering between index writes and traversal.
-      for (const [i, pipeline] of this.pipelines.entries()) {
-        if (i === 4 && (!settings.quantity || settings.quantity === "field"))
-          continue;
-        if (i === 2)
-          this.scan.encode(
-            encoder,
-            counts,
-            offsets,
-            bins[0] * bins[1],
-            this.buffer.bind(this),
-          );
-        const layout = pipeline.getBindGroupLayout(0);
-        // Auto layouts expose only statically used bindings for each entry point.
-        const bindings =
+      const bindings = this.pipelines.map((pipeline, i) => {
+        const used =
           i === 0
             ? [1, 5, 6]
             : i === 1
@@ -209,24 +196,71 @@ export class GPUGrid {
               : i === 2
                 ? [0, 2, 3, 5, 6]
                 : [1, 2, 3, 4, 5];
-        const bind = this.device.createBindGroup({
-          layout,
-          entries: bindings.map((binding) => ({
+        return this.device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: used.map((binding) => ({
             binding,
             resource: { buffer: buffers[binding] },
           })),
         });
-        const pass = encoder.beginComputePass({ label: pipeline.label });
-        pass.setPipeline(pipeline);
-        pass.setBindGroup(0, bind);
-        pass.dispatchWorkgroups(
-          Math.ceil((i === 0 ? bins[0] * bins[1] : i < 3 ? g.n : count) / 128),
-        );
+      });
+      const encodePass = (
+        encoder: GPUCommandEncoder,
+        i: number,
+        queries: number,
+      ) => {
+        const pass = encoder.beginComputePass({
+          label: this.pipelines[i].label,
+        });
+        pass.setPipeline(this.pipelines[i]);
+        pass.setBindGroup(0, bindings[i]);
+        pass.dispatchWorkgroups(Math.ceil(queries / 128));
         pass.end();
+      };
+      const indexEncoder = this.device.createCommandEncoder({
+        label: "SPH compact spatial index",
+      });
+      encodePass(indexEncoder, 0, bins[0] * bins[1]);
+      encodePass(indexEncoder, 1, g.n);
+      this.scan.encode(
+        indexEncoder,
+        counts,
+        offsets,
+        bins[0] * bins[1],
+        this.buffer.bind(this),
+      );
+      encodePass(indexEncoder, 2, g.n);
+      this.device.queue.submit([indexEncoder.finish()]);
+      // Each batch reads every candidate for its cells. Only query indices are split;
+      // reconstruction and derivatives for a cell remain mathematically unchanged.
+      for (const batch of queryBatches(
+        count,
+        prepared.candidatesPerQuery,
+        maxGroups,
+      )) {
+        signal?.throwIfAborted();
+        const batchParams = params.slice(0),
+          words = new Uint32Array(batchParams);
+        words[16] = batch.offset;
+        words[17] = batch.count;
+        this.device.queue.writeBuffer(uniform, 0, batchParams);
+        const encoder = this.device.createCommandEncoder({
+          label: "SPH query batch",
+        });
+        encodePass(encoder, 3, batch.count);
+        if (settings.quantity && settings.quantity !== "field")
+          encodePass(encoder, 4, batch.count);
+        this.device.queue.submit([encoder.finish()]);
+        await this.device.queue.onSubmittedWorkDone();
       }
-      encoder.copyBufferToBuffer(output, 0, readback, 0, resultBytes);
-      this.device.queue.submit([encoder.finish()]);
+      signal?.throwIfAborted();
+      const copyEncoder = this.device.createCommandEncoder({
+        label: "SPH grid readback",
+      });
+      copyEncoder.copyBufferToBuffer(output, 0, readback, 0, resultBytes);
+      this.device.queue.submit([copyEncoder.finish()]);
       await readback.mapAsync(GPUMapMode.READ, 0, resultBytes);
+      signal?.throwIfAborted();
       const bytes = readback.getMappedRange(0, resultBytes),
         f = new Float32Array(bytes),
         u = new Uint32Array(bytes);

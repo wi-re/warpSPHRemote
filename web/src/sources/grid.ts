@@ -133,7 +133,7 @@ export function gridLayout(
   return { n, components, component, lo, hi, periodic, domain, width, height };
 }
 /** Shepard-normalized SPH reconstruction. supports are compact cutoff radii. */
-export function reconstructGrid(
+function* reconstructionSteps(
   raw: RawFrame,
   source: Pick<Source, "domain">,
   field: string,
@@ -141,7 +141,7 @@ export function reconstructGrid(
   settings: GridSettings,
   index = 0,
   time = 0,
-): GridData {
+): Generator<void, GridData> {
   const { n, components, component, lo, hi, periodic, domain, width, height } =
     gridLayout(raw, source, field, mapping, settings);
   const {
@@ -213,10 +213,7 @@ export function reconstructGrid(
       density;
     for (let gy = y0; gy <= y1; gy++)
       for (let gx = x0; gx <= x1; gx++) {
-        if (++work > 40000000)
-          throw new Error(
-            "This grid exceeds the reconstruction work limit. Reduce grid resolution.",
-          );
+        if ((++work & 65535) === 0) yield;
         const ix = ((gx % width) + width) % width,
           iy = ((gy % height) + height) % height;
         const rx = spatialDifference(lo[0] + (ix + 0.5) * dx, x, 0, domain),
@@ -265,6 +262,7 @@ export function reconstructGrid(
     coverage = Float32Array.from(weights),
     velocityValid = new Uint8Array(count);
   for (let i = 0; i < count; i++) {
+    if (i > 0 && (i & 16383) === 0) yield;
     if (weights[i] < settings.minCoverage) continue;
     if (!derived && !bad[i]) {
       let value = 0;
@@ -319,6 +317,43 @@ export function reconstructGrid(
     velocityValid,
     excluded,
   };
+}
+/** Synchronous numerical reference; browser backends use the cooperative driver. */
+export function reconstructGrid(
+  ...args: Parameters<typeof reconstructionSteps>
+): GridData {
+  const steps = reconstructionSteps(...args);
+  let next = steps.next();
+  while (!next.done) next = steps.next();
+  return next.value;
+}
+/** Preserve accumulation order, but yield between chunks so large CPU grids stay
+ * cancellable on the worker and do not monopolize live-source UI execution. */
+export async function reconstructGridAsync(
+  raw: RawFrame,
+  source: Pick<Source, "domain">,
+  field: string,
+  mapping: Mapping,
+  settings: GridSettings,
+  index = 0,
+  time = 0,
+  signal?: AbortSignal,
+): Promise<GridData> {
+  const steps = reconstructionSteps(
+    raw,
+    source,
+    field,
+    mapping,
+    settings,
+    index,
+    time,
+  );
+  while (true) {
+    signal?.throwIfAborted();
+    const next = steps.next();
+    if (next.done) return next.value;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
 }
 export function sampleVelocity(
   grid: GridData,

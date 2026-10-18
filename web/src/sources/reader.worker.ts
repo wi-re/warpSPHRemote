@@ -46,8 +46,15 @@ async function read(index: number, field: string) {
   }
   return f;
 }
+const controllers = new Map<number, AbortController>();
 self.onmessage = async (event: MessageEvent) => {
   const { id, operation, args } = event.data;
+  if (operation === "cancel") {
+    controllers.get(args.id)?.abort();
+    return;
+  }
+  const abort = new AbortController();
+  controllers.set(id, abort);
   try {
     let result: unknown,
       transfer: Transferable[] = [];
@@ -254,6 +261,7 @@ self.onmessage = async (event: MessageEvent) => {
             q.settings,
             q.index,
             source.times[q.index],
+            abort.signal,
           );
           gridCache = { key, grid };
         }
@@ -304,6 +312,7 @@ self.onmessage = async (event: MessageEvent) => {
           args.settings,
           args.index,
           source.times[args.index],
+          abort.signal,
         );
         gridCache = { key, grid };
       }
@@ -343,5 +352,7 @@ self.onmessage = async (event: MessageEvent) => {
       id,
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    controllers.delete(id);
   }
 };

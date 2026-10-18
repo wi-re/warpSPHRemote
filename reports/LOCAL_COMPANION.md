@@ -257,6 +257,13 @@ HDF5 file; graceful stop/normal completion is the supported history handoff.
   contract. Only after successful renderer submission does it acknowledge that
   sequence. The daemon then asks for a new state. Capture generations reject
   stale uploads after detach/reconnect; stale/double acknowledgements are rejected.
+- At a frozen safe boundary, the publisher holds the next capture request after
+  successfully publishing that step/time/static revision. It does not repeatedly
+  copy and send identical paused states. A new lease clears static data and still
+  receives the paused state. Resuming produces a new state normally. The browser
+  also ignores duplicate safe-boundary captures from older publishers, so they
+  cannot trigger repeated grid reconstruction. Local quantity/settings changes
+  still recompute once on the held frame.
 - The producer has at most one pending capture. HTTP transfers run on its thread;
   CPU copies and validation occur at the requested safe simulation boundary.
   This still has a measurable synchronization/copy cost while visualized. It is

@@ -6,7 +6,8 @@ import {
 } from "../web/src/compute/particles";
 import { fixture } from "../web/src/compute/fixtures";
 import { GridBackend } from "../web/src/compute/backend";
-import { initialGrid } from "../web/src/sources/grid";
+import { queryBatches, CANDIDATES_PER_BATCH } from "../web/src/compute/batches";
+import { initialGrid, reconstructGridAsync } from "../web/src/sources/grid";
 const source = { domain: { min: [0, 0], max: [1, 1], periodic: [true, true] } };
 test("GPU snapshot uses local periodic coordinates, exact masks and full cutoff supports without changing source data", () => {
   const raw = fixture(),
@@ -35,7 +36,7 @@ test("GPU snapshot uses local periodic coordinates, exact masks and full cutoff 
   assert.deepEqual(raw.positions.data, before);
   assert.equal(raw.UIDs.data[0], 2n ** 60n + 1n);
 });
-test("packing rejects unsupported precision and pathological work rather than silently clipping neighbours", () => {
+test("packing rejects unsupported precision but retains dense work for batched queries", () => {
   const raw = fixture();
   raw.supports.data[1] = 1e-30;
   assert.throws(
@@ -44,14 +45,12 @@ test("packing rejects unsupported precision and pathological work rather than si
   );
   const crowded = fixture(2000);
   (crowded.supports.data as Float64Array).fill(2);
-  assert.throws(
-    () =>
-      prepareParticles(crowded, source, "test", "magnitude", {
-        ...initialGrid,
-        resolution: 512,
-      }),
-    /budget/,
-  );
+  const packed = prepareParticles(crowded, source, "test", "magnitude", {
+    ...initialGrid,
+    resolution: 512,
+  });
+  assert.ok(packed.candidates > 160_000_000);
+  assert.equal(packed.data.byteLength, 2000 * PARTICLE_STRIDE);
 });
 test("backend selects CPU explicitly, reports unavailable WebGPU honestly, and skips aborted queued work", async () => {
   const backend = new GridBackend(),
@@ -94,4 +93,60 @@ test("backend selects CPU explicitly, reports unavailable WebGPU honestly, and s
     { name: "AbortError" },
   );
   await backend.close();
+});
+
+test("GPU query batches cover all cells exactly once without imposing a total work cap", () => {
+  for (const candidates of [0, 100, 2000, CANDIDATES_PER_BATCH * 2]) {
+    const count = 1031,
+      batches = [...queryBatches(count, candidates, 2)];
+    let next = 0;
+    for (const batch of batches) {
+      assert.equal(batch.offset, next);
+      assert.ok(batch.count > 0 && Math.ceil(batch.count / 128) <= 2);
+      if (candidates <= CANDIDATES_PER_BATCH)
+        assert.ok(
+          batch.count * Math.max(1, candidates) <= CANDIDATES_PER_BATCH,
+        );
+      next += batch.count;
+    }
+    assert.equal(next, count);
+  }
+});
+
+test("large CPU reconstructions yield, can be cancelled, and keep the complete dataset", async () => {
+  const raw = fixture(701);
+  (raw.supports.data as Float64Array).fill(2);
+  (raw.test.data as Float64Array).fill(2.5);
+  const abort = new AbortController();
+  const pending = reconstructGridAsync(
+    raw,
+    source,
+    "test",
+    "magnitude",
+    initialGrid,
+    0,
+    0,
+    abort.signal,
+  );
+  setTimeout(() => abort.abort(), 0);
+  await assert.rejects(pending, { name: "AbortError" });
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 1);
+  try {
+    const result = await reconstructGridAsync(
+      raw,
+      source,
+      "test",
+      "magnitude",
+      initialGrid,
+    );
+    assert.ok(ticks > 0);
+    assert.ok(
+      [...result.values].every(
+        (v) => Number.isFinite(v) && Math.abs(v - 2.5) < 1e-5,
+      ),
+    );
+  } finally {
+    clearInterval(timer);
+  }
 });
