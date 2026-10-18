@@ -3828,3 +3828,16 @@ kbd {
   padding: 12px;
   color: var(--muted);
 }
+
+.connection-mode {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  margin: 16px 0;
+}
+.connection-mode select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+}

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   CompanionClient,
+  remoteConnection,
   companionConnectionMessage,
   companionUnavailableMessage,
   companionRequestTimeout,
@@ -202,7 +203,7 @@ export function CompanionPanel({
       }
     } catch (error) {
       if (connection.current === attempt && !attempt.signal.aborted) {
-        setError(companionConnectionMessage(error));
+        setError(companionConnectionMessage(error, address));
         if (
           error instanceof CompanionHTTPError &&
           error.status === 401 &&
@@ -979,17 +980,78 @@ export function CompanionPanel({
             )}
             {!client ? (
               <section className="companion-connect">
-                <h3>Connect to this device</h3>
-                <p>
-                  Start the companion in your warpSPH environment. Copy the
-                  pairing token printed in the terminal.
-                </p>
-                <pre>warpsph-companion --python /path/to/warp/bin/python</pre>
+                <label className="connection-mode">
+                  Connection
+                  <select
+                    aria-label="Connection type"
+                    value={remoteConnection(endpoint) ? "remote" : "local"}
+                    disabled={busy || !!offlineMessage}
+                    onChange={(event) => {
+                      setToken("");
+                      setEndpoint(
+                        event.target.value === "remote"
+                          ? "https://"
+                          : "http://127.0.0.1:8766",
+                      );
+                    }}
+                  >
+                    <option value="local">This device / SSH tunnel</option>
+                    <option value="remote">Remote host · HTTPS</option>
+                  </select>
+                </label>
+                <h3>
+                  {remoteConnection(endpoint)
+                    ? "Connect to a remote host"
+                    : "Connect to this device"}
+                </h3>
+                {remoteConnection(endpoint) ? (
+                  <>
+                    <p>
+                      Start HTTPS remote mode explicitly on the simulation host.
+                      Use its IP or DNS name and the remote pairing token
+                      printed there.
+                    </p>
+                    <pre>
+                      warpsph-companion --remote-host 192.168.1.20 --tls-cert
+                      /path/to/cert.pem --tls-key /path/to/key.pem
+                    </pre>
+                    <small>
+                      The certificate must be trusted by this browser and match
+                      the address. Remote tokens change when the daemon
+                      restarts. A VPN supplies connectivity; HTTPS protects the
+                      connection.
+                    </small>
+                    <p>
+                      <a
+                        href="https://github.com/wi-re/warpSPHRemote/blob/main/reports/REMOTE_CONNECTIONS.md"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Remote setup and certificate instructions
+                      </a>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p>
+                      Start the companion in your warpSPH environment. Copy the
+                      local pairing token printed in the terminal.
+                    </p>
+                    <pre>
+                      warpsph-companion --python /path/to/warp/bin/python
+                    </pre>
+                  </>
+                )}
                 <div className="companion-form">
                   <label>
                     Address
                     <input
                       value={endpoint}
+                      placeholder={
+                        remoteConnection(endpoint)
+                          ? "https://192.168.1.20:8767"
+                          : "http://127.0.0.1:8766"
+                      }
                       onChange={(e) => {
                         const address = e.target.value;
                         if (
@@ -1006,7 +1068,9 @@ export function CompanionPanel({
                     />
                   </label>
                   <label>
-                    Pairing token
+                    {remoteConnection(endpoint)
+                      ? "Remote pairing token"
+                      : "Pairing token"}
                     <input
                       type="password"
                       disabled={!!offlineMessage || busy}
@@ -1068,6 +1132,19 @@ export function CompanionPanel({
                   </p>
                 )}
                 <details>
+                  <summary>Connect through SSH instead</summary>
+                  <p>
+                    On this device, forward the simulation host's loopback
+                    daemon:
+                  </p>
+                  <pre>ssh -N -L 8766:127.0.0.1:8766 user@simulation-host</pre>
+                  <p>
+                    Choose This device / SSH tunnel and connect to
+                    http://127.0.0.1:8766 using the host's local pairing token.
+                    No remote listener or certificate is needed.
+                  </p>
+                </details>
+                <details>
                   <summary>Open through the desktop launcher</summary>
                   <p>Install once in your simulation environment:</p>
                   <pre>warpsph-remote-open --install-xdg</pre>
@@ -1082,8 +1159,10 @@ export function CompanionPanel({
                 <small>
                   Remembered pairing stays in this browser's site storage.
                   Updated companions keep the token across restarts. Use
-                  warpsph-companion --show-token to retrieve it. The companion
-                  listens only on localhost.
+                  warpsph-companion --show-token to retrieve the persistent
+                  local token, or --show-remote-token for an active HTTPS
+                  listener. Remote listening always requires explicit CLI
+                  startup.
                 </small>
               </section>
             ) : (
@@ -1092,7 +1171,10 @@ export function CompanionPanel({
                   <>
                     <div className="companion-connection">
                       <span className="tiny-dot" /> Connected ·{" "}
-                      {client.endpoint}
+                      {client.endpoint} ·{" "}
+                      {remoteConnection(client.endpoint)
+                        ? "HTTPS remote connection"
+                        : "Local / SSH connection"}
                       <button
                         onClick={async () => {
                           connectedClient.current = null;

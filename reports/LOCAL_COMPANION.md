@@ -65,11 +65,12 @@ directories do not automatically share pairing between systems. File locking and
 atomic writes serialize first creation and rotation. Unsafe permissions,
 symlinks, hard links, malformed credentials and oversized token files are rejected.
 Runtime descriptor cleanup and reboot do not delete the persistent credential.
-Incidental launches never print it to simulation logs. The daemon remains bound
-to localhost; persistence does not enable external listening.
+Incidental launches never print it to simulation logs. The default daemon remains
+bound to localhost; persistence does not enable the explicit remote TLS listener.
 
-The browser and companion must be on the same machine, or use an explicit SSH
-loopback forwarding arrangement. `localhost` means the browser's device. The
+For default loopback mode, the browser and companion must be on the same
+machine or use explicit SSH forwarding. Direct remote HTTPS is described in
+[Remote connections](REMOTE_CONNECTIONS.md). `localhost` means the browser's device. The
 hosted site's JavaScript initiates the connection; GitHub Pages never receives
 simulation data or pairing headers. Browsers may require local-network access
 permission and have different HTTPS-to-loopback policies. The client supplies
@@ -237,7 +238,8 @@ HDF5 file; graceful stop/normal completion is the supported history handoff.
 ## Snapshot ownership and backpressure
 
 - A file lock makes daemon startup singleton per user/runtime directory, including
-  concurrent simulation-triggered starts. The daemon binds **only 127.0.0.1**.
+  concurrent simulation-triggered starts. Its default/local listener binds **only 127.0.0.1**.
+  An explicit CLI-only TLS viewer listener is available; see [remote setup](REMOTE_CONNECTIONS.md).
   Incidental launches cannot enable external listening and do not print a token
   into incidental logs. An explicit CLI invocation can retrieve the token.
 - A persistent random browser bearer token controls manager/viewer endpoints. A separate
@@ -349,12 +351,10 @@ this source checkout. See the final evidence record for measured checks.
 
 ## Deferred extension
 
-Remote listening remains deliberately unimplemented. The browser address field
-can represent a future companion endpoint, but the daemon exposes no `--host`
-flag, rejects non-loopback Host headers and cannot be made externally reachable
-by a simulation or website request. A future explicit remote mode must add TLS,
-CLI-only opt-in, separately scoped/revocable pairing, origin configuration and
-appropriate process exposure policy. A token alone does not encrypt traffic.
+Direct authenticated HTTPS remote listening is now implemented as an explicit
+CLI option, with a separate remote token and loopback-only producer access. See
+[Remote connections](REMOTE_CONNECTIONS.md) for IP/DNS certificate setup,
+VPN/firewall requirements, SSH fallback and verification limits.
 Windows/macOS daemon installers,
 automatic recording of live snapshots, arbitrary case editing and launching
 multiple managed GPU workers are outside this pass.

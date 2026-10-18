@@ -110,6 +110,36 @@ export interface Snapshot {
   sequence: number;
 }
 
+export function companionAddressSpace(
+  endpoint: string,
+): "loopback" | "local" | undefined {
+  const host = new URL(endpoint).hostname.toLowerCase();
+  if (["127.0.0.1", "localhost", "[::1]"].includes(host)) return "loopback";
+  const parts = host.split(".").map(Number);
+  if (
+    parts.length === 4 &&
+    parts.every((v) => Number.isInteger(v) && v >= 0 && v <= 255) &&
+    (parts[0] === 10 ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      (parts[0] === 169 && parts[1] === 254))
+  )
+    return "local";
+  if (/^\[(?:f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(host)) return "local";
+  // DNS may resolve to public, VPN or private space. Let the browser classify it.
+  return undefined;
+}
+export function remoteConnection(endpoint: string) {
+  try {
+    return (
+      new URL(endpoint).protocol === "https:" ||
+      companionAddressSpace(endpoint) !== "loopback"
+    );
+  } catch {
+    return endpoint.startsWith("https:");
+  }
+}
+
 export function companionEndpoint(input: string): string {
   let url: URL;
   try {
@@ -129,6 +159,13 @@ export function companionEndpoint(input: string): string {
   )
     throw new Error(
       "Enter an HTTP(S) address and port, without a path or credentials.",
+    );
+  if (
+    url.protocol === "http:" &&
+    companionAddressSpace(url.origin) !== "loopback"
+  )
+    throw new Error(
+      "Remote connections require HTTPS. Use https://HOST:8767 with a trusted certificate, or an SSH tunnel to http://127.0.0.1:8766.",
     );
   return url.origin;
 }
@@ -169,7 +206,10 @@ export function viewerConnectionConflict(
       error.message === "A viewer already owns the live connection.")
   );
 }
-export function companionConnectionMessage(error: unknown): string {
+export function companionConnectionMessage(
+  error: unknown,
+  endpoint?: string,
+): string {
   if (error instanceof CompanionHTTPError) {
     if (error.status === 401)
       return "The companion rejected the pairing token. Copy the current token from its terminal and try again.";
@@ -178,6 +218,12 @@ export function companionConnectionMessage(error: unknown): string {
   if (error instanceof Error) {
     if (error.name === "TimeoutError")
       return "Connection timed out while waiting for the companion or browser permission. If you just clicked Allow, press Connect again. Check that the companion or SSH tunnel is running.";
+    if (
+      (error.name === "TypeError" || error.name === "NetworkError") &&
+      endpoint &&
+      remoteConnection(endpoint)
+    )
+      return "Could not reach the HTTPS companion. Check the VPN/network route, firewall and port, certificate trust and hostname, and the allowed viewer origin. Browsers may also require local-network permission.";
     if (error.name === "TypeError" || error.name === "NetworkError")
       return "The browser could not reach the companion. Check the address and SSH tunnel, then the browser Web Console for blocked local-network, mixed-content or CORS requests.";
     return error.message;
@@ -217,11 +263,13 @@ export class CompanionClient {
     timeoutMs = companionRequestTimeout,
     keepalive = false,
   ) {
+    const deadline = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
     const init: RequestInit & { targetAddressSpace?: string } = {
       method: data ? "POST" : "GET",
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
-        : AbortSignal.timeout(timeoutMs),
+      signal:
+        signal && deadline
+          ? AbortSignal.any([signal, deadline])
+          : (signal ?? deadline),
       cache: "no-store",
       keepalive,
       headers: {
@@ -230,11 +278,9 @@ export class CompanionClient {
         ...(data ? { "Content-Type": "application/json" } : {}),
       },
       ...(data ? { body: JSON.stringify(data) } : {}),
-      targetAddressSpace: ["localhost", "127.0.0.1", "[::1]"].includes(
-        new URL(this.endpoint).hostname,
-      )
-        ? "loopback"
-        : "local",
+      ...(companionAddressSpace(this.endpoint)
+        ? { targetAddressSpace: companionAddressSpace(this.endpoint) }
+        : {}),
     };
     const response = await fetch(this.endpoint + path, init);
     if (!response.ok) {
@@ -340,6 +386,7 @@ export class CompanionClient {
         `/v1/runs/${id}/history/frame?index=${index}&field=${encodeURIComponent(field)}`,
         undefined,
         signal,
+        0,
       );
       return decodeFrame(await r.arrayBuffer());
     });
@@ -364,7 +411,12 @@ export class CompanionClient {
   }
   async snapshot(id: string, signal?: AbortSignal): Promise<Snapshot | null> {
     const started = performance.now();
-    const r = await this.request(`/v1/runs/${id}/snapshot`, undefined, signal);
+    const r = await this.request(
+      `/v1/runs/${id}/snapshot`,
+      undefined,
+      signal,
+      0,
+    );
     if (r.status === 204) return null;
     const revision = r.headers.get("X-Static-Revision"),
       sequence = Number(r.headers.get("X-Snapshot-Sequence"));
@@ -383,7 +435,12 @@ export class CompanionClient {
     const dynamic = decodeFrame(dynamicBuffer);
     if (this.statics?.revision !== revision) {
       const staticStarted = performance.now();
-      const s = await this.request(`/v1/runs/${id}/static`, undefined, signal);
+      const s = await this.request(
+        `/v1/runs/${id}/static`,
+        undefined,
+        signal,
+        0,
+      );
       if (s.status === 204)
         throw new Error(
           "The simulation has not provided its static particle data.",

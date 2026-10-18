@@ -483,3 +483,102 @@ test("takeover is an explicit attachment request and ownership conflicts stay di
     globalThis.fetch = original;
   }
 });
+
+test("remote endpoints require HTTPS and retain browser address-space classification", async () => {
+  const { companionAddressSpace, remoteConnection } =
+    await import("../web/src/companion");
+  assert.throws(
+    () => companionEndpoint("http://192.168.1.20:8767"),
+    /require HTTPS/,
+  );
+  assert.throws(
+    () => companionEndpoint("http://simulation.example:8767"),
+    /require HTTPS/,
+  );
+  assert.equal(
+    companionEndpoint("https://192.168.1.20:8767/"),
+    "https://192.168.1.20:8767",
+  );
+  assert.equal(companionEndpoint("http://[::1]:8766"), "http://[::1]:8766");
+  assert.equal(companionAddressSpace("https://192.168.1.20:8767"), "local");
+  assert.equal(companionAddressSpace("https://[fd00::2]:8767"), "local");
+  assert.equal(companionAddressSpace("https://203.0.113.20:8767"), undefined);
+  assert.equal(
+    companionAddressSpace("https://simulation.example:8767"),
+    undefined,
+  );
+  assert.equal(remoteConnection("http://127.0.0.1:8766"), false);
+  assert.equal(remoteConnection("https://simulation.example:8767"), true);
+  const old = globalThis.fetch;
+  const inits: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    inits.push(init);
+    return new Response("{}");
+  };
+  try {
+    await new CompanionClient(
+      "https://simulation.example:8767",
+      "remote-secret",
+    ).request("/v1/session");
+    await new CompanionClient(
+      "https://192.168.1.20:8767",
+      "remote-secret",
+    ).request("/v1/session");
+    assert.equal("targetAddressSpace" in inits[0], false);
+    assert.equal(inits[1].targetAddressSpace, "local");
+    assert.equal(inits[0].headers.Authorization, "Bearer remote-secret");
+    assert.match(
+      companionConnectionMessage(
+        new TypeError("fetch"),
+        "https://simulation.example:8767",
+      ),
+      /certificate trust/,
+    );
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("slow frame download stays cancellable and does not hold control requests", async () => {
+  const old = globalThis.fetch;
+  const abort = new AbortController();
+  let frameSignal: AbortSignal | null | undefined;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/snapshot")) {
+      frameSignal = init?.signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          frameSignal?.addEventListener(
+            "abort",
+            () =>
+              controller.error(
+                new DOMException("Download cancelled", "AbortError"),
+              ),
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, {
+        headers: {
+          "X-Static-Revision": "one",
+          "X-Snapshot-Sequence": "1",
+          "X-Snapshot-Metadata": JSON.stringify({ dimension: 2, fields: [] }),
+        },
+      });
+    }
+    return new Response(JSON.stringify({ runs: [] }));
+  };
+  try {
+    const client = new CompanionClient(
+      "https://simulation.example:8767",
+      "remote-token",
+    );
+    const frame = client.snapshot("run", abort.signal);
+    assert.deepEqual(await client.runs(), []);
+    assert.equal(frameSignal, abort.signal); // No total-duration deadline on a particle frame.
+    abort.abort();
+    await assert.rejects(frame, /cancelled/);
+  } finally {
+    globalThis.fetch = old;
+  }
+});

@@ -1,4 +1,4 @@
-"""Authenticated singleton companion. Always binds IPv4 loopback in this release."""
+"""Authenticated companion: loopback by default, explicit HTTPS remote viewer mode."""
 
 from __future__ import annotations
 import argparse
@@ -26,6 +26,7 @@ from .catalogue import armed_video, CATALOGUE, validate_launch
 from .configuration import query_solver
 from .protocol import DEFAULT_SNAPSHOT_BYTES, validate_packet
 from .pairing_token import persistent_token
+from .networking import RemoteOptions, TLSViewerServer, hostname, authority
 
 DEFAULT_ORIGINS = {
     "https://fluids.dev",
@@ -619,8 +620,10 @@ class Manager:
 class Handler(BaseHTTPRequestHandler):
     server_version = "warpSPHCompanion/1"
 
-    def __init__(self, *args, manager, **kwargs):
+    def __init__(self, *args, manager, remote=False, allowed_hosts=(), **kwargs):
         self.manager = manager
+        self.remote = remote
+        self.allowed_hosts = set(allowed_hosts) if remote else {"127.0.0.1","localhost","::1"}
         super().__init__(*args, **kwargs)
 
     def log_message(self, *args):
@@ -630,21 +633,25 @@ class Handler(BaseHTTPRequestHandler):
         try:
             h = urlsplit("http://" + self.headers.get("Host", ""))
             valid = (
-                h.hostname in ("127.0.0.1", "localhost")
-                and h.port == self.server.server_port
-                and not h.username
-                and not h.password
+                len(self.headers.get_all('Host',[]))==1
+                and hostname(h.hostname or '') in self.allowed_hosts
+                and (h.port or (443 if self.remote else 80)) == self.server.server_port
+                and not h.username and not h.password
+                and not h.path and not h.query and not h.fragment
             )
         except ValueError:
             valid = False
         if not valid:
-            self.send_json({"error": "Invalid loopback host."}, 403)
+            self.send_json({"error": "Invalid companion host."}, 403)
+            return False
+        if self.remote and producer:
+            self.send_json({'error':'Producer endpoints are available only on the loopback listener.'},403)
             return False
         origin = self.headers.get("Origin")
         if origin and origin not in self.manager.origins:
             self.send_json({"error": "Viewer origin is not allowed."}, 403)
             return False
-        token = self.manager.producer_token if producer else self.manager.token
+        token = self.manager.remote_token if self.remote else (self.manager.producer_token if producer else self.manager.token)
         if not preflight and not hmac.compare_digest(
             self.headers.get("Authorization", "").encode("utf-8"),
             ("Bearer " + token).encode("ascii"),
@@ -671,8 +678,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
         try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+            # Each write has a stall deadline on TLS sockets, rather than a
+            # total-frame deadline that penalizes a steadily progressing link.
+            view=memoryview(body)
+            for start in range(0,len(view),64*1024):
+                self.wfile.write(view[start:start+64*1024])
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 
     def send_json(self, data, status=200):
@@ -691,7 +702,7 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def do_OPTIONS(self):
-        if self.gate(preflight=True):
+        if self.gate(producer=urlsplit(self.path).path.startswith("/producer/"),preflight=True):
             self.send(
                 status=204,
                 headers={
@@ -713,7 +724,8 @@ class Handler(BaseHTTPRequestHandler):
                         "version": 1,
                         "revision": self.manager.revision,
                         "presets": self.manager.available_cases(refresh=parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]),
-                        "loopbackOnly": True,
+                        "loopbackOnly": not self.remote,
+                        "transport": "https" if self.remote else "http",
                         "maxSnapshotBytes": self.manager.max_snapshot_bytes,
                         "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart"],
                     }
@@ -866,7 +878,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready=None,
-          max_snapshot_bytes=DEFAULT_SNAPSHOT_BYTES):
+          max_snapshot_bytes=DEFAULT_SNAPSHOT_BYTES, remote=None):
+    if incidental and remote is not None:
+        raise ValueError('Incidental startup cannot enable remote listening.')
+    if remote is not None:
+        remote=remote.validated()
+        tls_context=remote.context()  # Reject unusable TLS before binding any listener.
     root = runtime_dir(root)
     lock = os.open(root / "daemon.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
@@ -877,13 +894,17 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
     except OSError:
         os.close(lock)
         raise
-    manager = server = None
+    manager = server = remote_server = None
+    remote_thread = None
     previous = {}
     try:
         manager = Manager(root, python, origins, max_snapshot_bytes)
         server = ThreadingHTTPServer(
             ("127.0.0.1", port), partial(Handler, manager=manager)
         )
+        if remote is not None:
+            manager.remote_token=secrets.token_urlsafe(32)
+            remote_server=TLSViewerServer((remote.host,remote.port),partial(Handler,manager=manager,remote=True,allowed_hosts=remote.names),tls_context)
         manager.token = persistent_token()
         server.daemon_threads = True
         info = dict(
@@ -894,11 +915,16 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
             producerToken=manager.producer_token,
             maxSnapshotBytes=manager.max_snapshot_bytes,
         )
+        if remote_server:
+            info['remote']=dict(endpoint='https://'+authority(remote.names[0],remote_server.server_port),token=manager.remote_token)
         temp = root / f".descriptor-{os.getpid()}"
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as output:
             json.dump(info, output)
         temp.replace(root / "daemon.json")
+        if remote_server:
+            remote_thread=threading.Thread(target=remote_server.serve_forever,kwargs={'poll_interval':.2},daemon=True)
+            remote_thread.start()
         if ready:
             ready(info)
         if not incidental:
@@ -906,6 +932,8 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
                 f"warpSPH companion: {info['endpoint']}\nPairing token: {manager.token}",
                 flush=True,
             )
+            if remote_server:
+                print(f"Remote viewer: {info['remote']['endpoint']}\nRemote pairing token: {manager.remote_token}\nRemote token lasts until daemon restart; producer access remains loopback-only.",flush=True)
 
         def stop(*_):
             threading.Thread(target=server.shutdown, daemon=True).start()
@@ -918,6 +946,11 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
     finally:
         if manager:
             manager.shutdown(stop_runs=False)
+        if remote_server:
+            if remote_thread:
+                remote_server.shutdown()
+                remote_thread.join(timeout=3)
+            remote_server.server_close()
         if server:
             server.server_close()
         try:
@@ -997,6 +1030,18 @@ def pairing_command(root=None, *, rotate=False):
         os.close(lock)
 
 
+def remote_pairing_command(root=None):
+    root=runtime_dir(root)
+    lock=os.open(root/'daemon.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    try:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:return descriptor(root)['remote']['token']
+            except (OSError,ValueError,KeyError):pass
+        raise ValueError('No active HTTPS remote listener at this runtime.')
+    finally:os.close(lock)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--runtime", type=Path)
@@ -1005,22 +1050,50 @@ def main():
     p.add_argument("--origin", action="append", default=[])
     p.add_argument("--max-snapshot-mib", type=int, default=128,
                    help="Memory budget per buffered live snapshot in MiB (default: 128; 1–4095).")
+    p.add_argument('--remote-host',help='Explicit HTTPS viewer bind IP, e.g. 192.168.1.20 or 0.0.0.0. Never enabled by simulations.')
+    p.add_argument('--remote-port',type=int,default=8767,help='HTTPS viewer port (default: 8767); loopback uses --port.')
+    p.add_argument('--remote-name',action='append',default=[],help='Allowed IP/DNS Host name matching the certificate. Required for wildcard binds; repeat for aliases.')
+    p.add_argument('--tls-cert',type=Path,help='PEM certificate chain for explicit remote mode.')
+    p.add_argument('--tls-key',type=Path,help='PEM private key for explicit remote mode.')
+
     p.add_argument("--incidental", action="store_true", help=argparse.SUPPRESS)
     credential = p.add_mutually_exclusive_group()
+    credential.add_argument('--show-remote-token', action='store_true', help='Print the active remote listener token without starting a daemon.')
     credential.add_argument('--show-token', action='store_true', help='Print the current pairing token without starting a daemon.')
     credential.add_argument('--rotate-token', action='store_true', help='Replace the persistent pairing token while this daemon is stopped.')
     a = p.parse_args()
     if not 1 <= a.max_snapshot_mib <= 4095:
         p.error("--max-snapshot-mib must be 1–4095 (WPR1 envelope limit: below 4 GiB).")
+    remote=None
+    remote_flags=a.remote_host is not None or a.tls_cert is not None or a.tls_key is not None or bool(a.remote_name) or a.remote_port!=8767
+    if remote_flags:
+        if a.incidental:
+            p.error('Incidental startup cannot enable remote listening.')
+        if not a.remote_host or not a.tls_cert or not a.tls_key:
+            p.error('Remote mode requires --remote-host, --tls-cert and --tls-key together.')
+        if not 1<=a.remote_port<=65535:
+            p.error('--remote-port must be 1–65535.')
+        try:remote=RemoteOptions(a.remote_host,a.remote_port,a.tls_cert,a.tls_key,tuple(a.remote_name)).validated()
+        except ValueError as error:p.error(str(error))
+    if a.show_remote_token:
+        if a.incidental:p.error('Incidental startup cannot print a remote pairing token.')
+        try:print(remote_pairing_command(a.runtime))
+        except (OSError,ValueError,KeyError):p.error('No active HTTPS remote listener at this runtime.')
+        return
     if a.show_token or a.rotate_token:
         try:
             print(pairing_command(a.runtime, rotate=a.rotate_token))
         except (OSError, ValueError, KeyError) as error:
             p.error(str(error))
         return
-    if not serve(a.runtime, a.port, a.python, a.origin, a.incidental,
-                 max_snapshot_bytes=a.max_snapshot_mib * 1024 * 1024):
+    try:
+        started=serve(a.runtime,a.port,a.python,a.origin,a.incidental,
+            max_snapshot_bytes=a.max_snapshot_mib*1024*1024,remote=remote)
+    except (OSError,ValueError) as error:p.error(str(error))
+    if not started:
         info = descriptor(a.runtime)
+        if remote is not None:
+            p.error('A daemon is already running. Stop/restart it explicitly to change remote listener settings; it was not modified.')
         if not a.incidental:
             persistent_token(initial=info["token"])
             print(
