@@ -98,3 +98,39 @@ def test_stream_pause_cancels_new_captures_not_simulation_and_survives_heartbeat
     assert not m.runs[key]['streamPaused']
     for bad in (dict(paused=1),dict(interval=-1),dict(interval=float('nan'))):
         with pytest.raises(ValueError):m.streaming(key,viewer,bad)
+
+
+@pytest.mark.parametrize('permanent', [True, False])
+def test_configuration_upload_failure_does_not_starve_frames_or_busy_retry(api, monkeypatch, permanent):
+    from urllib.error import HTTPError
+    m,call,endpoint=api
+    p=publisher_for(m,endpoint)
+    original=p._request
+    attempts=[]
+    def reject_configuration(path,data,headers=None):
+        if path.endswith('/configuration'):
+            attempts.append(time.monotonic())
+            if permanent: raise HTTPError(endpoint+path,400,'Request body exceeds its limit',{},None)
+            raise OSError('Temporary configuration transport failure')
+        return original(path,data,headers)
+    monkeypatch.setattr(p,'_request',reject_configuration)
+    try:
+        m.attach(p.id,'viewer-aaaaaaaaaaaa')
+        with p.lock:
+            p.configuration_pending={'oversized':'fixture'}
+        p.transfer_event.set()
+        wait_for(lambda:len(attempts)==1)
+        wait_for(lambda:p.wants_snapshot)
+        assert p.snapshot(arrays(),step=0,time_value=0)
+        wait_for(lambda:m.runs[p.id]['sequence']==1)
+        wait_for(lambda:'Configuration inspection unavailable' in m.runs[p.id].get('message',''))
+        time.sleep(.2)
+        assert len(attempts)==1
+        assert p.transfer_thread.is_alive()
+        if permanent: assert p.configuration_pending is None
+        else:
+            assert p.configuration_pending is not None
+            monkeypatch.setattr(p,'_request',original)
+            wait_for(lambda:m.runs[p.id].get('configuration'))
+            wait_for(lambda:not m.runs[p.id].get('message'))
+    finally:p.close('stopped')

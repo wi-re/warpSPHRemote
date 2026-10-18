@@ -60,6 +60,7 @@ class SimulationPublisher:
         self._copy_busy = self._transfer_busy = False
         self._capture_stats = {}
         self.configuration = self.configuration_pending = None
+        self._configuration_retry_at = 0.0
         self.video = None
         self.capture_interval = 0.5
         self._next_capture_at = 0.0
@@ -263,14 +264,16 @@ class SimulationPublisher:
             with self.lock:
                 capture, self._queued_capture = self._queued_capture, None
                 history, self.history_pending = self.history_pending, None
-                configuration, self.configuration_pending = self.configuration_pending, None
+                configuration = None
+                if time.monotonic() >= self._configuration_retry_at:
+                    configuration, self.configuration_pending = self.configuration_pending, None
                 if capture is None and history is None and configuration is None:
                     if self.closed.is_set(): return
                     continue
                 self._transfer_busy = True
             try:
                 if configuration:
-                    self._request(f"/producer/{self.id}/configuration", configuration)
+                    self._publish_configuration(configuration)
                 if history:
                     try:
                         self._request(f'/producer/{self.id}/history', history[0], history[1])
@@ -299,14 +302,33 @@ class SimulationPublisher:
             except OSError as error:
                 self.last_error = str(error)
                 with self.lock:
-                    if configuration and not self.closed.is_set():
-                        self.configuration_pending = configuration
                     self.captured = 0
                     self._capture_retry_at = time.monotonic() + max(0.5, self.interval)
             finally:
                 with self.lock:
                     self.pending = None
                     self._transfer_busy = False
+
+    def _publish_configuration(self, configuration):
+        """A failed optional configuration upload must never discard a frame."""
+        prefix = 'Configuration inspection unavailable: '
+        try:
+            self._request(f"/producer/{self.id}/configuration", configuration)
+        except (OSError, ValueError, TypeError) as error:
+            retry = isinstance(error, OSError) and not (
+                isinstance(error, HTTPError) and 400 <= error.code < 500)
+            with self.lock:
+                if retry and not self.closed.is_set():
+                    self.configuration_pending = configuration
+                    self._configuration_retry_at = time.monotonic() + max(2.0, self.interval)
+                if not self.meta.get('message') or self.meta['message'].startswith(prefix):
+                    self.meta['message'] = (prefix + str(error) + '. Live viewing remains available.')[:500]
+            if isinstance(error, HTTPError):
+                error.close()
+        else:
+            with self.lock:
+                if self.meta.get('message', '').startswith(prefix):
+                    self.meta['message'] = ''
 
     def recording(self, ctx):
         """Advertise existing exports, never enable storage implicitly."""
@@ -371,11 +393,10 @@ class SimulationPublisher:
             try:
                 if not hasattr(ctx, "case") or not hasattr(ctx.spec, "toDict"):
                     raise AttributeError("No resolved case configuration")
-                from warpSPH.configurations import configurationToDict
-                configuration = dict(schemaVersion=1, case=ctx.case.name,
-                    requested=getattr(ctx.spec,'configuration',None), spec=ctx.spec.toDict(),
-                    simulationConfig=configurationToDict(ctx.config), solverConfig=ctx.exportFunction(ctx.schemeConfig))
-                configuration = json.loads(json.dumps(configuration,allow_nan=False))
+                from .inspection import inspect_configuration
+                configuration = inspect_configuration(dict(schemaVersion=1, case=ctx.case.name,
+                    requested=getattr(ctx.spec,'configuration',None), spec=ctx.spec,
+                    simulationConfig=ctx.config, solverConfig=ctx.schemeConfig))
             except (ImportError,AttributeError,TypeError,ValueError):
                 configuration = dict(case=self.name, solver=dict(scheme=str(ctx.scheme)),
                     simulation=dict(dt=float(ctx.config.dt)), note='Full resolved configuration was not supplied by this adapter.')
