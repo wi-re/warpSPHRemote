@@ -280,10 +280,12 @@ and use `warpsph-companion --rotate-token` when you deliberately want a new toke
 
 ## Useful next work
 
-The next focus is repeatable analysis and practical case validation: portable
-setup/analysis recipes, case-supplied profile/reference plots, a durable finished
-run/recording library, and lightweight diagnostic logging without full particle
-recording. Comparison views and complete still/data exports follow. General 1D
-and reconstructed 3D views, shared GPU rendering and validated LCS methods are
+The first priority is native **1D viewing and live/history support**, including
+moving/compressing physical domains such as Kidder. Next are a durable finished-run
+library and lightweight persistent physical **and performance/resource** histories:
+step timing, RAM/VRAM, GPU utilization, power and temperature should remain useful
+after a run finishes, even without particle recording. Portable analysis/launch
+recipes, case-specific reference plots and comparison/export tools follow.
+Reconstructed 3D views, shared GPU rendering and validated LCS methods remain
 separate gaps; direct remote HTTPS work is parked in favour of SSH forwarding.
 See [scope, acceptance criteria and implementation order](reports/ROADMAP.md).

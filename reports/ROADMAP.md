@@ -1,6 +1,8 @@
 # Current status and useful next work
 
 Consolidated 2026-10-18 against `c0241c6` and the current implementation/tests.
+Priorities updated after user feedback: native 1D first, then durable runs and
+persistent physical/performance diagnostics.
 This is the current feature inventory and prioritization. Other reports preserve
 numerical contracts, measurements and historical verification; their original
 milestone dates and test counts are not current completion claims.
@@ -58,7 +60,9 @@ These are missing pieces within existing workflows, rather than new product scop
    the last 600 displayed snapshots and miss skipped solver steps. Probes reset
    on source changes; their definitions/results have no dedicated portable export.
    Full recording scans work, but are an expensive substitute for solver-cadence
-   pressure/energy logging when particle trajectories are intentionally disabled.
+   pressure/energy and performance/resource logging when particle trajectories are
+   intentionally disabled. The current RAM/GPU/step-time monitor is live telemetry,
+   not a durable post-run time series.
 5. **Comparison and publication output.** Sources can be switched, but cannot be
    shown side by side with shared camera/time/color limits or overlaid reference
    runs. PNG currently exports the scene canvas only. Video already has a richer
@@ -83,7 +87,110 @@ These are missing pieces within existing workflows, rather than new product scop
 This is an ordered proposal, not a claim these features have been started.
 Each item should ship independently, with a useful small first increment.
 
-### 1. Portable setup and analysis recipes
+### 1. Native 1D viewing and live integration — current highest priority
+
+Build a profile-first view for genuine `N×1` recordings and live snapshots, with
+quantity versus physical position as the main viewport. Density, signed velocity,
+pressure and specific internal energy are useful standard panels. Preserve exact
+UID selection and timeline seeking, and distinguish scatter samples from an
+optional sorted line: connecting across a shock or disjoint material regions
+must not imply a smooth reconstructed field. Do not turn 1D into a thin fake 2D
+strip or substitute speed magnitude for signed velocity.
+
+The dimension contract must reach browser HDF5/NPZ readers, Python sources, WPR1
+decoding, live captures/status, domain validation and daemon case availability.
+Keep 2D grid/LIC/FTLE operations explicitly 2D. First ship recorded 1D profiles;
+then exercise the same source contract through native case launch/live/history,
+including initial preview, pause, export and final-state handoff.
+
+**Moving/compressing cases are part of this milestone**, not a later polish pass:
+
+- Separate computational domain/periodicity, physical shell or wall boundaries,
+  and observed particle extent. A static config domain is not necessarily the
+  occupied physical domain; initial particle bounds are not current wall positions.
+- Carry time-dependent physical boundaries as numeric frame metadata, or resolve
+  case-reference samples on the trusted producer/postprocessor side. Preserve
+  unwrapped particle positions. Never infer physical walls from extrema or wrap
+  a compressing shell using an unrelated initial interval.
+- Offer fixed spatial axes and explicit follow-current-extent axes, plus optional
+  case-declared normalized/material coordinates. Label any transformation and
+  retain original physical coordinates/units. Reference curves and boundary
+  markers must use the same actual frame time and resolved case parameters.
+- Treat driven boundary bands separately when a case supplies that classification;
+  do not assume all analytically driven samples already have nonfluid `kinds`.
+  Keep missing boundary/reference metadata visibly unavailable.
+- Use actual timestamps/adaptive dt and the resolved stopping condition. Kidder
+  derives its end time during initialization and drives inner/outer boundary bands;
+  a launch-form placeholder duration cannot be treated as its final target.
+
+Acceptance fixtures: fixed-domain Sod and linear wave; reflecting/interacting
+shocks such as Woodward–Colella; Noh; and Kidder through substantial compression.
+Check signed velocities, changing extents/boundary positions, nonuniform times,
+UID picking, fluid/band filtering and exact frame-to-profile linkage. Use a small
+synthetic compressing recording for deterministic regression tests plus isolated
+real solver checks. Existing 2D/3D numerical and lifecycle checks must still pass.
+Case-aware analytical overlays can grow in phase 5; basic 1D reading/display must
+not depend on completed `warpSPHCases` pages (Kidder's page is currently a stub).
+
+### 2. Durable run/recording library
+
+Persist a small run manifest and resolved launch configuration outside disposable
+runtime state, with links to both physical diagnostic and performance/resource
+histories, even when full particle recording was disabled. Reconcile active producers separately from completed recordings;
+reopen finished history after daemon restart, expose output size/location and
+provide an explicit archive/forget/cleanup workflow. Never enable recording or
+remove exports implicitly. Remove the need to restart just to clear 128 entries.
+
+Add recording size/cadence guidance and a bounded authenticated way to retrieve a
+finished recording. Do not turn this into arbitrary filesystem browsing.
+
+### 3. Persistent physical diagnostics and performance/resource histories
+
+Diagnostic recording is independent of full particle recording and display pulls.
+Make it lightweight and opt-in; particle trajectories remain off by default.
+Persist data with the durable run manifest so finished runs can show charts,
+summary statistics and CSV downloads after the viewer or daemon restarts.
+
+Record the useful counters already available in the adapter as well as physical
+quantities:
+
+| Series | Required meaning |
+| --- | --- |
+| Time/step | Simulation time, actual dt, step index, active wall time, step ms and simulation-time throughput; label rolling throughput versus individual-step measurements |
+| Physical reductions | Available energy, mass, momentum, density/pressure statistics and configured probes, at a simulation-time cadence |
+| Host memory | Simulation-process resident RAM and separately labelled system used/total RAM |
+| GPU | PID-attributed VRAM; separately labelled device used/total VRAM, utilization, power and temperature with GPU identity |
+| Capture/publication | Available state-copy, encoding and adapter publication durations/bytes, including overhead when monitoring/recording is enabled |
+| Viewer transfer | Optional client-reported frame bytes/download duration/rate and update interval, clearly labelled as viewer-dependent and unavailable when no viewer is attached |
+
+Resource counters use a low wall-clock cadence (the current sampler is roughly
+2 seconds), independently of physical diagnostic cadence and simulation steps.
+Samples carry run ID, step/simulation time when available, monotonic elapsed time,
+wall timestamp and counter scope/units. Preserve pause/capture-hold periods and
+missing/unsupported counters as gaps/status, never zeros. GPU device utilization,
+power and temperature are not exclusively attributable to this simulation even
+when the GPU was identified by its PID. CPU step-boundary timing is not a CUDA
+kernel profile. Avoid GPU synchronization merely to collect telemetry.
+
+Finalize a bounded, append-only history plus summary on clean completion/stop:
+active versus paused elapsed time, step-time distribution with its measurement
+basis, peak process RAM/VRAM and available resource statistics. Do not extrapolate
+an absent history or label sampled peaks as exact allocation maxima. Sample-count
+and time weighting must be explicit. Flush incrementally so an interrupted run
+retains its valid prefix and is labelled incomplete; avoid unbounded RAM queues.
+
+Probe logging preserves dry/invalid gaps and includes position/frame convention,
+method/radius and units. When particle recording also exists, clicking a diagnostic
+sample seeks the appropriate recorded time. Without particle recording, diagnostics
+remain useful but cannot recreate a missing spatial state. Persist resolved
+configuration and hardware/software provenance for meaningful post-run comparisons.
+
+Done when a completed run without a particle trajectory can be reopened after
+daemon restart to inspect physical, step-time, memory and available GPU curves,
+export their data and distinguish pauses, unavailable counters and missing samples.
+This is resource/throughput history, not a full profiler or remote monitoring service.
+
+### 4. Portable setup and analysis recipes
 
 Save/load a versioned JSON recipe for launch configuration and viewer analysis.
 Include camera, field/range, grid/flow settings, probes, profile definitions,
@@ -95,7 +202,7 @@ Done when a refreshed browser can restore the same setup on the same recording,
 and a saved launch can be rerun without re-entering solver overrides. Existing
 URL links and browser caches remain useful convenience paths.
 
-### 2. Case-aware analysis and reference curves
+### 5. Case-aware analysis and reference curves
 
 Agree a small declarative analysis descriptor with `warpSPHCases`: coordinates,
 field/projection, filter/binning, labels/units and optional reference/result data.
@@ -108,28 +215,7 @@ profile and sloshing pressure histories. Validate reference parameters/units
 against resolved setup; provide “unavailable” rather than a plausible wrong curve.
 Then add error norms/convergence where matching reference data exists.
 
-### 3. Durable run/recording library
-
-Persist a small run manifest and resolved launch configuration outside disposable
-runtime state. Reconcile active producers separately from completed recordings;
-reopen finished history after daemon restart, expose output size/location and
-provide an explicit archive/forget/cleanup workflow. Never enable recording or
-remove exports implicitly. Remove the need to restart just to clear 128 entries.
-
-Add recording size/cadence guidance and a bounded authenticated way to retrieve a
-finished recording. Do not turn this into arbitrary filesystem browsing.
-
-### 4. Diagnostic recording without particle recording
-
-Opt-in named probes/reductions sampled at a simulation-time cadence, independently
-of display pulls, with lightweight durable tables and provenance. Export CSV,
-retain dry/invalid gaps and map recorded timestamps to trajectory seeking when a
-particle recording is also available. Define control-thread/step-boundary cost
-explicitly; retain the current display-only mode as a cheap default.
-
-This directly addresses sloshing/decay monitoring without paying for full states.
-
-### 5. Comparison views and complete result export
+### 6. Comparison views and complete result export
 
 Begin with two trajectories sharing physical time and fixed quantity range,
 then shared camera and reference overlays. Handle unequal frame times explicitly.
@@ -144,7 +230,6 @@ Existing isolated fixtures are the starting point. Keep generated evidence outsi
 
 ## Demand-led work after those workflows
 
-- 1D ingestion/profile-first display when 1D benchmark cases are needed.
 - 3D reconstructed slices before general volume rendering.
 - Shared WebGPU compute/render data paths, stage timings and faster picking when
   measurements identify an interaction bottleneck; preserve CPU parity/fallback.
@@ -170,6 +255,9 @@ including `sources/client.ts`, `session.ts`, `PressureProbes.tsx`, `ProfilePlots
 `LaunchWizard.tsx`, `renderer.ts`, `video.ts`, daemon registration/history/launch,
 and the solver configuration bridge. It also checked the local
 `warpSPHCases/cases/periodic/taylor-green-vortex/case.yaml` figure/reference metadata.
+The reprioritization additionally inspected solver `cases/compressible/kidder.py`,
+its moving-shell reference/boundary hooks, the currently stub Kidder case page,
+1D rejection points throughout acquisition, and `telemetry.py`/`liveMetrics.ts`.
 No simulations, new benchmarks or user daemons were run for this documentation audit.
 At the audited revision CI passed Python tests, TypeScript tests and the build;
 that is regression evidence, not an exhaustive browser/hardware or physics validation.
