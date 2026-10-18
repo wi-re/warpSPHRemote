@@ -18,7 +18,7 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 import uuid
 from .catalogue import CATALOGUE, validate_launch
 from .protocol import validate_packet
@@ -112,6 +112,7 @@ class Manager:
                 capture=False,
                 captureGeneration=0,
                 stop=run.get("stop", False),
+                pause=run.get("pause", False),
                 snapshot=None,
                 static=None,
                 staticRevision=None,
@@ -143,6 +144,9 @@ class Manager:
             "registered",
         )
         row = {k: run[k] for k in keys if k in run}
+        row["pauseRequested"] = bool(run.get("pause"))
+        if run.get("recording"):
+            row["recording"] = {"enabled": True, "mode": run["recording"]["mode"]}
         row["visualized"] = bool(
             run.get("lease") and time.monotonic() - run.get("leaseAt", 0) < 20
         )
@@ -161,6 +165,7 @@ class Manager:
             "scheme",
             "status",
             "message",
+            "recording",
         }
         if not isinstance(data, dict) or set(data) - allowed:
             raise ValueError("Invalid simulation status.")
@@ -176,6 +181,7 @@ class Manager:
         if data.get("status", "running") not in (
             "starting",
             "running",
+            "paused",
             "completed",
             "failed",
             "stopped",
@@ -192,6 +198,13 @@ class Manager:
             or len(data.get("message", "")) > 500
         ):
             raise ValueError("Status message too long.")
+        if "recording" in data:
+            recording = data["recording"]
+            if (not isinstance(recording, dict) or set(recording) - {"path", "mode", "domain", "name"}
+                    or recording.get("mode") not in ("trajectory", "states")
+                    or not isinstance(recording.get("path"), str)
+                    or not Path(recording["path"]).is_absolute()):
+                raise ValueError("Invalid producer recording descriptor.")
         with self.lock:
             r = self.runs[key]
             r.update(data, updatedAt=time.time())
@@ -203,6 +216,8 @@ class Manager:
                 captureSequence=r.get("captureGeneration", 0),
                 staticRevision=r.get("staticRevision"),
                 stop=bool(r.get("stop")),
+                pause=bool(r.get("pause")),
+                historyRequest=(r.get("historyPending") or {}).get("request"),
             )
 
     def expire(self, r):
@@ -365,13 +380,80 @@ class Manager:
                 )
             self.touch()
 
+    def pause(self, key, paused):
+        with self.lock:
+            r = self.runs[key]
+            if not r.get("registered") or r.get("status") not in ("starting", "running", "paused"):
+                raise Conflict("Only an active simulation can be paused or resumed.")
+            r["pause"] = paused
+            self.touch()
+
+    def history(self, key, operation, index=None, field=None, timeout=8):
+        # Browser input selects frames, never a filesystem path.
+        if operation not in ("metadata", "frame") or (operation == "frame" and
+                (type(index) is not int or index < 0 or not isinstance(field, str) or len(field) > 80)):
+            raise ValueError("Invalid history request.")
+        with self.lock:
+            r = self.runs[key]
+            recording = r.get("recording")
+            if not recording:
+                raise Conflict("This simulation has trajectory export disabled.")
+            terminal = r.get("status") in ("completed", "stopped", "failed")
+            if not terminal:
+                if r.get("historyPending"):
+                    raise Conflict("A recorded frame is already being read; retry shortly.")
+                pending = {"request": dict(id=uuid.uuid4().hex, operation=operation, index=index, field=field),
+                           "event": threading.Event()}
+                r["historyPending"] = pending
+        if terminal:
+            from .recordings import read_recording
+            return read_recording(recording, operation, index, field)
+        try:
+            if not pending["event"].wait(timeout):
+                raise Conflict("Waiting for a simulation step boundary; retry history shortly.")
+            if pending.get("error"):
+                raise Conflict(pending["error"])
+            return pending["result"]
+        finally:
+            with self.lock:
+                if r.get("historyPending") is pending:
+                    r.pop("historyPending", None)
+
+    def history_result(self, key, request_id, body, content_type):
+        if content_type == "application/octet-stream":
+            validate_packet(body)
+        elif content_type != "application/json":
+            raise ValueError("Invalid history response type.")
+        with self.lock:
+            pending = self.runs[key].get("historyPending")
+            if not pending or pending["request"]["id"] != request_id:
+                raise Conflict("History request has expired.")
+            if content_type == "application/json":
+                value = json.loads(body)
+                if "error" in value:
+                    pending["error"] = str(value["error"])[:500]
+            pending["result"] = (body, content_type)
+            pending["event"].set()
+
     def stop(self, key):
         with self.lock:
             r = self.runs[key]
             r["stop"] = True
             p = r.get("process")
             if p and p.poll() is None:
-                os.killpg(p.pid, signal.SIGTERM)
+                if not r.get("registered"):
+                    os.killpg(p.pid, signal.SIGTERM)
+                else:
+                    def terminate_if_stuck():
+                        try:
+                            p.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            if p.poll() is None:
+                                try:
+                                    os.killpg(p.pid, signal.SIGTERM)
+                                except ProcessLookupError:
+                                    pass
+                    threading.Thread(target=terminate_if_stuck, daemon=True).start()
             self.touch()
 
     def shutdown(self):
@@ -479,12 +561,21 @@ class Handler(BaseHTTPRequestHandler):
                         "revision": self.manager.revision,
                         "presets": CATALOGUE,
                         "loopbackOnly": True,
+                        "features": ["pause", "recordedHistory"],
                     }
                 )
             if parts == ["v1", "runs"]:
                 with self.manager.lock:
                     rows = [self.manager.public(r) for r in self.manager.runs.values()]
                 return self.send_json({"revision": self.manager.revision, "runs": rows})
+            if len(parts) in (4, 5) and parts[:2] == ["v1", "runs"] and parts[3] == "history":
+                query = parse_qs(urlsplit(self.path).query)
+                operation = "frame" if len(parts) == 5 and parts[4] == "frame" else "metadata"
+                if len(parts) == 5 and parts[4] != "frame":
+                    raise ValueError("Unknown history endpoint.")
+                index = int(query.get("index", ["-1"])[0]) if operation == "frame" else None
+                body, kind = self.manager.history(parts[2], operation, index, query.get("field", ["densities"])[0])
+                return self.send(body, kind)
             if len(parts) == 4 and parts[:2] == ["v1", "runs"]:
                 key, action = parts[2:]
                 with self.manager.lock:
@@ -526,6 +617,10 @@ class Handler(BaseHTTPRequestHandler):
                 key, action = parts[1:]
                 if action == "status":
                     return self.send_json(self.manager.status(key, self.json_body()))
+                if action == "history":
+                    self.manager.history_result(key, self.headers.get("X-History-Request"),
+                        self.body(MAX_PACKET), self.headers.get("Content-Type"))
+                    return self.send_json({"accepted": True})
                 if action == "snapshot":
                     meta = json.loads(self.headers.get("X-Snapshot-Metadata", "{}"))
                     self.manager.upload(
@@ -544,6 +639,9 @@ class Handler(BaseHTTPRequestHandler):
                 viewer = self.headers.get("X-Viewer-Id")
                 if action == "attach":
                     return self.send_json(self.manager.attach(key, viewer))
+                if action in ("pause", "resume"):
+                    self.manager.pause(key, action == "pause")
+                    return self.send_json({"pauseRequested": action == "pause"})
                 if action == "stop":
                     self.manager.stop(key)
                     return self.send_json({"stopping": True})

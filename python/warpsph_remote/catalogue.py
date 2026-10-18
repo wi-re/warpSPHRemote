@@ -15,6 +15,8 @@ def validate_launch(data):
         "nx",
         "duration",
         "steps",
+        "record",
+        "exportInterval",
     }:
         raise ValueError("Use a registered preset and its bounded parameters.")
     case = next((c for c in CATALOGUE if c["id"] == data.get("preset")), None)
@@ -42,6 +44,12 @@ def validate_launch(data):
         raise ValueError("Duration must be finite and positive (at most 10000).")
     if steps is not None and (type(steps) is not int or not 1 <= steps <= 10000000):
         raise ValueError("Step limit must be 1–10000000.")
+    record, export_interval = data.get("record", False), data.get("exportInterval", 0.05)
+    if type(record) is not bool:
+        raise ValueError("record must be a boolean; trajectory recording is opt-in.")
+    if (type(export_interval) not in (int, float) or not math.isfinite(export_interval)
+            or not 0.000001 <= export_interval <= 10000):
+        raise ValueError("Export interval must be finite and between 1e-6 and 10000.")
     return dict(
         preset=case["id"],
         scheme=scheme,
@@ -49,4 +57,6 @@ def validate_launch(data):
         nx=nx,
         duration=duration,
         steps=steps,
+        record=record,
+        exportInterval=export_interval,
     )

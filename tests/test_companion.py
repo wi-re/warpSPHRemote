@@ -74,7 +74,9 @@ def test_authentication_and_browser_producer_separation(api):
         with pytest.raises(HTTPError) as e:
             call(path, {"name": "test"} if "producer" in path else None, token)
         assert e.value.code == 401
-    assert json.load(call("/v1/session"))["loopbackOnly"]
+    session=json.load(call("/v1/session"))
+    assert session["loopbackOnly"]
+    assert set(session["features"]) == {"pause", "recordedHistory"}
     assert json.load(call("/producer/runs", {"name": "test"}, m.producer_token))["id"]
 
 
@@ -388,3 +390,117 @@ def test_worker_entry_bootstraps_only_its_package_in_an_isolated_python(tmp_path
     assert result.returncode != 0
     assert "Unknown simulation preset." in result.stderr
     assert "attempted relative import" not in result.stderr
+
+
+def test_recording_is_explicit_and_interval_is_bounded():
+    assert validate_launch({"preset": "gresho"})["record"] is False
+    assert validate_launch({"preset": "gresho", "record": True, "exportInterval": .1})["record"]
+    for value in [0, -1, float("nan"), True, "0.1"]:
+        with pytest.raises(ValueError):
+            validate_launch({"preset": "gresho", "exportInterval": value})
+    with pytest.raises(ValueError):
+        validate_launch({"preset": "gresho", "record": "yes"})
+
+
+def wait_for(predicate, seconds=3):
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("Companion state did not arrive before the deadline")
+        time.sleep(.01)
+
+
+def test_paused_producer_serves_live_and_existing_history_then_stops(api, tmp_path):
+    import h5py
+    from types import SimpleNamespace as NS
+    from warpsph_remote.publisher import SimulationStopped
+    from warpsph_remote.protocol import validate_packet
+
+    m, call, endpoint = api
+    (m.root / "daemon.json").write_text(json.dumps(dict(endpoint=endpoint, producerToken=m.producer_token)))
+    (m.root / "daemon.json").chmod(0o600)
+    p = SimulationPublisher("recorded fixture", runtime=m.root, autostart=False, interval=.01)
+    file = h5py.File(tmp_path / "trajectory.h5", "w")
+    values = arrays()
+    for name in ("UIDs", "kinds", "masses", "supports"):
+        file["combined" + name[0].upper() + name[1:]] = values[name]
+    for name in ("positions", "velocities", "densities"):
+        file[f"{name}/frame_00000"] = values[name]
+    file["times/frame_00000"] = [.1]
+    ctx = NS(spec=NS(store=True, storeMode="trajectory"), exportPath=str(tmp_path),
+             scratch={"trajectoryFile": file}, scheme="deltaSPH",
+             config=NS(dt=.01, domain=NS(min=np.zeros(2), max=np.ones(2), periodic=np.ones(2,dtype=bool))))
+    state = NS(t=.1, state=NS(**values))
+    failures=[]
+    def step_boundary():
+        try:
+            p.post_step(ctx, state, 10)
+            failures.append("advanced while paused")
+        except SimulationStopped:
+            pass
+    try:
+        call(f"/v1/runs/{p.id}/pause", {}).close()
+        wait_for(p.pausing.is_set)
+        worker=threading.Thread(target=step_boundary)
+        worker.start()
+        wait_for(lambda: m.runs[p.id].get("status") == "paused")
+        assert worker.is_alive()
+        metadata=json.load(call(f"/v1/runs/{p.id}/history"))
+        assert metadata["frames"] == 1 and metadata["times"] == [.1]
+        packet=call(f"/v1/runs/{p.id}/history/frame?index=0&field=velocities").read()
+        assert validate_packet(packet)["index"] == 0
+        m.attach(p.id,"viewer-aaaaaaaaaaaa")
+        wait_for(lambda: m.runs[p.id].get("snapshot") is not None)
+        assert m.runs[p.id]["metadata"]["time"] == .1
+        assert worker.is_alive() and m.runs[p.id]["time"] == .1
+        call(f"/v1/runs/{p.id}/stop", {}).close()
+        worker.join(3)
+        assert not worker.is_alive() and not failures
+        file.close()
+        p.close("stopped")
+        # Terminal history no longer depends on a live producer thread.
+        assert json.load(call(f"/v1/runs/{p.id}/history"))["frames"] == 1
+        assert m.public(m.runs[p.id])["recording"]["enabled"]
+        assert "path" not in m.public(m.runs[p.id])["recording"]
+    finally:
+        m.stop(p.id)
+        p.stopping.set()
+        file.close()
+        p.close("stopped")
+
+
+def test_resume_releases_step_boundary_and_history_timeout_expires(api):
+    m, call, _ = api
+    key=m.register({"name":"test"})
+    m.pause(key,True)
+    assert m.status(key,{"status":"paused"})["pause"]
+    call(f"/v1/runs/{key}/resume",{}).close()
+    assert not m.status(key,{})["pause"]
+    with pytest.raises(Conflict,match="disabled"):
+        m.history(key,"metadata")
+    m.status(key,{"recording":{"path":"/tmp/nonexistent-test-recording.h5","mode":"trajectory"}})
+    with pytest.raises(Conflict,match="step boundary"):
+        m.history(key,"metadata",timeout=.01)
+    assert not m.runs[key].get("historyPending")
+    with pytest.raises(Conflict,match="expired"):
+        m.history_result(key,"old",b'{}',"application/json")
+
+
+def test_existing_checkpoint_exports_are_history_without_copying_files(tmp_path):
+    import h5py
+    from warpsph_remote.recordings import read_recording
+    from warpsph_remote.protocol import validate_packet
+    directory=tmp_path/'trajectory';directory.mkdir()
+    for name,t in [('initialState',0.),('state_0000',.1),('state_0002',.3)]:
+        with h5py.File(directory/f'{name}.h5','w') as file:
+            file.attrs['time']=t
+            for field,value in arrays().items():file[f'state/{field}']=value
+    before=set(directory.iterdir())
+    recording=dict(path=str(directory),mode='states')
+    body,kind=read_recording(recording)
+    assert kind=='application/json' and json.loads(body)['times']==[0.,.1,.3]
+    body,kind=read_recording(recording,'frame',2,'velocities')
+    assert kind=='application/octet-stream' and validate_packet(body)['time']==.3
+    assert set(directory.iterdir())==before
+    with pytest.raises(ValueError,match='out of range'):
+        read_recording(recording,'frame',3,'velocities')

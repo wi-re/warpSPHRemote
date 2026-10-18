@@ -1,13 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, Link2, Play, Radio, Square, Unplug, X } from "lucide-react";
+import {
+  Activity,
+  Link2,
+  Play,
+  Pause,
+  History,
+  Radio,
+  Square,
+  Unplug,
+  X,
+} from "lucide-react";
 import {
   CompanionClient,
   companionConnectionMessage,
   LiveSource,
+  RecordedSource,
   takePairing,
   type Preset,
   type Simulation,
 } from "./companion";
+import type { TrajectorySource } from "./sources/client";
 import { formatNumber } from "./data";
 
 interface Props {
@@ -15,7 +27,7 @@ interface Props {
   onOpen: () => void;
   onClose: () => void;
   sourceId: string;
-  onFrame: (reader: LiveSource, first: boolean) => void;
+  onFrame: (reader: TrajectorySource, first: boolean) => void;
   onDetached: (id: string) => void;
 }
 export function CompanionPanel({
@@ -39,6 +51,10 @@ export function CompanionPanel({
     [scheme, setScheme] = useState("CRKSPH"),
     [variant, setVariant] = useState("standard");
   const [showEnded, setShowEnded] = useState(false);
+  const [features, setFeatures] = useState<string[]>([]);
+  const [record, setRecord] = useState(false);
+  const [exportInterval, setExportInterval] = useState(0.05);
+  const historySession = useRef<AbortController | null>(null);
   const [nx, setNx] = useState(128),
     [duration, setDuration] = useState(3);
   const active = useRef<{
@@ -64,6 +80,7 @@ export function CompanionPanel({
         session = await next.session(attempt.signal);
       if (connection.current !== attempt || attempt.signal.aborted) return;
       setPresets(session.presets);
+      setFeatures(session.features || []);
       known.current = null;
       setClient(next);
     } catch (error) {
@@ -150,6 +167,7 @@ export function CompanionPanel({
   useEffect(
     () => () => {
       connection.current?.abort();
+      historySession.current?.abort();
       connection.current = null;
       const current = active.current;
       current?.abort.abort();
@@ -158,6 +176,7 @@ export function CompanionPanel({
     [],
   );
   async function attach(id: string) {
+    historySession.current?.abort();
     if (!client) return;
     setBusy(true);
     setError("");
@@ -219,6 +238,38 @@ export function CompanionPanel({
       setBusy(false);
     }
   }
+  async function viewHistory(id: string) {
+    if (!client) return;
+    setBusy(true);
+    setError("");
+    historySession.current?.abort();
+    const abort = new AbortController();
+    historySession.current = abort;
+    await detach();
+    try {
+      const metadata = await client.recording(id, abort.signal);
+      const reader = new RecordedSource(metadata, client, id);
+      callbacks.current.onFrame(reader, true);
+      onClose();
+      const refresh = async () => {
+        if (abort.signal.aborted || callbacks.current.sourceId !== metadata.id)
+          return;
+        try {
+          const changed = await reader.refresh(abort.signal);
+          if (changed && !abort.signal.aborted)
+            callbacks.current.onFrame(reader, false);
+        } catch (e) {
+          if (!abort.signal.aborted) setError((e as Error).message);
+        }
+        if (!abort.signal.aborted) setTimeout(refresh, 2000);
+      };
+      setTimeout(refresh, 2000);
+    } catch (e) {
+      if (!abort.signal.aborted) setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   function selectPreset(p: Preset) {
     setPresetId(p.id);
     setScheme(p.schemes[0]);
@@ -237,6 +288,9 @@ export function CompanionPanel({
         variant,
         nx,
         duration,
+        ...(features.includes("recordedHistory")
+          ? { record, exportInterval }
+          : {}),
       });
       setNotice(run);
       setRuns((old) => [...old, run]);
@@ -375,6 +429,7 @@ export function CompanionPanel({
                   <button
                     onClick={async () => {
                       await detach();
+                      historySession.current?.abort();
                       setClient(null);
                       setToken("");
                       setRuns([]);
@@ -400,20 +455,25 @@ export function CompanionPanel({
                   >
                     {showEnded
                       ? "Hide finished simulations"
-                      : `Show ${runs.filter((r) => !["running", "starting"].includes(r.status)).length} finished simulations`}
+                      : `Show ${runs.filter((r) => !["running", "starting", "paused"].includes(r.status)).length} finished simulations`}
                   </button>
                   {runs
                     .filter(
                       (run) =>
                         showEnded ||
                         run.id === attached ||
-                        ["running", "starting"].includes(run.status),
+                        ["running", "starting", "paused"].includes(run.status),
                     )
                     .sort(
                       (a, b) =>
-                        Number(["running", "starting"].includes(b.status)) -
-                          Number(["running", "starting"].includes(a.status)) ||
-                        b.startedAt - a.startedAt,
+                        Number(
+                          ["running", "starting", "paused"].includes(b.status),
+                        ) -
+                          Number(
+                            ["running", "starting", "paused"].includes(
+                              a.status,
+                            ),
+                          ) || b.startedAt - a.startedAt,
                     )
                     .map((run) => (
                       <article className="companion-run" key={run.id}>
@@ -474,17 +534,56 @@ export function CompanionPanel({
                               disabled={
                                 busy ||
                                 !run.registered ||
-                                !["running", "starting"].includes(run.status)
+                                !["running", "starting", "paused"].includes(
+                                  run.status,
+                                )
                               }
                               onClick={() => void attach(run.id)}
                             >
-                              <Radio size={14} /> Attach
+                              <Radio size={14} /> Watch live
+                            </button>
+                          )}
+                          {run.recording?.enabled && (
+                            <button
+                              className="secondary-button"
+                              disabled={busy}
+                              onClick={() => void viewHistory(run.id)}
+                            >
+                              <History size={14} /> View history
+                            </button>
+                          )}
+                          {features.includes("pause") && (
+                            <button
+                              className="secondary-button"
+                              disabled={
+                                !run.registered ||
+                                !["running", "starting", "paused"].includes(
+                                  run.status,
+                                )
+                              }
+                              onClick={() =>
+                                void client
+                                  .pause(run.id, !run.pauseRequested)
+                                  .catch((e) => setError(e.message))
+                              }
+                            >
+                              {run.pauseRequested ? (
+                                <Play size={14} />
+                              ) : (
+                                <Pause size={14} />
+                              )}
+                              {run.pauseRequested ? "Resume" : "Pause"}
+                              {run.pauseRequested && run.status !== "paused"
+                                ? " requested…"
+                                : ""}
                             </button>
                           )}
                           <button
                             className="secondary-button"
                             disabled={
-                              !["running", "starting"].includes(run.status)
+                              !["running", "starting", "paused"].includes(
+                                run.status,
+                              )
                             }
                             onClick={() => {
                               void client
@@ -500,7 +599,9 @@ export function CompanionPanel({
                   <small>
                     Without an attached viewer, simulations send status only.
                     Live diagnostics sample displayed snapshots (last 600);
-                    trajectory history needs a recording.
+                    Recording is optional. View history reads exported frames
+                    while the simulation runs or is paused; Watch live returns
+                    to current snapshots.
                   </small>
                 </section>
                 <section className="companion-cases">
@@ -579,10 +680,37 @@ export function CompanionPanel({
                           />
                         </label>
                       </div>
+                      {features.includes("recordedHistory") && (
+                        <label className="check-row">
+                          <input
+                            type="checkbox"
+                            checked={record}
+                            onChange={(e) => setRecord(e.target.checked)}
+                          />
+                          Record trajectory (uses disk space)
+                        </label>
+                      )}
+                      {features.includes("recordedHistory") && record && (
+                        <label>
+                          Export interval (simulation time)
+                          <input
+                            type="number"
+                            min={0.000001}
+                            max={10000}
+                            step={0.01}
+                            value={exportInterval}
+                            onChange={(e) => setExportInterval(+e.target.value)}
+                          />
+                        </label>
+                      )}
                       <button
                         className="primary-button"
                         disabled={
                           busy ||
+                          (record &&
+                            (!Number.isFinite(exportInterval) ||
+                              exportInterval < 0.000001 ||
+                              exportInterval > 10000)) ||
                           !Number.isInteger(nx) ||
                           nx < 8 ||
                           nx > (preset.maxNx ?? 512) ||
@@ -591,7 +719,9 @@ export function CompanionPanel({
                           runs.some(
                             (r) =>
                               r.createdBy === "daemon" &&
-                              ["starting", "running"].includes(r.status),
+                              ["starting", "running", "paused"].includes(
+                                r.status,
+                              ),
                           )
                         }
                         onClick={() => void launch()}

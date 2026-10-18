@@ -254,3 +254,64 @@ test("connection messages distinguish token rejection, permission wait timeout, 
     globalThis.fetch = original;
   }
 });
+
+test("recorded history uses authenticated frame reads, retains exact IDs and reuses its bounded cache", async () => {
+  const { RecordedSource } = await import("../web/src/companion");
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  const metadata = {
+    id: "",
+    name: "test",
+    format: "recording",
+    frames: 2,
+    times: [0.1, 0.2],
+    timeKind: "simulation",
+    dimension: 2,
+    fields: [],
+    bounds: [
+      [0, 0],
+      [1, 1],
+    ],
+    identity: "UIDs",
+  };
+  globalThis.fetch = async (url, init) => {
+    calls.push(String(url));
+    assert.equal(
+      (init?.headers as Record<string, string>).Authorization,
+      "Bearer secret",
+    );
+    if (String(url).endsWith("/history"))
+      return new Response(JSON.stringify(metadata));
+    const index = Number(new URL(String(url)).searchParams.get("index"));
+    const raw = packet(
+      {
+        positions: { data: new Float32Array([0, 0]), shape: [1, 2] },
+        UIDs: { data: new BigInt64Array([2n ** 54n + 1n]), shape: [1] },
+        kinds: { data: new Int32Array([0]), shape: [1] },
+        masses: { data: new Float32Array([1]), shape: [1] },
+        velocities: { data: new Float32Array([1, 0]), shape: [1, 2] },
+      },
+      metadata.times[index],
+    );
+    // The helper writes index=10; this fixture only checks source transport/cache.
+    return new Response(raw);
+  };
+  try {
+    const client = new CompanionClient("http://127.0.0.1:8766", "secret");
+    const info = await client.recording("run");
+    assert.equal(info.id, "history-run");
+    const reader = new RecordedSource(info, client, "run");
+    const frame = await reader.frame(0, "velocities");
+    assert.equal(frame.arrays.UIDs.data[0], 2n ** 54n + 1n);
+    assert.equal(await reader.frame(0, "velocities"), frame);
+    assert.equal(calls.filter((c) => c.includes("/history/frame")).length, 1);
+    assert.equal((await reader.diagnostics(0, 1))[0].kineticEnergy, 0.5);
+    metadata.frames = 3;
+    metadata.times.push(0.3);
+    await reader.refresh();
+    assert.equal(reader.metadata.frames, 3);
+    reader.close();
+  } finally {
+    globalThis.fetch = original;
+  }
+});

@@ -57,7 +57,10 @@ def main():
             scheme=spec["scheme"],
             params=params,
             plot=False,
-            store=False,
+            store=spec["record"],
+            storeMode="trajectory",
+            exportInterval=spec["exportInterval"],
+            exportRoot=str(Path(os.environ["WARPSPH_REMOTE_RUNTIME"]) / "runs" / publisher.id / "exports"),
             show=False,
             holdPlot=False,
             progress=False,
@@ -66,6 +69,7 @@ def main():
         if spec["steps"] is not None:
             overrides["nSteps"] = spec["steps"]
         result = run(replace(case, postStep=post), **overrides)
+        publisher.recording(result.ctx)
         publisher.update(
             step=result.nSteps,
             time=float(result.state.t),

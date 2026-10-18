@@ -105,6 +105,61 @@ are recorded in `publisher.last_error` and do not stop simulation steps. Initial
 registration failure is explicit. A crashed daemon is not automatically
 re-registered mid-run in this version.
 
+## Pause and exported history
+
+Restart the companion after updating its editable install; a running daemon
+keeps its loaded code. The viewer discovers optional features from the session
+response, so older companions retain their existing launch/live behavior.
+
+In **Local simulations**, **Pause** requests a hold at the next completed-step
+publisher callback. The row shows `paused` only after the simulation acknowledges
+it. **Resume** continues the integrator; viewport playback remains a separate
+control. Pausing during initial compilation takes effect at the first callback.
+The publisher keeps heartbeats, live capture, history requests and cooperative
+stop active while paused.
+
+Preset launches leave **Record trajectory (uses disk space)** unchecked. Enable
+it deliberately and choose an export interval in simulation-time units. Managed
+exports are written under `<runtime>/runs/<id>/exports/`; they are not duplicated
+into a second remote recording and are not deleted automatically. No particle
+history is recorded for an ordinary unchecked launch.
+
+Existing code can expose its normal exports:
+
+```python
+result = run_live(case, nx=128, tLimit=3, plot=False, store=True,
+                  storeMode='trajectory', exportInterval=0.05,
+                  exportRoot='/path/to/my/exports')
+```
+
+For a run with export enabled, **View history** opens the available recorded
+frames as a regular trajectory: seek/playback, diagnostics, probes, traces and
+analysis use the recording source. Its frame index refreshes every two seconds
+while that source remains selected. **Watch live** switches to current snapshots.
+Switching views neither resumes a paused solver nor enables recording. History
+is still available in **Show finished simulations** after a clean stop/completion,
+as long as the daemon session and export files remain available. A page refresh
+requires pairing again, then selecting the run's history.
+
+The existing HDF5 trajectory layout is not SWMR. For an active producer, the
+daemon forwards one bounded history request to the simulation adapter; it reads
+existing numeric datasets between output writes on the simulation thread. The
+network transfer is handled by the publisher thread. The daemon reads directly
+only after the writer has closed. No file-lock checks are disabled, no pickle or
+checkpoint callables are evaluated, and browser requests cannot choose local
+filesystem paths. A long timestep can cause a retryable history timeout.
+Metadata refresh reads the recorded index; frames are fetched lazily. The browser
+keeps at most eight cached frame/field responses, bounded by 64 MiB. History reads
+add disk/CPU work at a step boundary, so intensive analysis may slow the solver.
+
+Both trajectory exports and completed per-state HDF5 exports are supported;
+per-state history contains the initial state and `state_*` exports. The existing
+viewer supports 2D/3D numerical arrays; a 1D recording still requires a viewer
+adaptation. Only fields actually exported are available for recorded analysis.
+Live captures and recorded-history packets retain the existing 128 MiB /
+600,000-particle protocol limits. Abrupt process kills may leave an incomplete
+HDF5 file; graceful stop/normal completion is the supported history handoff.
+
 ## Snapshot ownership and backpressure
 
 - A file lock makes daemon startup singleton per user/runtime directory, including
@@ -154,11 +209,14 @@ flow and sloshing. Each has explicit solver choices and predefined variants.
 The picker images are labelled schematic SVG illustrations, not solver captures.
 
 Launch requests accept only registered preset/solver/variant, integer nx 8–512 (RT capped at 256 and sloshing at 384),
-finite positive end time <=10000, and an optional bounded step limit. The browser
+finite positive end time <=10000, an optional bounded step limit, an opt-in
+`record` flag and a finite export interval (1e-6–10000 simulation-time units). The browser
 cannot set executable paths, import modules, arbitrary parameters or shell text.
 Only one daemon-owned worker runs at once; separately started registered
-simulations can coexist. Stop terminates a managed process group; external runs
-stop cooperatively at their next publisher callback. Worker stdout/stderr and the
+simulations can coexist. Pause/resume and stop are cooperative at the next
+publisher step boundary. Managed workers get ten seconds to stop and close their
+recording before a process-group SIGTERM fallback; unregistered workers can be
+terminated immediately. External processes are never signalled by the daemon. Worker stdout/stderr and the
 normalized launch specification remain in `<runtime>/runs/<id>/`. They may contain
 useful local failure diagnostics; the webpage sees only bounded status messages.
 The manager retains at most 128 run summaries per daemon session.
@@ -195,7 +253,7 @@ by a simulation or website request. A future explicit remote mode must add TLS,
 CLI-only opt-in, separately scoped/revocable pairing, origin configuration and
 appropriate process exposure policy. A token alone does not encrypt traffic.
 Windows/macOS daemon installers, automatic reconnect across daemon restarts,
-recording/retained live particle history, arbitrary case editing and launching
+automatic recording of live snapshots, arbitrary case editing and launching
 multiple managed GPU workers are outside this pass.
 
 Regenerate the seven default-family smoke checks after starting a companion in
@@ -237,3 +295,26 @@ A separate-interpreter smoke check passed: the companion ran in its NumPy/Python
 environment and launched Gresho in the Warp environment without the companion
 package on the child PYTHONPATH. The isolated-script test also checks package
 bootstrap without inheriting another environment's site-packages.
+
+## Pause/history validation (2026-10-18)
+
+44 Python tests and 89 TypeScript tests passed, along with the production build.
+The real CUDA integration check held TGV at step 0, resumed it, read 156 exported
+frames while paused, resumed and read 214 frames, captured a live snapshot while
+paused, then stopped and read all 214 frames after writer closure. A second
+managed run with default options generated no HDF5 trajectory. The core runner
+also tests writer closure when a control hook interrupts a recorded run.
+
+Reproduce against a working warpSPH interpreter, choosing a fresh output path:
+
+```bash
+python examples/check_live_history.py --python /path/to/warp/bin/python \
+  --output ../warpSPHDevelopment/remote/new-pause-history-check
+```
+
+Evidence is stored outside source under
+`../warpSPHDevelopment/remote/pause-history-20261018/`.
+
+The local browser preview also verified recorded-history seeking, switching to
+live grid viewing while paused, stopping through the manager and an unchecked
+recording option by default. No browser console errors were observed.

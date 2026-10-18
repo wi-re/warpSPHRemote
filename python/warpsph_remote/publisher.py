@@ -31,6 +31,10 @@ class SimulationPublisher:
         self.interval = interval
         self.closed = threading.Event()
         self.stopping = threading.Event()
+        self.pausing = threading.Event()
+        self.history_request = None
+        self.history_pending = None
+        self.history_seen = None
         self.lock = threading.Lock()
         self.last_error = ""
         self.capture_target = 0
@@ -83,6 +87,14 @@ class SimulationPublisher:
                     meta = dict(self.meta)
                     pending = self.pending
                     self.pending = None
+                    history_pending = self.history_pending
+                    self.history_pending = None
+                if history_pending:
+                    try:
+                        self._request(f"/producer/{self.id}/history", history_pending[0], history_pending[1])
+                    except HTTPError as error:
+                        if error.code != 409:
+                            raise
                 if pending:
                     try:
                         self._request(
@@ -100,7 +112,12 @@ class SimulationPublisher:
                         self.static_revision = response["staticRevision"]
                     else:
                         self.capture_target = 0
-                active = response.get("attached", False)
+                    request = response.get("historyRequest")
+                    if request and request["id"] != self.history_seen:
+                        self.history_request = request
+                        self.history_seen = request["id"]
+                self.pausing.set() if response.get("pause") else self.pausing.clear()
+                active = response.get("attached", False) or bool(response.get("historyRequest"))
                 if response["stop"]:
                     self.stopping.set()
                 self.last_error = ""
@@ -196,21 +213,63 @@ class SimulationPublisher:
             )
         return True
 
+    def recording(self, ctx):
+        """Advertise existing exports, never enable storage implicitly."""
+        if not ctx.spec.store or not ctx.exportPath:
+            return
+        if not getattr(self, "_recording", None):
+            from pathlib import Path
+            mode = ctx.spec.storeMode
+            path = Path(ctx.exportPath) / ("trajectory.h5" if mode == "trajectory" else "trajectory")
+            self._recording = dict(path=str(path.resolve()), mode=mode, name=self.name,
+                domain={name: numpy_array(getattr(ctx.config.domain, name)).tolist()
+                        for name in ("min", "max", "periodic")})
+            self.update(recording=self._recording)
+
+    def _history(self, ctx):
+        with self.lock:
+            request, self.history_request = self.history_request, None
+        if not request:
+            return
+        try:
+            from .recordings import read_recording
+            writer = ctx.scratch.get("trajectoryFile")
+            if writer is not None and writer.id.valid:
+                writer.flush()
+            if not getattr(self, "_recording", None):
+                raise ValueError("Trajectory export is disabled.")
+            body, kind = read_recording(self._recording, request["operation"], request["index"], request["field"])
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+            body, kind = json.dumps({"error": str(error)[:500]}).encode(), "application/json"
+        with self.lock:
+            self.history_pending = (body, {"Content-Type": kind, "X-History-Request": request["id"]})
+
     def post_step(self, ctx, state, step):
-        if self.stopping.is_set():
-            raise SimulationStopped("Stopped from the companion.")
-        now = time.monotonic()
-        if now - getattr(self, "_last_meta", 0) > 0.5:
-            self._last_meta = now
-            self.update(
-                step=int(step),
-                time=float(state.t),
-                dt=float(ctx.config.dt),
-                particles=int(state.state.positions.shape[0]),
-                dimension=int(state.state.positions.shape[1]),
-                scheme=str(ctx.scheme).split(".")[-1],
-                status="running",
-            )
+        self.recording(ctx)
+        while True:
+            if self.stopping.is_set() or self.closed.is_set():
+                raise SimulationStopped("Stopped from the companion.")
+            paused = self.pausing.is_set()
+            now = time.monotonic()
+            if now - getattr(self, "_last_meta", 0) > 0.5 or getattr(self, "_paused", None) != paused:
+                self._last_meta = now
+                self._paused = paused
+                self.update(
+                    step=int(step), time=float(state.t), dt=float(ctx.config.dt),
+                    particles=int(state.state.positions.shape[0]),
+                    dimension=int(state.state.positions.shape[1]),
+                    scheme=str(ctx.scheme).split(".")[-1],
+                    status="paused" if paused else "running",
+                )
+            self._history(ctx)
+            self._capture(ctx, state, step)
+            if not paused:
+                return
+            # Status, stop, recording reads and live captures remain serviced
+            # while the integrator is held at this completed-step boundary.
+            self.closed.wait(0.02)
+
+    def _capture(self, ctx, state, step):
         if not self.wants_snapshot:
             return
         s = state.state
@@ -278,6 +337,7 @@ def run_live(case, *, name=None, runtime=None, **overrides):
 
     try:
         result = run(replace(case, postStep=post), **overrides)
+        publisher.recording(result.ctx)
         publisher.update(
             step=result.nSteps,
             time=float(result.state.t),

@@ -32,6 +32,8 @@ export interface Simulation {
   sequence: number;
   createdBy: string;
   message?: string;
+  pauseRequested?: boolean;
+  recording?: { enabled: boolean; mode: string };
 }
 export interface Snapshot {
   frame: Frame;
@@ -147,7 +149,7 @@ export class CompanionClient {
   }
   async session(
     signal?: AbortSignal,
-  ): Promise<{ version: number; presets: Preset[] }> {
+  ): Promise<{ version: number; presets: Preset[]; features?: string[] }> {
     const value = await (
       await this.request(
         "/v1/session",
@@ -174,6 +176,44 @@ export class CompanionClient {
   async detach(id: string) {
     await this.request(`/v1/runs/${id}/detach`, {});
     this.statics = undefined;
+  }
+  async pause(id: string, paused: boolean) {
+    await this.request(`/v1/runs/${id}/${paused ? "pause" : "resume"}`, {});
+  }
+  private historyQueue: Promise<unknown> = Promise.resolve();
+  private historyRequest<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.historyQueue.then(operation, operation);
+    this.historyQueue = result.catch(() => {});
+    return result;
+  }
+  async recording(id: string, signal?: AbortSignal): Promise<Source> {
+    return this.historyRequest(async () => {
+      signal?.throwIfAborted();
+      const info = await (
+        await this.request(`/v1/runs/${id}/history`, undefined, signal)
+      ).json();
+      return {
+        ...info,
+        id: `history-${id}`,
+        name: `${info.name} · recorded history`,
+      };
+    });
+  }
+  async recordedFrame(
+    id: string,
+    index: number,
+    field: string,
+    signal?: AbortSignal,
+  ) {
+    return this.historyRequest(async () => {
+      signal?.throwIfAborted();
+      const r = await this.request(
+        `/v1/runs/${id}/history/frame?index=${index}&field=${encodeURIComponent(field)}`,
+        undefined,
+        signal,
+      );
+      return decodeFrame(await r.arrayBuffer());
+    });
   }
   async stop(id: string) {
     await this.request(`/v1/runs/${id}/stop`, {});
@@ -274,5 +314,76 @@ export class LiveSource extends ServiceSource {
       this.acknowledged = false;
       throw error;
     }
+  }
+}
+
+/** Existing disk exports, with a growing frame index and bounded browser cache. */
+export class RecordedSource extends ServiceSource {
+  private cache = new Map<string, Frame>();
+  private bytes = 0;
+  constructor(
+    metadata: Source,
+    private client: CompanionClient,
+    readonly runId: string,
+  ) {
+    super(metadata);
+  }
+  async refresh(signal?: AbortSignal) {
+    const next = await this.client.recording(this.runId, signal);
+    if (
+      next.frames === this.metadata.frames &&
+      next.times.at(-1) === this.metadata.times.at(-1)
+    )
+      return false;
+    this.metadata = next;
+    return true;
+  }
+  async frame(index: number, field: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const key = `${index}:${field}`;
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+    const frame = await this.client.recordedFrame(
+      this.runId,
+      index,
+      field,
+      signal,
+    );
+    // A single very large frame is returned without retaining it.
+    if (frame.bytes <= 64 * 1024 * 1024) {
+      while (
+        this.cache.size &&
+        (this.cache.size >= 8 || this.bytes + frame.bytes > 64 * 1024 * 1024)
+      ) {
+        const oldest = this.cache.keys().next().value!;
+        this.bytes -= this.cache.get(oldest)!.bytes;
+        this.cache.delete(oldest);
+      }
+      this.cache.set(key, frame);
+      this.bytes += frame.bytes;
+    }
+    return frame;
+  }
+  async diagnostics(start: number, count: number, signal?: AbortSignal) {
+    const rows = [];
+    for (
+      let i = start;
+      i < Math.min(start + count, this.metadata.frames);
+      i++
+    ) {
+      const frame = await this.frame(i, "velocities", signal);
+      const arrays = { ...frame.arrays };
+      if (this.metadata.internalEnergyAvailable)
+        arrays.internalEnergies = (
+          await this.frame(i, "internalEnergies", signal)
+        ).arrays.internalEnergies;
+      rows.push(reduceDiagnostic(arrays, i, this.metadata.times[i]));
+    }
+    return rows;
+  }
+  close() {
+    this.cache.clear();
+    this.bytes = 0;
+    super.close();
   }
 }
