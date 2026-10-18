@@ -29,8 +29,8 @@ def owned_arrays(arrays, budget):
         raise ValueError('Live snapshots require positions, stable IDs, kinds, masses, density, supports and velocity.')
     values = {k:v if hasattr(v,'shape') else np.asarray(v) for k,v in values.items()}
     shape = values['positions'].shape
-    if len(shape)!=2 or shape[1] not in (2,3) or shape[0]<1:
-        raise ValueError('Live snapshots require nonempty 2D/3D positions.')
+    if len(shape)!=2 or shape[1] not in (1,2,3) or shape[0]<1:
+        raise ValueError('Live snapshots require nonempty 1D/2D/3D positions.')
     payload = 0
     for name, value in values.items():
         if len(value.shape) not in (1,2) or value.shape[0]!=shape[0]:

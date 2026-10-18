@@ -38,8 +38,13 @@ export const naturalCompare = (a: string, b: string) =>
   a.localeCompare(b, "en", { numeric: true });
 export function validateRaw(frame: RawFrame): RawFrame {
   const p = frame.positions;
-  if (!p || p.shape.length !== 2 || ![2, 3].includes(p.shape[1]) || !p.shape[0])
-    throw new Error("Positions must be a nonempty N×2 or N×3 array.");
+  if (
+    !p ||
+    p.shape.length !== 2 ||
+    ![1, 2, 3].includes(p.shape[1]) ||
+    !p.shape[0]
+  )
+    throw new Error("Positions must be a nonempty N×1, N×2 or N×3 array.");
   const n = p.shape[0];
   for (const v of p.data)
     if (!Number.isFinite(Number(v)))
@@ -64,10 +69,13 @@ export abstract class RawSource {
   timeKind: Source["timeKind"] = "simulation";
   constructor(public id: string) {}
   abstract read(index: number, field?: string): RawFrame | Promise<RawFrame>;
+  frameMetadata(_index: number): Pick<Frame, "physicalBounds" | "domain"> {
+    return {};
+  }
   async metadata(): Promise<Source> {
     const f = validateRaw(await this.read(0)),
       p = f.positions,
-      dim = p.shape[1] as 2 | 3;
+      dim = p.shape[1] as 1 | 2 | 3;
     if (this.domain && this.domain.min.length !== dim)
       throw new Error("Domain dimension does not match particle positions.");
     if (
@@ -275,13 +283,23 @@ export function reduceDiagnostic(
 }
 export class DemoSource extends RawSource {
   p: Float32Array;
-  dim: 2 | 3;
+  dim: 1 | 2 | 3;
   dx: number;
-  constructor(dim: 2 | 3) {
+  constructor(dim: 1 | 2 | 3) {
     super(`demo-${dim}d`);
     this.dim = dim;
     this.name = `Taylor–Green · ${dim}D analytical`;
     this.format = "Analytical demo";
+    if (dim === 1) {
+      this.name = "Compressing samples · 1D synthetic";
+      this.dx = 0.1 / 256;
+      this.p = Float32Array.from(
+        { length: 256 },
+        (_, i) => 0.9 + (i + 0.5) * this.dx,
+      );
+      this.times = Array.from({ length: 96 }, (_, i) => i * 0.01);
+      return;
+    }
     const n = dim === 2 ? 96 : 24;
     this.dx = (2 * Math.PI) / n;
     this.times = Array.from({ length: 121 }, (_, i) => i * 0.05);
@@ -302,8 +320,44 @@ export class DemoSource extends RawSource {
         }
     this.p = Float32Array.from(p);
   }
+  frameMetadata(index: number) {
+    if (this.dim !== 1) return {};
+    const scale = Math.sqrt(1 - this.times[index] ** 2);
+    return { physicalBounds: [[0.9 * scale], [scale]] };
+  }
   read(index: number): RawFrame {
     this.checkIndex(index);
+    if (this.dim === 1) {
+      const n = this.p.length,
+        t = this.times[index],
+        s = Math.sqrt(1 - t * t);
+      return {
+        positions: {
+          data: Float64Array.from(this.p, (x) => x * s),
+          shape: [n, 1],
+        },
+        velocities: {
+          data: Float64Array.from(this.p, (x) => (-x * t) / s),
+          shape: [n, 1],
+        },
+        densities: { data: new Float64Array(n).fill(1 / s), shape: [n] },
+        pressures: { data: new Float64Array(n).fill(1 / s ** 3), shape: [n] },
+        internalEnergies: {
+          data: new Float64Array(n).fill(0.5 / s ** 2),
+          shape: [n],
+        },
+        masses: { data: new Float64Array(n).fill(this.dx), shape: [n] },
+        supports: {
+          data: new Float64Array(n).fill(3 * this.dx * s),
+          shape: [n],
+        },
+        kinds: { data: new Int32Array(n), shape: [n] },
+        UIDs: {
+          data: BigInt64Array.from({ length: n }, (_, i) => BigInt(i)),
+          shape: [n],
+        },
+      };
+    }
     const n = this.p.length / this.dim,
       v = new Float32Array(this.p.length),
       rho = new Float32Array(n),

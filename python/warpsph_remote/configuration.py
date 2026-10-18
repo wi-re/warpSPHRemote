@@ -63,7 +63,7 @@ def installed_catalogue():
             entry['registry'] = case.name
             represented.add(case.name)
             entry['dimension'] = case.defaults.get('dim', 2)
-            entry['available'] = entry['dimension'] in (2, 3)
+            entry['available'] = entry['dimension'] in (1, 2, 3)
             entry['configurable'] = coverage.get(case.name, {}).get('status') == 'ready'
             if entry['configurable']:
                 entry['schemes'] = [s for s in c['schemes'] if s in case.supportedSchemes]
@@ -78,17 +78,18 @@ def installed_catalogue():
         ready = status.get('status') == 'ready'
         dim = case.defaults.get('dim', 2)
         descriptor = getattr(case, 'simulationParameters', {}).get('dim')
-        dimensions = [d for d in (descriptor.choices if descriptor and descriptor.choices else (dim,)) if d in (2, 3)]
+        dimensions = [d for d in (descriptor.choices if descriptor and descriptor.choices else (dim,)) if d in (1, 2, 3)]
         dim = dim if dim in dimensions else (dimensions[0] if dimensions else dim)
         available = bool(dimensions) and status.get('status') != 'invalid'
         hook_module = getattr(case.buildSystem, '__module__', '')
         family = 'compressible' if any(x in hook_module for x in ('.compressible.', '.compressibleWalls.')) else 'free-surface' if '.freeSurface.' in hook_module else 'periodic' if '.periodic.' in hook_module else 'wall-bounded' if any(x in hook_module for x in ('.wallBounded.', '.boundaries.')) else 'other'
         entries.append(dict(id=name, registry=name, name=name, description=case.description,
             family=family, image=None, dimension=dim, schemes=[case.scheme, *[s for s in getattr(case, 'supportedSchemes', ()) if s != case.scheme]],
-            nx=min(64 if dim == 3 else 512, max(8, case.defaults.get('nx', 128))), maxNx=128 if dim == 3 else 512,
+            nx=min(64 if dim == 3 else 512, max(8, case.defaults.get('nx', 128))), maxNx=128 if dim == 3 else 16384 if dim == 1 else 512,
             duration=case.defaults.get('tLimit', 1) or 1,
+            derivedEndTime=bool(getattr(getattr(case,'simulationParameters',{}).get('tLimit'),'readOnly',False)),
             variants={v:{} for v in ['default', *case.variants]} if ready else {'standard':{}}, nativeVariants=ready,
             available=available, configurable=ready,
             unavailableReason=None if available else
-                (status.get('error') or 'This case defaults to 1D; the current launcher requires an explicitly advertised 2D/3D setup.')))
+                (status.get('error') or 'This case does not advertise a supported 1D/2D/3D setup.')))
     return entries

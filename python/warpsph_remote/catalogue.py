@@ -36,6 +36,8 @@ def validate_launch(data, catalogue=None):
         "video",
         "paused",
         "configuration",
+        "measurements",
+        "diagnosticInterval",
     }:
         raise ValueError("Use a registered preset and its bounded parameters.")
     case = next((c for c in (CATALOGUE if catalogue is None else catalogue) if c["id"] == data.get("preset")), None)
@@ -65,6 +67,7 @@ def validate_launch(data, catalogue=None):
         raise ValueError("Duration must be finite and positive (at most 10000).")
     if steps is not None and (type(steps) is not int or not 1 <= steps <= 10000000):
         raise ValueError("Step limit must be 1–10000000.")
+    if 'measurements' in data and type(data['measurements']) is not bool: raise ValueError('measurements must be boolean.')
     record, export_interval = data.get("record", False), data.get("exportInterval", 0.05)
     if type(record) is not bool:
         raise ValueError("record must be a boolean; trajectory recording is opt-in.")
@@ -84,6 +87,11 @@ def validate_launch(data, catalogue=None):
         record=record,
         exportInterval=export_interval,
     )
+    if data.get('measurements'): result['measurements']=True
+    if 'diagnosticInterval' in data:
+        interval=data['diagnosticInterval']
+        if type(interval) not in (int,float) or not math.isfinite(interval) or not 1e-6<=interval<=10000: raise ValueError('Invalid diagnostic interval.')
+        result['diagnosticInterval']=float(interval)
     if data.get("paused") or "video" in data:
         result["paused"] = True
     if "video" in data:

@@ -2,7 +2,8 @@
 
 Consolidated 2026-10-18 against `c0241c6` and the current implementation/tests.
 Priorities updated after user feedback: native 1D first, then durable runs and
-persistent physical/performance diagnostics.
+persistent physical/performance diagnostics. Their first implementations are now
+shipped; see [1D/run-library implementation and limits](ONE_DIMENSION_AND_RUN_LIBRARY.md).
 This is the current feature inventory and prioritization. Other reports preserve
 numerical contracts, measurements and historical verification; their original
 milestone dates and test counts are not current completion claims.
@@ -22,8 +23,9 @@ validated. Links give the actual scope and reproduction instructions.
 
 | Area | What exists | Boundary / evidence |
 | --- | --- | --- |
-| Files and examples | Browser HDF5/NPZ readers, analytical 2D/3D demos, curated KHH/sloshing/decay recordings and high-resolution snapshots, lazy frame reads | No solver needed; [formats](BROWSER_FILES.md), [recordings](RECORDED_DEMOS.md), [snapshots](SNAPSHOT_GALLERY.md) |
+| Files and examples | Browser HDF5/NPZ readers, analytical 2D/3D demos plus a synthetic 1D contraction, curated KHH/sloshing/decay recordings and high-resolution snapshots, lazy frame reads | No solver needed; [formats](BROWSER_FILES.md), [recordings](RECORDED_DEMOS.md), [snapshots](SNAPSHOT_GALLERY.md) |
 | Browser retention | Last-file copy in IndexedDB, separate verified demo caches, saved field/mapping/grid/flow/metric preferences, URL view parameters | One remembered local recording; not a full saved workspace; [views](VIEW_PRESETS_AND_ANALYSIS.md) |
+| Native 1D | Canvas profile viewport, signed quantities, numerical axes, physical-boundary markers, fixed/follow axes, picking, file/live/history/video; native 1D case launch | Kidder derived duration/geometry supported; [contract and evidence](ONE_DIMENSION_AND_RUN_LIBRARY.md) |
 | Particle rendering | WebGL2 2D discs/3D spheres, antialiasing, pan/zoom/orbit, clipping, periodic display mapping, exact UID picking/traces, categorical fallback | Unwrapped source coordinates preserved; [renderer](PARTICLE_ANTIALIAS.md), [controls](INTERACTION_CONTROLS.md) |
 | Reconstructed fields | 2D Wendland C2/C4 normalized SPH grids, coverage masks, scalar/vector interpolation, signed vorticity and divergence, CPU and WebGPU compute | WebGL2 drawing still requires GPU readback; not general warpSPHCore operator parity; [WebGPU](WEBGPU.md), [derivatives](VELOCITY_DERIVATIVES.md) |
 | Flow display | Instantaneous streamlines, picked/regular seeds, static/animated LIC, periodic seams | LIC animation displays a frozen velocity field; not unsteady pathline integration; [LIC](LIC.md) |
@@ -33,7 +35,8 @@ validated. Links give the actual scope and reproduction instructions.
 | Local companion | Linux singleton, implicit local start, persistent local pairing, daemon-owned installed case catalogue, metadata-only registration, one live viewer, auto-attach/monitor, takeover/reconnect | Same workflow over SSH forwarding; no multi-user scheduler; [companion](LOCAL_COMPANION.md), [recovery](RECONNECTION.md) |
 | Simulation setup | Family → case → case parameters → solver/run controls, installed solver schema bridge, sparse validated overrides, variants, launch-paused initial preview, read-only running configuration | Requires migrated solver schemas; object/array fields still use JSON controls; no saved launch templates; [configuration bridge](PROFILES_AND_SIMULATION_WORKFLOWS.md) |
 | Live performance/control | Independent pause simulation / pause updates, bounded owned CPU snapshot, background encoding/publication, static revisions, time/step/ETA and transfer/RAM/GPU metrics | Copying GPU state still synchronizes; optional NVIDIA telemetry; [buffering](BUFFERED_CAPTURE_AND_VIDEO.md), [telemetry](LIVE_METRICS.md) |
-| Recording and replay | Recording explicitly off by default, configurable export cadence, safe active history reads, live/history switching, finished recording replay during daemon session | Active runs re-register after restart; finished run catalogue does not persist; [history](LOCAL_COMPANION.md#pause-and-exported-history) |
+| Recording and replay | Recording explicitly off by default, configurable export cadence, safe active history reads, live/history switching, finished recording replay from durable run entries | Active runs re-register; completed manifests/recording descriptors now persist; [history](LOCAL_COMPANION.md#pause-and-exported-history) |
+| Durable runs and measurements | SQLite run/configuration library, managed persistent exports/logs, opt-in physical/probe and performance/resource histories, Run report and CSV | No automatic deletion/import; viewer download history remains transient; [implementation](ONE_DIMENSION_AND_RUN_LIBRARY.md) |
 | Video | Offline frame range/stride and synchronized live VP8/WebM, metadata/colorbar/axes, configure t=0 before Play, render/encode ACKs, final-frame handoff and dropout holds | WebCodecs required; encoded chunks retained in browser RAM; [video](BUFFERED_CAPTURE_AND_VIDEO.md) |
 
 ## Partial features and practical gaps
@@ -45,24 +48,21 @@ These are missing pieces within existing workflows, rather than new product scop
    probes, material selections, complete analysis definitions and launch drafts
    cannot be exported/reloaded together. A wizard draft survives dialog closure,
    but not reload. Same-name files can share profile settings unintentionally.
-2. **Durable run library.** Completed run metadata lives in the daemon registry,
-   an in-memory collection capped at 128 runs. Export files can remain on disk
-   while their finished run entries disappear on daemon restart. Recovery of a
-   still-running producer is implemented and is a different feature. There is
-   no archive/reindex/import UI, disk budget display or recording retention policy.
+2. **Run-library management.** Durable manifests and recording descriptors are
+   implemented and the 128-entry cap is removed. Legacy import/reindex, disk
+   quotas/forecasts and export cleanup remain missing; Forget entry retains files.
 3. **Case-aware validation plots.** The generic projection/profile engine exists,
    but case identity/configuration does not provide default analysis cards,
    analytical curves, literature references, error norms or derived-result
    attachments. `warpSPHCases` already has `case.yaml` figure/reference metadata;
    there is no bridge to it in this viewer. Reuse that source instead of creating
    a second browser-owned case catalogue.
-4. **Reliable lightweight measurements.** Live pressure/metric histories retain
-   the last 600 displayed snapshots and miss skipped solver steps. Probes reset
-   on source changes; their definitions/results have no dedicated portable export.
-   Full recording scans work, but are an expensive substitute for solver-cadence
-   pressure/energy and performance/resource logging when particle trajectories are
-   intentionally disabled. The current RAM/GPU/step-time monitor is live telemetry,
-   not a durable post-run time series.
+4. **Measurement workflow polish.** Opt-in producer-cadence physical/probe and
+   wall-clock performance/resource recording now persists without particle exports.
+   Existing display-only curves remain bounded; full histories are in Run report.
+   Richer saved probe setup, streamed CSV and time-weighted whole-run summaries
+   remain useful follow-ups. Browser frame-download rates are not recorded by
+   this producer-side recorder.
 5. **Comparison and publication output.** Sources can be switched, but cannot be
    shown side by side with shared camera/time/color limits or overlaid reference
    runs. PNG currently exports the scene canvas only. Video already has a richer
@@ -72,10 +72,10 @@ These are missing pieces within existing workflows, rather than new product scop
    cache usage overview or recording disk-space forecast. Video holds compressed
    output until download; reload loses the encoder/file. There is no streaming
    sink or resumable export job. A saved trajectory is the regeneration fallback.
-7. **Capability breadth.** Basic particles/clipping work in 3D; reconstructed
-   slices/volumes and 3D flow/FTLE tools do not. Native 1D datasets/setups are not
-   supported by the current 2D/3D viewer. That matters for genuinely 1D Sod/shock
-   cases; 2D shock-strip profiles already work.
+7. **Capability breadth.** Native 1D reading/live/history and profile display now
+   exist, including compressing Kidder geometry. Generic normalized/material
+   coordinates and case reference curves are still future work. Basic particles
+   work in 3D; reconstructed slices/volumes and 3D flow/FTLE tools do not.
 8. **Performance and maintainability.** Shared GPU rendering/compute is absent;
    GPU grids are read back for WebGL2 and streamline integration is on the CPU.
    Large particle picking scans projected particles on the main thread. The UI
@@ -84,10 +84,18 @@ These are missing pieces within existing workflows, rather than new product scop
 
 ## Recommended implementation order
 
-This is an ordered proposal, not a claim these features have been started.
-Each item should ship independently, with a useful small first increment.
+The first three phases below now have working implementations. Their original
+requirements explain the intended scope; delivery notes identify the remaining
+pieces. Subsequent phases are proposals, not completion claims.
 
-### 1. Native 1D viewing and live integration — current highest priority
+### 1. Native 1D viewing and live integration — foundation delivered
+
+Delivered: native acquisition/profile rendering, moving physical metadata, fixed/
+follow axes, exact picking, signed fields, launch/live/history and video. Verified
+on real Sod and substantially compressing Kidder. Normalized coordinates,
+case-supplied analytical overlays and new driven-band classifications are not
+implemented; recorded kinds stay authoritative. Other installed 1D cases are
+available by catalogue/schema but are not all numerically validated by this pass.
 
 Build a profile-first view for genuine `N×1` recordings and live snapshots, with
 quantity versus physical position as the main viewport. Density, signed velocity,
@@ -132,7 +140,12 @@ real solver checks. Existing 2D/3D numerical and lifecycle checks must still pas
 Case-aware analytical overlays can grow in phase 5; basic 1D reading/display must
 not depend on completed `warpSPHCases` pages (Kidder's page is currently a stub).
 
-### 2. Durable run/recording library
+### 2. Durable run/recording library — first implementation delivered
+
+Delivered: persistent manifests/configuration/measurement descriptors and managed
+output paths, restored finished replay/reports, storage inspection and explicit
+Forget entry without deleting files. Reindex/import, export retrieval/cleanup UI
+and disk quota/cadence forecasts remain follow-ups.
 
 Persist a small run manifest and resolved launch configuration outside disposable
 runtime state, with links to both physical diagnostic and performance/resource
@@ -144,7 +157,14 @@ remove exports implicitly. Remove the need to restart just to clear 128 entries.
 Add recording size/cadence guidance and a bounded authenticated way to retrieve a
 finished recording. Do not turn this into arbitrary filesystem browsing.
 
-### 3. Persistent physical diagnostics and performance/resource histories
+### 3. Persistent physical diagnostics and performance/resource histories — delivered
+
+Delivered: opt-in scalar reductions/probes and resource/throughput samples,
+transactional bounded-batch writes, finished-run report/CSV, recorded probe
+provenance and history seeking. Plot statistics cover the latest 50,000 retained
+rows; whole-run time-weighted aggregates and browser transfer-history ingestion
+remain follow-ups. Resource timestamps/elapsed time use wall clocks, not a
+cross-reboot monotonic timebase. No full profiler is claimed.
 
 Diagnostic recording is independent of full particle recording and display pulls.
 Make it lightweight and opt-in; particle trajectories remain off by default.

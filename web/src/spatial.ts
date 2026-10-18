@@ -9,7 +9,7 @@ export function domainFrom(
   periodic: unknown[],
 ): Domain {
   if (
-    ![2, 3].includes(min.length) ||
+    ![1, 2, 3].includes(min.length) ||
     max.length !== min.length ||
     periodic.length !== min.length ||
     periodic.some((v) => typeof v !== "boolean" && v !== 0 && v !== 1) ||

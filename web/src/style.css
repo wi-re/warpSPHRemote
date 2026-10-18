@@ -3841,3 +3841,14 @@ kbd {
   min-width: 0;
   padding: 8px;
 }
+
+.run-report { margin: 18px 0 30px; min-width: 0; }
+.run-report p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.run-report .section-heading h3 { font-size: 17px; letter-spacing: 0; text-transform: none; }
+.run-report select { max-width: 100%; }
+.run-report .profile-controls > * { min-width: 0; }
+.profile-viewport { min-height: 420px; flex: 1 0 420px; }
+.profile-viewport .scene-tools { top: 62px; }
+.profile-viewport .scene-caption > span:last-child { display: none; }
+.main-panel:has(.profile-viewport) { overflow-y: auto; }
+.profile-viewport[data-profile-narrow="true"] .color-legend { top: 110px; bottom: auto; width: 130px; }

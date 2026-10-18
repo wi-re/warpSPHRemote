@@ -80,6 +80,14 @@ export function profile(
   const dim = p.shape[1],
     components = q.shape[1] ?? 1,
     n = p.shape[0];
+  if (
+    dim === 1 &&
+    (s.coordinate === "y" ||
+      s.coordinate === "angle" ||
+      s.component === "tangential" ||
+      s.sector)
+  )
+    throw new Error("This projection requires at least two dimensions.");
   if (s.coordinate === "z" && dim < 3)
     throw new Error("The z coordinate requires 3D data.");
   if (s.component === "z" && components > 1 && components < 3)

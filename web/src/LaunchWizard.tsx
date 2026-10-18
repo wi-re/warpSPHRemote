@@ -39,6 +39,8 @@ export function LaunchWizard({
     [duration, setDuration] = useState(3);
   const [record, setRecord] = useState(false),
     [interval, setIntervalValue] = useState(0.05);
+  const [measurementInterval, setMeasurementInterval] = useState(0);
+  const [measurements, setMeasurements] = useState(false);
   const [startPaused, setStartPaused] = useState(false);
   const [captureVideo, setCaptureVideo] = useState(false),
     [videoFPS, setVideoFPS] = useState(30),
@@ -352,6 +354,7 @@ export function LaunchWizard({
                 <section className="launch-number-field">
                   <label htmlFor="launch-duration">End time</label>
                   <NumberControl
+                    disabled={chosen.derivedEndTime}
                     id="launch-duration"
                     aria-label="End time"
                     min={0.000001}
@@ -361,7 +364,11 @@ export function LaunchWizard({
                     onValueChange={setDuration}
                     required
                   />
-                  <small>Simulation time at which to stop the run.</small>
+                  <small>
+                    {chosen.derivedEndTime
+                      ? "Derived from case parameters during initialization (for example tauFraction)."
+                      : "Simulation time at which to stop the run."}
+                  </small>
                 </section>
               </div>
               <p>
@@ -403,6 +410,34 @@ export function LaunchWizard({
                 </details>
               )}
               <div className="launch-footer">
+                {measurements && (
+                  <label>
+                    Diagnostic interval · simulation time (0 = automatic)
+                    <NumberControl
+                      aria-label="Diagnostic interval"
+                      value={measurementInterval}
+                      min={0}
+                      max={10000}
+                      step="any"
+                      onValueChange={setMeasurementInterval}
+                    />
+                    <small>
+                      Automatic targets about 200 physical samples per run.
+                      Resource counters are retained about once per wall second.
+                      GPU reductions add some overhead.
+                    </small>
+                  </label>
+                )}
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    disabled={!features.includes("diagnosticRecording")}
+                    checked={measurements}
+                    onChange={(e) => setMeasurements(e.target.checked)}
+                  />
+                  Record physical and performance diagnostics (small persistent
+                  history)
+                </label>
                 <div className="recording-controls">
                   {features.includes("recordedHistory") && (
                     <>
@@ -524,6 +559,14 @@ export function LaunchWizard({
                         : {}),
                       ...(captureVideo && features.includes("videoFromStart")
                         ? { video: { fps: videoFPS, interval: videoInterval } }
+                        : {}),
+                      ...(measurements
+                        ? {
+                            measurements: true,
+                            ...(measurementInterval > 0
+                              ? { diagnosticInterval: measurementInterval }
+                              : {}),
+                          }
                         : {}),
                       ...(features.includes("recordedHistory")
                         ? { record, exportInterval: interval }

@@ -104,7 +104,7 @@ export class BrowserSource implements TrajectorySource {
   }
   static async open(
     files: File[],
-    demo?: 2 | 3,
+    demo?: 1 | 2 | 3,
     sourceId: string = crypto.randomUUID(),
   ): Promise<BrowserSource> {
     const source = new BrowserSource();
@@ -282,7 +282,11 @@ export class ServiceSource implements TrajectorySource {
       rows.push({
         index: i,
         time: frame.time,
-        values: samplePressures(frame.arrays, probes, this.metadata.domain),
+        values: samplePressures(
+          frame.arrays,
+          probes,
+          frame.domain ?? this.metadata.domain,
+        ),
       });
     }
     return rows;

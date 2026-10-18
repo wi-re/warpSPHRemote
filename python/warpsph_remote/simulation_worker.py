@@ -44,6 +44,8 @@ def configured_spec(case, spec, entry):
     from warpSPH.runner import RunConfiguration
     settings = spec.get('configuration', {})
     simulation = {**settings.get('simulation', {}), 'nx': spec['nx'], 'tLimit': spec['duration']}
+    duration_parameter=getattr(case,'simulationParameters',{}).get('tLimit')
+    if duration_parameter and duration_parameter.readOnly: simulation.pop('tLimit',None)
     if entry.get('nativeVariants'):
         simulation['dim'] = entry['dimension']
     if spec.get('steps') is not None:
@@ -96,7 +98,7 @@ def main():
     c = next(c for c in catalogue if c["id"] == spec["preset"])
     # Registration precedes costly CUDA compilation, so the manager shows startup.
     publisher = SimulationPublisher(
-        c["name"], runtime=os.environ["WARPSPH_REMOTE_RUNTIME"], autostart=False
+        c["name"], runtime=os.environ["WARPSPH_REMOTE_RUNTIME"], autostart=False, measurements=spec.get("measurements",False), diagnostic_interval=spec.get("diagnosticInterval")
     )
     try:
         from warpSPHBootstrap import bootstrap
@@ -115,7 +117,7 @@ def main():
             store=spec["record"],
             storeMode="trajectory",
             exportInterval=spec["exportInterval"],
-            exportRoot=str(Path(os.environ["WARPSPH_REMOTE_RUNTIME"]) / "runs" / publisher.id / "exports"),
+            exportRoot=str(Path(publisher.run_directory or str(Path(os.environ["WARPSPH_REMOTE_RUNTIME"]) / "runs" / publisher.id)) / "exports"),
             show=False,
             holdPlot=False,
             progress=False,

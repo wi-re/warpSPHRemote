@@ -7,7 +7,7 @@ MAGIC = b"WPR1"
 DEFAULT_SNAPSHOT_BYTES = 128 * 1024 * 1024
 
 
-def encode_frame(arrays, *, index, time):
+def encode_frame(arrays, *, index, time, metadata=None):
     fields, chunks = {}, []
     offset = 0
     for name, value in arrays.items():
@@ -23,7 +23,7 @@ def encode_frame(arrays, *, index, time):
         fields[name] = {"dtype": dtype, "shape": list(a.shape), "offset": offset, "bytes": a.nbytes}
         chunks.append(a.tobytes())
         offset += a.nbytes
-    header = json.dumps({"version": 1, "index": index, "time": time, "arrays": fields},
+    header = json.dumps({"version": 1, "index": index, "time": time, "arrays": fields, **(metadata or {})},
                         separators=(",", ":"), allow_nan=False).encode()
     return MAGIC + struct.pack("<I", len(header)) + header + bytes((-len(header)) % 8) + b"".join(chunks)
 

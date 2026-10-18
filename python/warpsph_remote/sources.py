@@ -27,8 +27,8 @@ def numeric(a):
 
 def validate(frame):
     p = np.asarray(frame["positions"])
-    if p.ndim != 2 or p.shape[1] not in (2, 3) or not len(p):
-        raise ValueError("Positions must be a nonempty N×2 or N×3 array.")
+    if p.ndim != 2 or p.shape[1] not in (1, 2, 3) or not len(p):
+        raise ValueError("Positions must be a nonempty N×1, N×2 or N×3 array.")
     if not np.isfinite(p).all():
         raise ValueError("Frame contains nonfinite positions; inspect the source simulation.")
     for name, array in frame.items():
@@ -156,6 +156,9 @@ class HDF5Source(Source):
             if "positions" in h and isinstance(h["positions"], h5py.Group) and len(h["positions"]):
                 self.layout = "columns"
                 self.keys = sorted(h["positions"], key=natural_key)
+            elif 'frames/positions' in h:
+                self.layout='stacked'
+                self.keys=list(range(h['frames/positions'].shape[0]))
             elif "states" in h and len(h["states"]):
                 self.layout = "states"
                 self.keys = sorted(h["states"], key=natural_key)
@@ -167,6 +170,12 @@ class HDF5Source(Source):
             self.times = []
             valid_times = True
             for i, key in enumerate(self.keys):
+                if self.layout=='stacked':
+                    ds=h.get('time',h.get('times'))
+                    if isinstance(ds,h5py.Dataset) and ds.shape==(len(self.keys),): self.times.append(float(ds[i]))
+                    else:
+                        valid_times=False;self.times.append(float(i))
+                    continue
                 if f"times/{key}" in h:
                     t = float(np.asarray(h[f"times/{key}"]).item())
                 else:
@@ -186,6 +195,23 @@ class HDF5Source(Source):
                 self.times = list(map(float, range(len(self.keys))))
         self._finish()
 
+    def frame_metadata(self, index):
+        result={}
+        with h5py.File(self.path, "r") as h:
+            ds = h.get("frameMetadata/physicalBounds")
+            if ds is not None:
+                if ds.shape != (len(self.times),2,1): raise ValueError("physicalBounds must have shape [T,2,1].")
+                a = ds[index]
+                if not np.isfinite(a).all() or a[1,0]<=a[0,0]: raise ValueError("Invalid physical bounds.")
+                result['physicalBounds']=a.tolist()
+            arrays=[h.get('frameMetadata/'+name) for name in ('domainMin','domainMax','periodic')]
+            if any(a is not None for a in arrays):
+                if any(a is None or a.ndim!=2 or a.shape[0]!=len(self.times) for a in arrays): raise ValueError('Incomplete frame domain arrays [T,D].')
+                lo,hi,periodic=(a[index] for a in arrays)
+                if len(lo)!=self.dim or len(hi)!=self.dim or len(periodic)!=self.dim or not np.isfinite(lo).all() or not np.isfinite(hi).all() or np.any(hi<=lo) or not np.isin(periodic,[0,1]).all(): raise ValueError('Invalid frame domain.')
+                result['domain']=dict(min=lo.tolist(),max=hi.tolist(),periodic=periodic.astype(bool).tolist())
+        return result
+
     def _state_group(self, h, key):
         if self.layout == "checkpoint":
             return h["state"]
@@ -198,6 +224,15 @@ class HDF5Source(Source):
         key = self.keys[index]
         frame = {}
         with h5py.File(self.path, "r") as h:
+            if self.layout=='stacked':
+                n=h['frames/positions'].shape[1]
+                for name,ds in h['frames'].items():
+                    if isinstance(ds,h5py.Dataset) and ds.ndim in (2,3) and ds.shape[0]==len(self.times) and ds.shape[1]==n and (field is None or name in BASE or name==field): frame[name]=ds[index]
+                for root in ('particles','static'):
+                    if root not in h: continue
+                    for name,ds in h[root].items():
+                        if name not in frame and isinstance(ds,h5py.Dataset) and ds.ndim in (1,2) and ds.shape[0]==n and (field is None or name in BASE or name==field): frame[name]=ds[()]
+                return validate(frame)
             if self.layout == "columns":
                 n = h[f"positions/{key}"].shape[0]
                 for name, item in h.items():

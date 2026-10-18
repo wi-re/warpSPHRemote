@@ -12,7 +12,7 @@ export interface Source {
   frames: number;
   times: number[];
   timeKind: "simulation" | "frame";
-  dimension: 2 | 3;
+  dimension: 1 | 2 | 3;
   fields: Field[];
   bounds: number[][];
   identity: string;
@@ -22,6 +22,7 @@ export interface Source {
   liveConnected?: boolean;
   liveRevision?: number;
   liveStep?: number;
+  initialFrame?: number;
   videoArmed?: { fps: number; interval: number };
   scheme?: string;
   kernel?: string;
@@ -35,6 +36,8 @@ export interface Frame {
   time: number;
   arrays: Record<string, { data: NumericArray; shape: number[] }>;
   bytes: number;
+  physicalBounds?: number[][];
+  domain?: Domain;
 }
 export interface Diagnostic {
   index: number;

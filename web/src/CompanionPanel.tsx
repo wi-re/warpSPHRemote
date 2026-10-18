@@ -1,3 +1,4 @@
+import { RunReport } from "./RunReport";
 import type { FrameTransfer } from "./liveMetrics";
 import { LaunchWizard } from "./LaunchWizard";
 import { useEffect, useRef, useState } from "react";
@@ -71,6 +72,7 @@ export function CompanionPanel({
   prepareVideo,
 }: Props) {
   const backdropPress = useRef(false);
+  const [reportRun, setReportRun] = useState<Simulation | null>(null);
   const [offlineMessage, setOfflineMessage] = useState("");
   const offline = useRef(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -363,6 +365,9 @@ export function CompanionPanel({
             setCaptureInterval: changeCaptureInterval,
             configurationAvailable: run.configurationAvailable,
             inspectConfiguration: () => client.configurationOfRun(run.id),
+            setDiagnosticProbes: run.measurements
+              ? (probes) => client.diagnosticProbes(run.id, probes)
+              : undefined,
             status: run.status,
             pauseRequested: !!run.pauseRequested,
             canPause: canPauseSimulation(run, features),
@@ -787,7 +792,7 @@ export function CompanionPanel({
       }
     }
   }, [runs, awaitingFrame]);
-  async function viewHistory(id: string) {
+  async function viewHistory(id: string, time?: number) {
     if (!client || offline.current) return;
     setBusy(true);
     setError("");
@@ -797,6 +802,14 @@ export function CompanionPanel({
     await detach();
     try {
       const metadata = await client.recording(id, abort.signal);
+      if (time !== undefined)
+        metadata.initialFrame = metadata.times.reduce(
+          (best, t, i) =>
+            Math.abs(t - time) < Math.abs(metadata.times[best] - time)
+              ? i
+              : best,
+          0,
+        );
       const reader = new RecordedSource(metadata, client, id);
       callbacks.current.onFrame(reader, true);
       onClose();
@@ -1247,6 +1260,19 @@ export function CompanionPanel({
                     </button>
                   </p>
                 )}
+                {reportRun && (
+                  <RunReport
+                    key={reportRun.id}
+                    client={client}
+                    run={reportRun}
+                    onTime={
+                      reportRun.recording?.enabled
+                        ? (t) => void viewHistory(reportRun.id, t)
+                        : undefined
+                    }
+                    onClose={() => setReportRun(null)}
+                  />
+                )}
                 {(section === "running" || section === "history") && (
                   <section className="companion-runs">
                     <div className="section-heading">
@@ -1268,8 +1294,9 @@ export function CompanionPanel({
                     </div>
                     {section === "history" && (
                       <p>
-                        Run metadata for this daemon session. Replay is
-                        available only when trajectory recording was enabled.
+                        Persistent run metadata and optional diagnostic
+                        histories. Replay is available only when trajectory
+                        recording was enabled.
                       </p>
                     )}
                     {!runs.filter(
@@ -1347,6 +1374,11 @@ export function CompanionPanel({
                             {!run.recording?.enabled && (
                               <small>Trajectory not recorded</small>
                             )}
+                            {(run.libraryError || run.libraryWarning) && (
+                              <small className="inline-error">
+                                {run.libraryError || run.libraryWarning}
+                              </small>
+                            )}
                             {run.message && (
                               <small className="inline-error">
                                 {run.message}
@@ -1354,6 +1386,42 @@ export function CompanionPanel({
                             )}
                           </div>
                           <div className="run-actions">
+                            <button
+                              className="secondary-button"
+                              disabled={!features.includes("runLibrary")}
+                              onClick={() => setReportRun(run)}
+                            >
+                              Run report
+                            </button>
+                            {[
+                              "completed",
+                              "stopped",
+                              "failed",
+                              "interrupted",
+                            ].includes(run.status) && (
+                              <button
+                                className="text-button"
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      "Forget this run entry and diagnostic history? Particle exports and logs remain on disk.",
+                                    )
+                                  )
+                                    void client
+                                      .forgetRun(run.id)
+                                      .then(() => {
+                                        setRuns((old) =>
+                                          old.filter((r) => r.id !== run.id),
+                                        );
+                                        if (reportRun?.id === run.id)
+                                          setReportRun(null);
+                                      })
+                                      .catch((e) => reportError(e, client));
+                                }}
+                              >
+                                Forget entry
+                              </button>
+                            )}
                             {attached === run.id ? (
                               <button
                                 className="secondary-button"
@@ -1430,11 +1498,13 @@ export function CompanionPanel({
                         </article>
                       ))}
                     <small>
-                      Without an attached viewer, simulations send status only.
-                      Live diagnostics sample displayed snapshots (last 600);
-                      Recording is optional. View history reads exported frames
-                      while the simulation runs or is paused; Watch live returns
-                      to current snapshots.
+                      Without an attached viewer, simulations send status and
+                      any enabled diagnostic recording. Finished run reports
+                      persist across daemon restarts. Live diagnostics sample
+                      displayed snapshots (last 600); Recording is optional.
+                      View history reads exported frames while the simulation
+                      runs or is paused; Watch live returns to current
+                      snapshots.
                     </small>
                   </section>
                 )}

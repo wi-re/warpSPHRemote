@@ -1,3 +1,4 @@
+import { ProfileRenderer } from "./ProfileRenderer";
 import {
   ViewportVideo,
   videoDimensions,
@@ -316,6 +317,7 @@ export default function App() {
     [fetchMs, setFetchMs] = useState(0),
     [inspector, setInspector] = useState(true),
     [help, setHelp] = useState(false);
+  const [profileFollow, setProfileFollow] = useState(true);
   const [axes, setAxes] = useState([
     [1, 0],
     [0, 1],
@@ -325,7 +327,7 @@ export default function App() {
     (uid: string, index: number, sourceId: string) => void
   >(() => {});
   const host = useRef<HTMLDivElement>(null),
-    engine = useRef<ParticleRenderer | null>(null),
+    engine = useRef<ParticleRenderer | ProfileRenderer | null>(null),
     initialFocus = useRef<HTMLInputElement>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -557,6 +559,7 @@ export default function App() {
         setOptions((old) => ({ ...old, background: link.theme! }));
       }
     }
+    if (s.initialFrame !== undefined) setIndex(s.initialFrame);
   };
   useEffect(() => {
     let disposed = false;
@@ -602,7 +605,7 @@ export default function App() {
         for (const meta of list) add(new ServiceSource(meta));
         if (list.length) chooseSource(list[0], true);
       } else {
-        for (const dim of [2, 3] as const) {
+        for (const dim of [1, 2, 3] as const) {
           const reader = await BrowserSource.open([], dim);
           add(reader);
           if (dim === 2 && !disposed && interactions.current === 0)
@@ -704,8 +707,14 @@ export default function App() {
   useEffect(() => {
     if (!host.current) return;
     try {
-      const e = new ParticleRenderer(host.current);
+      const e =
+        source?.dimension === 1
+          ? new ProfileRenderer(host.current)
+          : new ParticleRenderer(host.current);
       engine.current = e;
+      setProfileFollow(true);
+      if (e instanceof ProfileRenderer)
+        e.onFollowChanged = () => setProfileFollow(e.follow);
       e.onPick = (i) => {
         setSelection(
           i >= 0 && e.frame && e.source
@@ -744,7 +753,7 @@ export default function App() {
         `The GPU renderer could not start: ${e instanceof Error ? e.message : String(e)}. Enable WebGL2 in your browser.`,
       );
     }
-  }, []);
+  }, [source?.dimension]);
   useEffect(() => {
     if (!source) return;
     const abort = new AbortController();
@@ -1815,11 +1824,13 @@ export default function App() {
                 )}
               <span className="dimension-badge">
                 {source?.dimension ?? "—"}D{" "}
-                {displayMode === "particles"
-                  ? "PARTICLES"
-                  : displayMode === "both"
-                    ? "GRID + PARTICLES"
-                    : "SCALAR GRID"}
+                {source?.dimension === 1
+                  ? "PROFILE"
+                  : displayMode === "particles"
+                    ? "PARTICLES"
+                    : displayMode === "both"
+                      ? "GRID + PARTICLES"
+                      : "SCALAR GRID"}
               </span>
               <IconButton
                 label="Toggle visualization controls"
@@ -1831,7 +1842,7 @@ export default function App() {
             </div>
           </div>
           <section
-            className={`viewport ${options.background === "light" ? "light" : ""} ${selection && (selected >= 0 || selection.uid) ? "has-particle-selection" : ""} ${picking ? "picking" : ""}`}
+            className={`viewport ${source?.dimension === 1 ? "profile-viewport" : ""} ${options.background === "light" ? "light" : ""} ${selection && (selected >= 0 || selection.uid) ? "has-particle-selection" : ""} ${picking ? "picking" : ""}`}
             aria-label="Particle visualization"
           >
             <div className="scene-host" ref={host} />
@@ -1871,6 +1882,26 @@ export default function App() {
               )}
             </div>
             <div className="scene-tools">
+              {source?.dimension === 1 && (
+                <button
+                  className="secondary-button compact"
+                  onClick={() => {
+                    if (engine.current instanceof ProfileRenderer) {
+                      engine.current.follow = !engine.current.follow;
+                      if (engine.current.follow) engine.current.fit();
+                    }
+                    setProfileFollow(
+                      engine.current instanceof ProfileRenderer
+                        ? engine.current.follow
+                        : true,
+                    );
+                  }}
+                >
+                  {profileFollow
+                    ? "Follow profile extents"
+                    : "Fixed profile axes"}
+                </button>
+              )}
               <button
                 className="secondary-button compact"
                 disabled={!frame || (loading && !videoSession.current)}
@@ -1989,7 +2020,11 @@ export default function App() {
                         type="checkbox"
                         aria-label="Show particle trace"
                         checked={trace.enabled}
-                        disabled={source?.identity !== "UIDs" || !!source?.live}
+                        disabled={
+                          source?.identity !== "UIDs" ||
+                          !!source?.live ||
+                          source?.dimension === 1
+                        }
                         onChange={(e) => trace.setEnabled(e.target.checked)}
                       />
                       Trace
@@ -2030,7 +2065,11 @@ export default function App() {
                     <TraceControls
                       trace={trace}
                       uid={traceUid}
-                      supported={source?.identity === "UIDs" && !source.live}
+                      supported={
+                        source?.identity === "UIDs" &&
+                        !source.live &&
+                        source.dimension !== 1
+                      }
                       onClear={clearSelection}
                       compact
                       hideToggle
@@ -2046,7 +2085,11 @@ export default function App() {
                     motion={material}
                     index={displayedIndex}
                     uid={traceUid}
-                    supported={source?.identity === "UIDs" && !source.live}
+                    supported={
+                      source?.identity === "UIDs" &&
+                      !source.live &&
+                      source.dimension !== 1
+                    }
                     onOpen={() => {
                       setMetric("material");
                       setChartsExpanded(true);
@@ -2360,7 +2403,11 @@ export default function App() {
                       <MaterialTools
                         motion={material}
                         uid={traceUid}
-                        supported={source?.identity === "UIDs" && !source.live}
+                        supported={
+                          source?.identity === "UIDs" &&
+                          !source.live &&
+                          source.dimension !== 1
+                        }
                         onPickSeed={() => {
                           setPlaying(false);
                           setPicking(true);
@@ -2371,10 +2418,30 @@ export default function App() {
                     </div>
                   )}
                   {metric === "pressure" && (
-                    <PressureControls
-                      controller={pressure}
-                      selectedPosition={selectedPosition}
-                    />
+                    <>
+                      <PressureControls
+                        controller={pressure}
+                        selectedPosition={selectedPosition}
+                      />
+                      {simulationControl?.setDiagnosticProbes && (
+                        <button
+                          className="secondary-button"
+                          onClick={() =>
+                            void simulationControl.setDiagnosticProbes!(
+                              pressure.probes,
+                            )
+                              .then(() =>
+                                setStorageStatus(
+                                  "Run probe logging updated; retained in Run report.",
+                                ),
+                              )
+                              .catch((e) => setDiagnosticError(String(e)))
+                          }
+                        >
+                          Record configured probes for this run
+                        </button>
+                      )}
+                    </>
                   )}
                   {source &&
                     (metric === "material" ? (
@@ -2420,7 +2487,11 @@ export default function App() {
                   ) : rows.length > 0 && !hasMetric ? (
                     "This quantity is unavailable in this trajectory. Missing values are not replaced with zeros."
                   ) : source?.format === "Analytical demo" ? (
-                    "Analytical field sampled on a fixed lattice; this is not an advected solver trajectory."
+                    source.dimension === 1 ? (
+                      "Prescribed 1D contraction for viewer testing; not a solver trajectory."
+                    ) : (
+                      "Analytical field sampled on a fixed lattice; this is not an advected solver trajectory."
+                    )
                   ) : (
                     "Computed from recorded numerical arrays. Playback slows when reading takes longer than the requested interval."
                   )}
@@ -2895,7 +2966,9 @@ export default function App() {
             />
             <div className="sidebar-foot">
               <span className="tiny-dot" />
-              Browser-rendered · WebGL2
+              {source?.dimension === 1
+                ? "Browser-rendered · Canvas 2D profiles"
+                : "Browser-rendered · WebGL2"}
             </div>
           </aside>
         )}
@@ -3135,8 +3208,11 @@ export default function App() {
             ...old.filter((s) => s.id !== metadata.id),
             metadata,
           ]);
-          if (first && sourceId !== metadata.id) chooseSource(metadata);
-          else if (first) {
+          if (first) {
+            if (sourceId !== metadata.id) chooseSource(metadata);
+            else if (metadata.initialFrame !== undefined)
+              seek(metadata.initialFrame);
+          } else if (first) {
             // A recovered run can reuse its ID and restart its snapshot sequence.
             setPresentation(null);
             setRetryRevision((value) => value + 1);

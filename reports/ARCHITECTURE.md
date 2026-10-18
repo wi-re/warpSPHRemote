@@ -18,6 +18,11 @@ foreground requests ahead of scans; synchronous reads already started may finish
 after cancellation, but stale results cannot replace the selected frame.
 See [formats](BROWSER_FILES.md) and [pacing](RECONSTRUCTION_PACING.md).
 
+Native 1D uses `ProfileRenderer.ts`, a Canvas 2D viewport behind the same render/
+ACK/export lifecycle. Numerical axes and signed quantity samples use N×1 source
+arrays directly. Optional frame geometry distinguishes moving physical boundaries
+from computational domains; Kidder metadata is produced by the trusted adapter.
+
 `renderer.ts` draws WebGL2 instanced discs/sphere impostors, reconstructed textures,
 flow overlays, material traces and selection. It owns camera/controls and reuses
 buffers where possible. Paused unchanged scenes do not continually redraw; LIC
@@ -58,7 +63,10 @@ separately rather than copied over the viewer connection every frame.
 
 Pause simulation and pause updates are independent. Paused identical boundaries
 do not cause repeated reconstruction. Producers re-register after daemon restart,
-including paused and video-held runs; completed run metadata is still in-memory.
+including paused and video-held runs. `library.py` transactionally persists
+completed run/configuration/recording manifests and enabled scalar/resource
+histories; loaded active entries wait for producer recovery rather than claiming
+a saved PID. Newly managed output lives in this durable data tree.
 See [companion](LOCAL_COMPANION.md), [recovery](RECONNECTION.md),
 [metrics](LIVE_METRICS.md) and [buffering](BUFFERED_CAPTURE_AND_VIDEO.md).
 
@@ -116,3 +124,15 @@ See [video contracts and verification](BUFFERED_CAPTURE_AND_VIDEO.md).
 No generated states, images, videos, logs or builds belong in source apart from
 explicitly curated demo product data. [Evidence storage](README.md) describes the
 external development tree and reproduction commands.
+
+
+## Persistent measurements
+
+`measurements.py` reduces solver arrays to scalars at requested simulation-time
+boundaries, including configured fixed probes. A bounded producer queue sends
+idempotent batches; low-rate resource/throughput status is persisted separately
+from live frame pulls. The recorder is opt-in and independent of particle export.
+`RunReport.tsx` paginates retained rows and provides charts/CSV; only 50,000 rows
+are retained for display. Recording I/O errors preserve control operation and
+leave a warning. [1D/library contracts](ONE_DIMENSION_AND_RUN_LIBRARY.md) cover
+paths, geometry layout, sampling, limitations and reproduction.

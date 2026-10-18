@@ -42,10 +42,10 @@ pairing reconnects on demand. The connection menu owns disconnect, forget, and
 **Refresh available cases**. Monitor mode remains in Running simulations; closing
 any manager dialog preserves the connection and live lease.
 
-Run history is metadata for the current daemon session, including ongoing runs.
+Run history now includes persisted completed manifests alongside ongoing runs.
 Only runs with opt-in trajectory recording offer history replay. Neither launching
-nor browsing enables recording implicitly. Completed metadata is not persisted
-across daemon restarts in this phase.
+nor browsing enables recording implicitly. Completed metadata/configuration and opt-in physical/resource histories now persist
+across daemon restarts; see [the follow-up](ONE_DIMENSION_AND_RUN_LIBRARY.md).
 
 The launch wizard has four steps: family, case, case parameters, solver/run
 settings. Back navigation retains the selected configuration. Choosing a different
@@ -59,9 +59,8 @@ The original presets are convenience aliases with curated resolution bounds and
 schematics; they do not restrict discovery. Additional registered installed cases
 appear without a viewer rebuild. Case family, variants, supported solvers,
 availability/reason, and configuration capability are advertised by the daemon.
-Cases whose advertised setup defaults to 1D remain unavailable to the current
-2D/3D viewer; the launcher does not infer extra dimensional support from generic
-configuration controls. Legacy
+Native 1D registered cases are now available to the profile viewport. Cases with
+solver-derived stopping conditions retain those semantics in the launcher. Legacy
 registered cases can launch with preset settings; fully migrated cases expose
 schema-driven controls. A discovery failure disables launch entries while retaining
 daemon pairing and simulation monitoring. Refresh repeats discovery and clears

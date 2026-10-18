@@ -31,7 +31,7 @@ restoration is disabled. Analytical 2D/3D demos need no download.
 See [demo provenance and regeneration](reports/RECORDED_DEMOS.md).
 
 The static app needs no Python, Torch, Warp, Jupyter, or simulator installation.
-WebGL2 and WebAssembly must be available in the browser.
+WebAssembly is required for HDF5; WebGL2 draws the 2D/3D scenes. Native 1D profiles use Canvas 2D.
 
 ## Develop locally
 
@@ -108,6 +108,9 @@ are explicitly identified as such; particle selection is confined to one frame.
 
 ## Current viewer
 
+- Native 1D quantity-versus-position profiles with signed values, numerical axes,
+  fixed/following extents, picking and explicit moving physical-boundary markers.
+  Includes a browser-only synthetic contraction demo (`?demo=demo-1d`).
 - Instanced WebGL2 particle discs in 2D and depth-correct sphere impostors in 3D.
 - Pan, zoom, orbit, fit current frame, camera-relative orientation triad,
   particle inspection, fixed spatial pressure probes, axis-aligned 3D clipping, and a reference grid/box.
@@ -278,14 +281,25 @@ Local companion pairing now persists per OS user/system across restarts. Retriev
 it after an implicit launch with `warpsph-companion --show-token`. Stop the daemon
 and use `warpsph-companion --rotate-token` when you deliberately want a new token.
 
+## 1D cases and retained run diagnostics
+
+Native 1D file/live/history support and the durable run library are implemented.
+Kidder uses its resolved compression duration and time-dependent physical shell
+bounds. Completed runs, configuration and enabled measurements survive daemon
+restart; managed exports/logs now live under the durable data directory.
+
+Enable **Record physical and performance diagnostics** when launching to retain
+physical reductions, configured probes, step throughput, RAM/VRAM and available
+GPU utilization/power/temperature without requiring particle recording.
+**Run history → Run report** provides charts, CSV, configuration and storage
+inspection. **Forget entry** removes only the entry/diagnostic history; exports
+and logs remain on disk. See [setup, formats, limits and verification](reports/ONE_DIMENSION_AND_RUN_LIBRARY.md).
+
 ## Useful next work
 
-The first priority is native **1D viewing and live/history support**, including
-moving/compressing physical domains such as Kidder. Next are a durable finished-run
-library and lightweight persistent physical **and performance/resource** histories:
-step timing, RAM/VRAM, GPU utilization, power and temperature should remain useful
-after a run finishes, even without particle recording. Portable analysis/launch
-recipes, case-specific reference plots and comparison/export tools follow.
-Reconstructed 3D views, shared GPU rendering and validated LCS methods remain
-separate gaps; direct remote HTTPS work is parked in favour of SSH forwarding.
-See [scope, acceptance criteria and implementation order](reports/ROADMAP.md).
+The next workflow improvements are portable analysis/launch recipes, case-specific
+reference plots and comparison/export tools. The run library still needs deliberate
+legacy import/reindex and more storage-management tools. Reconstructed 3D views,
+shared GPU rendering and validated LCS methods remain separate gaps; direct remote
+HTTPS work is parked in favour of SSH forwarding.
+See [current status and remaining priorities](reports/ROADMAP.md).

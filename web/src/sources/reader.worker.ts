@@ -99,6 +99,7 @@ self.onmessage = async (event: MessageEvent) => {
         source.times[args.index],
         args.field,
       );
+      Object.assign(frame, source.frameMetadata(args.index));
       result = frame;
       transfer = Object.values(frame.arrays).map(
         (a) => a.data.buffer as ArrayBuffer,
@@ -164,7 +165,7 @@ self.onmessage = async (event: MessageEvent) => {
           values: samplePressures(
             await read(i, "pressures"),
             args.probes,
-            source.domain,
+            source.frameMetadata(i).domain ?? source.domain,
           ),
         });
       }
@@ -192,7 +193,7 @@ self.onmessage = async (event: MessageEvent) => {
         args.settings,
         args.index,
         source.times[args.index],
-        source.domain,
+        source.frameMetadata(args.index).domain ?? source.domain,
         args.extra,
       );
     } else if (operation === "material") {
@@ -219,6 +220,12 @@ self.onmessage = async (event: MessageEvent) => {
         q = args.query;
       source.checkIndex(q.start);
       source.checkIndex(q.end);
+      const startDomain = source.frameMetadata(q.start).domain ?? source.domain;
+      const endDomain = source.frameMetadata(q.end).domain ?? source.domain;
+      if (JSON.stringify(startDomain) !== JSON.stringify(endDomain))
+        throw new Error(
+          "Material FTLE requires a fixed computational domain over the selected interval.",
+        );
       if (ftleCache?.key !== key)
         ftleCache = {
           key,
@@ -228,7 +235,7 @@ self.onmessage = async (event: MessageEvent) => {
             q,
             source.times[q.start],
             source.times[q.end],
-            source.domain,
+            startDomain,
           ),
         };
       const batch = ftleCache.context.batch(args.offset, args.count);
@@ -255,7 +262,7 @@ self.onmessage = async (event: MessageEvent) => {
             };
           grid = await gridBackend.reconstruct(
             raw,
-            source,
+            { domain: source.frameMetadata(q.index).domain ?? source.domain },
             q.field,
             q.mapping,
             q.settings,
@@ -306,7 +313,7 @@ self.onmessage = async (event: MessageEvent) => {
           };
         grid = await gridBackend.reconstruct(
           raw,
-          source,
+          { domain: source.frameMetadata(args.index).domain ?? source.domain },
           args.field,
           args.mapping,
           args.settings,

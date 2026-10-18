@@ -256,7 +256,7 @@ function ProfilePlot({
             ),
           },
           settings: current.settings,
-          domain: source.domain,
+          domain: f.domain ?? source.domain,
         });
       })().catch((e) => finish({ error: e.message }));
     };
@@ -440,10 +440,10 @@ function ProfilePlot({
           >
             {[
               "x",
-              "y",
+              ...(source.dimension > 1 ? ["y"] : []),
               ...(source.dimension === 3 ? ["z"] : []),
               "radius",
-              "angle",
+              ...(source.dimension > 1 ? ["angle"] : []),
             ].map((x) => (
               <option key={x}>{x}</option>
             ))}
@@ -458,10 +458,10 @@ function ProfilePlot({
             {[
               "magnitude",
               "x",
-              "y",
+              ...(source.dimension > 1 ? ["y"] : []),
               ...(source.dimension === 3 ? ["z"] : []),
               "radial",
-              "tangential",
+              ...(source.dimension > 1 ? ["tangential"] : []),
             ].map((c) => (
               <option key={c}>{c}</option>
             ))}

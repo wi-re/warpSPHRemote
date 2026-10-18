@@ -64,8 +64,10 @@ See the maintained [practical gaps and priorities](ROADMAP.md#partial-features-a
 The initial preview's missing-feature list has been retired: WebGPU compute,
 LIC, material neighbourhoods, live capture/control, static-field caching, remembered
 visual settings and restart recovery have since been implemented. Drawing remains
-WebGL2, and 1D ingestion, reconstructed 3D fields, complete workspaces, durable
-finished-run indexing, comparison views and general LCS remain missing.
+WebGL2 for 2D/3D, while Canvas 2D handles native 1D profiles. Reconstructed 3D
+fields, complete workspaces, comparison views and general LCS remain missing.
+Native 1D and durable finished-run/measurement indexing are now implemented;
+see [the current follow-up](ONE_DIMENSION_AND_RUN_LIBRARY.md).
 
 Unchanged numerical limits include float32 display precision, row-identity
 requirements in legacy HDF5, projected-distance particle picking and initial

@@ -46,4 +46,12 @@ def read_recording(recording, operation="metadata", index=None, field=None):
     if operation != "frame" or type(index) is not int or not 0 <= index < len(source.times):
         raise ValueError("Recorded frame is out of range.")
     arrays = source.read(index, field)
-    return encode_frame(arrays, index=index, time=source.times[index]), "application/octet-stream"
+    geometry=source.frame_metadata(index) if hasattr(source,"frame_metadata") else {}
+    model=recording.get('physicalModel')
+    if model and model.get('kind')=='kidder':
+        import math
+        t=source.times[index]
+        if 0<=t<model['tau']:
+            scale=math.sqrt(1-(t/model['tau'])**2)
+            geometry['physicalBounds']=[[model['inner']*scale],[model['outer']*scale]]
+    return encode_frame(arrays, index=index, time=source.times[index], metadata=geometry), "application/octet-stream"

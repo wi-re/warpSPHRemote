@@ -122,6 +122,43 @@ export class HDF5Source extends RawSource {
       }
     }
   }
+  frameMetadata(index: number) {
+    const result: {
+      physicalBounds?: number[][];
+      domain?: ReturnType<typeof domainFrom>;
+    } = {};
+    const ds = this.entry("frameMetadata/physicalBounds");
+    if (ds instanceof this.api.Dataset) {
+      if (
+        ds.shape?.length !== 3 ||
+        ds.shape[0] !== this.times.length ||
+        ds.shape[1] !== 2 ||
+        ds.shape[2] !== 1
+      )
+        throw new Error("physicalBounds must have shape [T,2,1].");
+      const a = Array.from(this.numeric(ds, index).data, Number);
+      if (!a.every(Number.isFinite) || a[1] <= a[0])
+        throw new Error("Invalid physical bounds.");
+      result.physicalBounds = [[a[0]], [a[1]]];
+    }
+    const domainArrays = ["domainMin", "domainMax", "periodic"].map((name) => {
+      const entity = this.entry("frameMetadata/" + name);
+      if (!(entity instanceof this.api.Dataset)) return null;
+      if (entity.shape?.length !== 2 || entity.shape[0] !== this.times.length)
+        throw new Error("Frame domain arrays must have shape [T,D].");
+      return Array.from(this.numeric(entity, index).data, Number);
+    });
+    if (domainArrays.some(Boolean)) {
+      if (domainArrays.some((a) => !a))
+        throw new Error("Incomplete per-frame domain.");
+      result.domain = domainFrom(
+        domainArrays[0]!,
+        domainArrays[1]!,
+        domainArrays[2]!,
+      );
+    }
+    return result;
+  }
   private names(group: H5.Group) {
     let set = this.keyCache.get(group.path);
     if (!set) {

@@ -112,7 +112,7 @@ class Handler(BaseHTTPRequestHandler):
                         arrays = source.read(index, field)
                         if field not in arrays:
                             raise ValueError(f"Field {field!r} is missing from this frame.")
-                        packet = encode_frame(arrays, index=index, time=source.times[index])
+                        packet = encode_frame(arrays, index=index, time=source.times[index], metadata=source.frame_metadata(index) if hasattr(source,"frame_metadata") else {})
                     self._send(packet, "application/octet-stream")
                 elif parts[3] == "diagnostics" and len(parts) == 4:
                     start = int(q.get("start", ["0"])[0])

@@ -1,3 +1,5 @@
+import type { PressureProbe } from "./sources/probes";
+import type { Measurement } from "./runMeasurements";
 import type { FrameTransfer, Resources } from "./liveMetrics";
 import { decodeFrame } from "./data";
 import { ServiceSource } from "./sources/client";
@@ -11,6 +13,7 @@ export interface Preset {
   schemes: string[];
   nx: number;
   duration: number;
+  derivedEndTime?: boolean;
   maxNx?: number;
   variants: Record<string, object>;
   image: string | null;
@@ -61,6 +64,9 @@ export interface Simulation {
     captureStep?: number;
   };
   resources?: Resources;
+  measurements?: boolean;
+  libraryError?: string;
+  libraryWarning?: string;
 }
 /** Keep capture failures visible while the producer retries and controls remain available. */
 export function liveConnectionStatus(run: Simulation): string {
@@ -72,6 +78,7 @@ export function liveConnectionStatus(run: Simulation): string {
 }
 export interface SimulationControl {
   sourceId: string;
+  setDiagnosticProbes?: (probes: PressureProbe[]) => Promise<void>;
   setVideo?: (
     active: boolean,
     interval: number,
@@ -346,6 +353,35 @@ export class CompanionClient {
     );
     this.statics = undefined;
   }
+  async diagnosticProbes(id: string, probes: PressureProbe[]) {
+    await this.request(`/v1/runs/${id}/probes`, { probes });
+  }
+  async measurements(
+    id: string,
+    after = 0,
+    signal?: AbortSignal,
+  ): Promise<{
+    samples: Measurement[];
+    next: number;
+    more: boolean;
+    status?: string;
+  }> {
+    return (
+      await this.request(
+        `/v1/runs/${id}/measurements?after=${after}`,
+        undefined,
+        signal,
+      )
+    ).json();
+  }
+  async runStorage(id: string, signal?: AbortSignal) {
+    return (
+      await this.request(`/v1/runs/${id}/storage`, undefined, signal)
+    ).json();
+  }
+  async forgetRun(id: string) {
+    await this.request(`/v1/runs/${id}/forget`, {});
+  }
   async configurationOfRun(id: string) {
     return (await this.request(`/v1/runs/${id}/configuration`)).json();
   }
@@ -425,7 +461,7 @@ export class CompanionClient {
     const info = JSON.parse(r.headers.get("X-Snapshot-Metadata") || "null");
     if (
       !info ||
-      ![2, 3].includes(info.dimension) ||
+      ![1, 2, 3].includes(info.dimension) ||
       !Array.isArray(info.fields)
     )
       throw new Error("Invalid live metadata.");
@@ -472,6 +508,8 @@ export class CompanionClient {
       sequence,
       frame: {
         ...dynamic,
+        physicalBounds: info.physicalBounds,
+        domain: info.domain,
         index: 0,
         step: info.step,
         liveRevision: sequence,

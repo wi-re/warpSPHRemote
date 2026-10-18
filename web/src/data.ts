@@ -46,10 +46,12 @@ export function decodeFrame(buffer: ArrayBuffer, allowPartial = false): Frame {
   const p = arrays.positions;
   if (
     !allowPartial &&
-    (!p || p.shape.length !== 2 || ![2, 3].includes(p.shape[1]))
+    (!p || p.shape.length !== 2 || ![1, 2, 3].includes(p.shape[1]))
   )
-    throw new Error("Frame is missing N×2 or N×3 positions.");
+    throw new Error("Frame is missing N×1, N×2 or N×3 positions.");
   return {
+    physicalBounds: header.physicalBounds,
+    domain: header.domain,
     index: header.index,
     time: header.time,
     arrays,

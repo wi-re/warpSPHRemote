@@ -198,7 +198,7 @@ stop active while paused.
 
 Preset launches leave **Record trajectory (uses disk space)** unchecked. Enable
 it deliberately and choose an export interval in simulation-time units. Managed
-exports are written under `<runtime>/runs/<id>/exports/`; they are not duplicated
+exports are written under `<library>/runs/<id>/exports/`; they are not duplicated
 into a second remote recording and are not deleted automatically. No particle
 history is recorded for an ordinary unchecked launch.
 
@@ -218,8 +218,9 @@ Switching views neither resumes a paused solver nor enables recording. History
 is still available in **Show finished simulations** after a clean stop/completion,
 as long as the daemon session and export files remain available. After a page
 refresh, remembered pairing can reconnect on demand; select the run's history
-again. Finished run metadata does not survive daemon restart even when its files
-remain on disk; surviving active producers re-register separately.
+again. Finished run manifests/configuration/recording descriptors now survive daemon
+restart in the durable library; surviving active producers re-register separately.
+See [1D support and retained run diagnostics](ONE_DIMENSION_AND_RUN_LIBRARY.md).
 
 The existing HDF5 trajectory layout is not SWMR. For an active producer, the
 daemon forwards one bounded history request to the simulation adapter; it reads
@@ -234,8 +235,7 @@ add disk/CPU work at a step boundary, so intensive analysis may slow the solver.
 
 Both trajectory exports and completed per-state HDF5 exports are supported;
 per-state history contains the initial state and `state_*` exports. The existing
-viewer supports 2D/3D numerical arrays; a 1D recording still requires a viewer
-adaptation. Only fields actually exported are available for recorded analysis.
+viewer supports native 1D profiles and 2D/3D numerical arrays. Only fields actually exported are available for recorded analysis.
 Numerical packets have no fixed particle-count cap. The live snapshot budget
 (default 128 MiB, configurable below) also bounds active history uploads. Abrupt process kills may leave an incomplete
 HDF5 file; graceful stop/normal completion is the supported history handoff.
@@ -329,7 +329,7 @@ recording before a process-group SIGTERM fallback; unregistered workers can be
 terminated immediately. External processes are never signalled by the daemon. Worker stdout/stderr and the
 normalized launch specification remain in `<runtime>/runs/<id>/`. They may contain
 useful local failure diagnostics; the webpage sees only bounded status messages.
-The manager retains at most 128 run summaries per daemon session.
+Run summaries now persist in the durable library without the old 128-entry session cap.
 
 ## Validation and regeneration
 
@@ -543,3 +543,14 @@ video export and read-only running configuration inspection are described in
 [Buffered capture and video](BUFFERED_CAPTURE_AND_VIDEO.md). Restart the daemon
 and start new simulations after updating to negotiate these adapter capabilities;
 existing Python processes retain their already-imported implementation.
+
+
+## Durable library and 1D follow-up (2026-10-18)
+
+Native 1D cases/frames now use a profile viewport and the same live/recorded source
+contract. Kidder's stopping time is solver-derived. Completed run manifests,
+configuration and enabled physical/resource diagnostics persist in a private
+SQLite library; managed logs/exports also use that data directory. Resource and
+probe recording does not enable particle trajectories. See
+[usage, paths, limits and verification](ONE_DIMENSION_AND_RUN_LIBRARY.md).
+Earlier session-only history/2D-only notes in dated reports describe older versions.

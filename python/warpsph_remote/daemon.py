@@ -16,6 +16,7 @@ import secrets
 import signal
 import stat
 import struct
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -82,11 +83,27 @@ class Manager:
         self.token = secrets.token_urlsafe(32)
         self.producer_token = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
-        self.runs = OrderedDict()
+        from .library import RunLibrary
+        self.library = RunLibrary(self.root)
+        self.runs = OrderedDict((r['id'],r) for r in self.library.load())
         self.revision = 0
         self.closed = False
         self.configuration_cache = {}
         self.catalogue = None
+
+    def persist(self,run,data=None):
+        # A full diagnostics disk must not remove pause/resume/stop control.
+        if time.monotonic()<getattr(self,'_library_retry_at',0): return
+        try:
+            self.library.save(run)
+            if data is not None and run.get('measurements'):
+                self.library.sample(run,data)
+                if data.get('measurementSamples'): self.library.physical_samples(run,data['measurementSamples'])
+            run.pop('libraryError',None)
+        except (OSError,sqlite3.Error) as error:
+            run['libraryWarning']='Some run diagnostics could not be saved during a storage error.'
+            run['libraryError']='Run history could not be saved: '+str(error)[:200]
+            self._library_retry_at=time.monotonic()+5
 
     def touch(self):
         self.revision += 1
@@ -121,8 +138,7 @@ class Manager:
             else:
                 if key and not recovery:
                     raise ValueError("Unknown managed run.")
-                if len(self.runs) >= 128:
-                    raise Conflict("Session has 128 runs; restart the daemon to clear it.")
+
                 key = key if recovery else uuid.uuid4().hex
                 run = dict(id=key, startedAt=data["startedAt"] if recovery else time.time(),
                     status="paused" if recovery and data.get("paused") else "starting",
@@ -138,6 +154,7 @@ class Manager:
                 if type(interval) not in (int,float) or not math.isfinite(interval) or interval<=0:
                     raise ValueError('Invalid recovered video interval.')
                 run['video'] = dict(active=True, interval=interval, fps=data['video'].get('fps',30), armed=data['video'].get('armed',False), nextTime=-1, ackTime=-1, ackStep=-1, orphaned=True)
+            run["measurements"] = bool(data.get("measurements",run.get("measurements",run.get("launch",{}).get("measurements",False))))
             run.update(
                 name=data["name"],
                 pid=data.get("pid"),
@@ -155,6 +172,7 @@ class Manager:
                 lease=None,
                 leaseAt=0.0,
             )
+            self.persist(run)
             self.touch()
             return key
 
@@ -180,7 +198,7 @@ class Manager:
             "performance",
             "resources",
             "streamPaused", "video",
-            "captureInterval",
+            "captureInterval", "measurements", "libraryError", "libraryWarning",
         )
         row = {k: run[k] for k in keys if k in run}
         row["pauseRequested"] = bool(run.get("pause"))
@@ -208,12 +226,21 @@ class Manager:
             "message",
             "recording",
             "performance",
-            "resources", "videoFinishing",
+            "resources", "videoFinishing", "physical", "measurementSamples",
         }
         if not isinstance(data, dict) or set(data) - allowed:
             raise ValueError("Invalid simulation status.")
         from .telemetry import validate_telemetry
         validate_telemetry(data)
+        sample_rows=data.get('measurementSamples',[])
+        if not isinstance(sample_rows,list) or len(sample_rows)>32: raise ValueError('Invalid measurement batch.')
+        for row in sample_rows:
+            if not isinstance(row,dict) or not {'step','time'}<=row.keys() or len(row)>32 or any(v is not None and (type(v) not in (int,float) or not math.isfinite(v)) for v in row.values()):
+                raise ValueError('Invalid measurement sample.')
+        physical=data.get('physical')
+        if physical is not None:
+            if not isinstance(physical,dict) or set(physical)-{'step','time','kineticEnergy','internalEnergy','totalEnergy','totalMass','momentumX','meanDensity','meanPressure'} or any(v is not None and (type(v) not in (int,float) or not math.isfinite(v)) for v in physical.values()):
+                raise ValueError('Invalid physical measurements.')
         for k in ("time", "dt"):
             if k in data and (
                 type(data[k]) not in (float, int)
@@ -232,7 +259,7 @@ class Manager:
             "stopped",
         ):
             raise ValueError("Invalid run state.")
-        if "dimension" in data and data["dimension"] not in (2, 3):
+        if "dimension" in data and (type(data["dimension"]) is not int or data["dimension"] not in (1, 2, 3)):
             raise ValueError("Invalid dimension.")
         if "scheme" in data and (
             not isinstance(data["scheme"], str) or len(data["scheme"]) > 80
@@ -247,24 +274,29 @@ class Manager:
             raise ValueError("Invalid final capture flag.")
         if "recording" in data:
             recording = data["recording"]
-            if (not isinstance(recording, dict) or set(recording) - {"path", "mode", "domain", "name"}
+            if (not isinstance(recording, dict) or set(recording) - {"path", "mode", "domain", "name", "physicalModel"}
                     or recording.get("mode") not in ("trajectory", "states")
                     or not isinstance(recording.get("path"), str)
                     or not Path(recording["path"]).is_absolute()):
                 raise ValueError("Invalid producer recording descriptor.")
+            model=recording.get('physicalModel')
+            if model is not None and (not isinstance(model,dict) or set(model)!={'kind','tau','inner','outer'} or model['kind']!='kidder' or any(type(model[k]) not in (int,float) or not math.isfinite(model[k]) or model[k]<=0 for k in ('tau','inner','outer')) or model['outer']<=model['inner']):
+                raise ValueError('Invalid physical boundary model.')
         with self.lock:
             r = self.runs[key]
-            r.update(data, updatedAt=time.time())
+            r.update({k:v for k,v in data.items() if k != "measurementSamples"}, updatedAt=time.time())
             video = r.get("video", {})
             if video.get("active") and data.get("videoFinishing") and video.get("ackTime", -1) < data.get("time", 0):
                 video["nextTime"] = -1
                 if r.get("lease") and r.get("snapshot") is None:
                     r["capture"] = True
             self.expire(r)
+            self.persist(r,data)
             self.touch()
             return dict(
                 capture=bool(r.get("capture")) and not r.get("streamPaused", False),
                 captureInterval=0 if r.get("video",{}).get("active") else r.get("captureInterval", 0.5),
+                diagnosticProbes=r.get("diagnosticProbes",[]),
                 video=r.get("video"),
                 attached=bool(r.get("lease")),
                 captureSequence=r.get("captureGeneration", 0),
@@ -469,10 +501,9 @@ class Manager:
                 raise Conflict(
                     "A managed preset is already running. Stop it before starting another."
                 )
-            if len(self.runs) >= 128:
-                raise Conflict("Run capacity reached.")
+
             key = uuid.uuid4().hex
-            run_dir = self.root / "runs" / key
+            run_dir = self.library.root / "runs" / key
             run_dir.mkdir(parents=True, mode=0o700)
             spec_path = run_dir / "launch.json"
             spec_path.write_text(json.dumps(spec))
@@ -497,6 +528,7 @@ class Manager:
             output.close()
             case = next(c for c in self.available_cases() if c["id"] == spec["preset"])
             self.runs[key] = dict(
+                measurements=bool(spec.get("measurements")),
                 id=key,
                 name=case["name"],
                 startedAt=time.time(),
@@ -512,6 +544,7 @@ class Manager:
                 stop=False,
                 pause=bool(spec.get("paused")),
             )
+            self.persist(self.runs[key])
             self.touch()
         threading.Thread(target=self._reap, args=(key, p), daemon=True).start()
         return self.public(self.runs[key])
@@ -530,6 +563,7 @@ class Manager:
                     message=f"Worker exited with code {code}. See its local simulation.log.",
                     updatedAt=time.time(),
                 )
+            self.persist(r)
             self.touch()
 
     def pause(self, key, paused):
@@ -727,7 +761,7 @@ class Handler(BaseHTTPRequestHandler):
                         "loopbackOnly": not self.remote,
                         "transport": "https" if self.remote else "http",
                         "maxSnapshotBytes": self.manager.max_snapshot_bytes,
-                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart"],
+                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart", "runLibrary", "diagnosticRecording", "oneDimensional"],
                     }
                 )
             if parts == ["v1", "configuration"]:
@@ -752,6 +786,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(body, kind)
             if len(parts) == 4 and parts[:2] == ["v1", "runs"]:
                 key, action = parts[2:]
+                if action == "measurements":
+                    if key not in self.manager.runs: raise KeyError(key)
+                    after=int(parse_qs(urlsplit(self.path).query).get('after',['0'])[0])
+                    return self.send_json(dict(**self.manager.library.samples(key,after),status=self.manager.runs[key]["status"]))
+                if action == "storage":
+                    r=self.manager.runs[key]
+                    return self.send_json(dict(recordingBytes=self.manager.library.recording_bytes(r),libraryPath=str(self.manager.library.root),diagnosticProbes=r.get("recordedProbeDefinitions",{})))
                 if action == "configuration":
                     with self.manager.lock:
                         configuration = self.manager.runs[key].get("configuration")
@@ -794,7 +835,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = self.json_body()
                 key = data.pop("id", None)
                 key = self.manager.register(data, key)
-                return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"], "video": self.manager.runs[key].get("video"), "pause":bool(self.manager.runs[key].get("pause")),
+                return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"], "video": self.manager.runs[key].get("video"), "pause":bool(self.manager.runs[key].get("pause")), "measurements":bool(self.manager.runs[key].get("measurements")), "runDirectory":str(self.manager.library.root / "runs" / key),
                     "features": ["telemetry", "producerRecovery", "bufferedCapture", "configurationInspection", "synchronizedVideo"]}, 201)
             if len(parts) == 3 and parts[0] == "producer":
                 key, action = parts[1:]
@@ -803,6 +844,7 @@ class Handler(BaseHTTPRequestHandler):
                     json.dumps(configuration, allow_nan=False)
                     with self.manager.lock:
                         self.manager.runs[key]["configuration"] = configuration
+                        self.manager.persist(self.manager.runs[key])
                     return self.send_json({"accepted": True})
                 if action == "status":
                     return self.send_json(self.manager.status(key, self.json_body()))
@@ -826,6 +868,30 @@ class Handler(BaseHTTPRequestHandler):
                 key, action = parts[2:]
                 data = self.json_body()
                 viewer = self.headers.get("X-Viewer-Id")
+                if action == "probes":
+                    from .measurements import validate_probes
+                    probes=validate_probes(data.get('probes'))
+                    with self.manager.lock:
+                        r=self.manager.runs[key]
+                        if not r.get('measurements'): raise Conflict('Enable diagnostic recording when launching this run.')
+                        definitions=r.setdefault('recordedProbeDefinitions',{})
+                        for probe in probes:
+                            if probe['id'] in definitions and definitions[probe['id']]!=probe:
+                                raise Conflict('Recorded probe definitions are fixed. Add a new probe to record a different position or method.')
+                        if len(set(definitions)|{p['id'] for p in probes})>1024: raise Conflict('Run has 1024 recorded probe definitions.')
+                        definitions.update({p['id']:p for p in probes})
+                        r['diagnosticProbes']=probes
+                        self.manager.persist(r)
+                    return self.send_json({'probes':probes})
+                if action == "forget":
+                    with self.manager.lock:
+                        r=self.manager.runs[key]
+                        if r.get('status') not in ('completed','failed','stopped','interrupted') or r.get('registered') and r.get('status')=='interrupted':
+                            raise Conflict('Only finished run metadata can be forgotten.')
+                        self.manager.library.forget(key)
+                        del self.manager.runs[key]
+                        self.manager.touch()
+                    return self.send_json({'forgotten':True,'filesRetained':True})
                 if action == "attach":
                     if not isinstance(data, dict) or set(data) - {"takeover"}:
                         raise ValueError("Invalid attachment request.")

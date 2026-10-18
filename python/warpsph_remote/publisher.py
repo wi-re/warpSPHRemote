@@ -1,6 +1,7 @@
 """Optional simulation-side resident adapter. No rendering and no Warp import."""
 
 from __future__ import annotations
+import math
 import json
 import copy
 import os
@@ -26,7 +27,15 @@ def numpy_array(value):
 
 
 class SimulationPublisher:
-    def __init__(self, name, *, runtime=None, autostart=True, interval=0.5, video=None):
+    def __init__(self, name, *, runtime=None, autostart=True, interval=0.5, video=None, measurements=False, diagnostic_interval=None):
+        from collections import deque
+        if type(measurements) is not bool or diagnostic_interval is not None and (not math.isfinite(diagnostic_interval) or diagnostic_interval<=0): raise ValueError('Invalid diagnostic recording options.')
+        self.measurements=measurements
+        self.diagnostic_interval=diagnostic_interval
+        self._measurement_rows=deque()
+        self._diagnostic_next=0.0
+        self._measurement_drops=0
+        self.diagnostic_probes=[]
         self.name = name
         self.runtime = runtime_dir(runtime)
         self.started_at = time.time()
@@ -65,7 +74,7 @@ class SimulationPublisher:
             "time": 0.0,
             "dt": 0.0,
         }
-        body = {"name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo"]}
+        body = {"measurements":measurements, "name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo"]}
         if video is not None:
             from .catalogue import validate_video
             body['videoCapture']=validate_video(video)
@@ -76,6 +85,8 @@ class SimulationPublisher:
         if registration.get("pause"):
             self.pausing.set()
         self.id = registration["id"]
+        self.measurements = registration.get("measurements", measurements)
+        self.run_directory = registration.get("runDirectory")
         if video is not None and not self.video:
             message='Update the companion daemon to capture video from the initial state.'
             self._request(f'/producer/{self.id}/status',dict(status='failed',message=message))
@@ -122,7 +133,7 @@ class SimulationPublisher:
             registration = self._request("/producer/runs", dict(
                 id=self.id, name=self.name, pid=os.getpid(), reconnect=True,
                 startedAt=self.started_at, paused=self.pausing.is_set(),
-                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, capabilities=["synchronizedVideo"]))
+                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, measurements=self.measurements, capabilities=["synchronizedVideo"]))
             if registration["id"] != self.id:
                 raise ValueError("Companion did not preserve the recovered run identity.")
             self.telemetry_supported = "telemetry" in registration.get("features", [])
@@ -148,13 +159,22 @@ class SimulationPublisher:
                 resources = self.resources.sample() if self.telemetry_supported else None
                 with self.lock:
                     meta = dict(self.meta)
+                    measurement_rows=list(self._measurement_rows)[:32]
+                    if measurement_rows: meta['measurementSamples']=measurement_rows
                     if resources is not None:
                         meta["resources"] = resources
                 response = self._request(f"/producer/{self.id}/status", meta)
+                if measurement_rows:
+                    with self.lock:
+                        for _ in measurement_rows: self._measurement_rows.popleft()
                 with self.lock:
                     self.max_snapshot_bytes = response.get("maxSnapshotBytes", self.max_snapshot_bytes)
                     self.capture_interval = response.get("captureInterval", self.capture_interval)
                     self.video = response.get("video")
+                    probes=response.get("diagnosticProbes",[])
+                    if probes != self.diagnostic_probes:
+                        self.diagnostic_probes=probes
+                        self._diagnostic_next=-1
                     if response["capture"]:
                         self.capture_target = response["captureSequence"]
                         self.static_revision = response["staticRevision"]
@@ -292,6 +312,7 @@ class SimulationPublisher:
         """Advertise existing exports, never enable storage implicitly."""
         if not ctx.spec.store or not ctx.exportPath:
             return
+        self._recording_writer=ctx.scratch.get("trajectoryFile")
         if not getattr(self, "_recording", None):
             from pathlib import Path
             mode = ctx.spec.storeMode
@@ -299,6 +320,9 @@ class SimulationPublisher:
             self._recording = dict(path=str(path.resolve()), mode=mode, name=self.name,
                 domain={name: numpy_array(getattr(ctx.config.domain, name)).tolist()
                         for name in ("min", "max", "periodic")})
+            solution=getattr(ctx,'scratch',{}).get('solution')
+            if getattr(getattr(ctx,'case',None),'name',None)=='kidder' and solution is not None:
+                self._recording['physicalModel']=dict(kind='kidder',tau=float(solution.tau),inner=float(solution.r0),outer=float(solution.r1))
             self.update(recording=self._recording)
 
     def _history(self, ctx):
@@ -319,7 +343,28 @@ class SimulationPublisher:
         with self.lock:
             self.history_pending = (body, {"Content-Type": kind, "X-History-Request": request["id"]})
 
+    def _measure(self,ctx,state,step,force=False):
+        if not self.measurements or (not force and float(state.t)<self._diagnostic_next): return
+        interval=self.diagnostic_interval or max(float(getattr(ctx.spec,"tLimit",None) or 1)/200,1e-6)
+        self._diagnostic_next=float(state.t)+interval
+        with self.lock:
+            if len(self._measurement_rows)>=1024:
+                self._measurement_drops+=1
+                self.meta['message']=f'Diagnostic recording queue full; {self._measurement_drops} samples omitted.'
+                return
+        from .measurements import physical_sample
+        with self.lock: probes=list(self.diagnostic_probes)
+        row=physical_sample(state.state,int(step),float(state.t))
+        if probes:
+            from .measurements import probe_samples
+            row.update(probe_samples(state.state,probes,ctx.config.domain))
+        row['wallTime']=time.time()
+        row['omittedSamples']=self._measurement_drops
+        with self.lock: self._measurement_rows.append(row)
+
     def post_step(self, ctx, state, step):
+        self.timing.observe(int(step),float(state.t),time.monotonic())
+        self._measure(ctx,state,step)
         self.recording(ctx)
         if self.configuration_supported and self.configuration is None:
             # Snapshot fixed setup once; adaptive dt remains a live status field.
@@ -354,7 +399,7 @@ class SimulationPublisher:
                 simulation_time = float(state.t)
                 telemetry = {}
                 if self.telemetry_supported:
-                    timing = self.timing.observe(int(step), simulation_time, time.monotonic())
+                    timing = self.timing.metrics()
                     spec = ctx.spec
                     limit_steps = getattr(spec, "nSteps", None)
                     if limit_steps is not None:
@@ -373,6 +418,7 @@ class SimulationPublisher:
                     status="paused" if paused else "running",
                     **telemetry,
                 )
+            self._measure(ctx,state,step)
             self._history(ctx)
             self._capture(ctx, state, step)
             if not held:
@@ -382,6 +428,14 @@ class SimulationPublisher:
             # Status, stop, recording reads and live captures remain serviced
             # while the integrator is held at this completed-step boundary.
             self.closed.wait(0.02)
+
+    def _physical_geometry(self, ctx, state):
+        # Trusted installed case API; never evaluate browser-supplied functions.
+        solution = getattr(ctx, 'scratch', {}).get('solution')
+        if getattr(getattr(ctx,'case',None),'name',None) == 'kidder' and solution is not None:
+            t = float(state.t)
+            return dict(physicalBounds=[[float(solution.rInner(t))],[float(solution.rOuter(t))]])
+        return {}
 
     def _capture(self, ctx, state, step):
         video=self.video or {}
@@ -414,7 +468,7 @@ class SimulationPublisher:
             }
             self.snapshot(
                 arrays, step=int(step), time_value=float(state.t), domain=domain,
-                details=dict(dt=float(ctx.config.dt), scheme=str(ctx.scheme).split(".")[-1],
+                details=dict(**self._physical_geometry(ctx, state), dt=float(ctx.config.dt), scheme=str(ctx.scheme).split(".")[-1],
                     kernel=str(getattr(ctx.config,'kernel','')).split('.')[-1],
                     integrator=str(getattr(ctx.config,'integrationScheme','')).split('.')[-1],
                     **({'videoArmed':dict(fps=video.get('fps',30),interval=video['interval'])} if video.get('armed') else {}))
@@ -445,7 +499,9 @@ class SimulationPublisher:
         return replace(case,postStep=post,extraData=extra)
 
     def finish(self, ctx, state, step):
-        """Deliver the last rendered video frame before publishing completion."""
+        """Deliver final measurements and the rendered video frame before completion."""
+        self._measure(ctx,state,step,force=True)
+        self.update(performance={**self.meta.get("performance",{}),**self.timing.metrics(),**self._capture_stats})
         if not (self.video or {}).get('active'):
             return
         self.update(videoFinishing=True, time=float(state.t), step=int(step))
@@ -456,7 +512,29 @@ class SimulationPublisher:
             self.closed.wait(.02)
         self.update(videoFinishing=False)
 
+    def _finalize_geometry(self):
+        recording=getattr(self,'_recording',None)
+        if not recording or not recording.get('physicalModel') or recording['mode']!='trajectory': return
+        writer=getattr(self,'_recording_writer',None)
+        if writer is not None and writer.id.valid: return # Never race an active HDF5 writer.
+        import h5py
+        from .sources import natural_key
+        model=recording['physicalModel']
+        try:
+            with h5py.File(recording['path'],'r+') as f:
+                keys=sorted(f['times'],key=natural_key)
+                times=np.asarray([float(np.asarray(f['times'][k][()]).item()) for k in keys])
+                if np.any(times<0) or np.any(times>=model['tau']): return
+                scale=np.sqrt(1-(times/model['tau'])**2)
+                bounds=np.stack([scale*model['inner'],scale*model['outer']],axis=1)[:,:,None]
+                group=f.require_group('frameMetadata')
+                if 'physicalBounds' in group: del group['physicalBounds']
+                group.create_dataset('physicalBounds',data=bounds)
+        except (OSError,KeyError,ValueError,TypeError) as error:
+            self.last_error='Physical boundary metadata unavailable: '+str(error)
+
     def close(self, status="completed", message=""):
+        self._finalize_geometry()
         self.closed.set()
         self.transfer_event.set()
         self.thread.join(timeout=6)
@@ -464,6 +542,14 @@ class SimulationPublisher:
         with self.lock:
             pending, self.pending = self.pending, None
             meta = {**self.meta, "status": status, "message": str(message)[:500]}
+            remaining=list(self._measurement_rows)
+            self._measurement_rows.clear()
+        while remaining:
+            batch,remaining=remaining[:32],remaining[32:]
+            try: self._request(f"/producer/{self.id}/status", {**meta,"measurementSamples":batch})
+            except (OSError,ValueError):
+                meta['message']=(meta['message']+' Diagnostic recording incomplete: final upload failed.')[:500]
+                break
         try:
             if pending:
                 self._request(f"/producer/{self.id}/snapshot", pending[0], pending[1])
@@ -481,11 +567,11 @@ class SimulationPublisher:
         self.close("failed" if kind else "completed", str(error or ""))
 
 
-def run_live(case, *, name=None, runtime=None, video=None, **overrides):
+def run_live(case, *, name=None, runtime=None, video=None, measurements=False, diagnostic_interval=None, **overrides):
     """Wrap an existing Case's postStep without changing simulator source code."""
     from warpSPH.runner import run
 
-    publisher = SimulationPublisher(name or case.name, runtime=runtime, video=video)
+    publisher = SimulationPublisher(name or case.name, runtime=runtime, video=video, measurements=measurements, diagnostic_interval=diagnostic_interval)
     try:
         result = run(publisher.bind_case(case), **overrides)
         publisher.recording(result.ctx)
