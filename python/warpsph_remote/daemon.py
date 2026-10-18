@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import fcntl
 import hmac
 import json
+import math
+import re
 import os
 from pathlib import Path
 import secrets
@@ -63,6 +65,10 @@ class Conflict(ValueError):
     pass
 
 
+class ViewerConflict(Conflict):
+    code = "viewer_conflict"
+
+
 class Manager:
     def __init__(self, root, python=None, origins=(),
                  max_snapshot_bytes=DEFAULT_SNAPSHOT_BYTES):
@@ -92,24 +98,32 @@ class Manager:
             or len(data["name"]) > 160
         ):
             raise ValueError("A simulation needs a short display name.")
+        recovery = data.get("reconnect", False)
+        if any(type(data.get(k, False)) is not bool for k in ("reconnect", "paused", "managed")):
+            raise ValueError("Invalid producer recovery flags.")
+        if recovery and (not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{32}", key)
+                or type(data.get("pid")) is not int or data["pid"] <= 0
+                or type(data.get("startedAt")) not in (int, float)
+                or not math.isfinite(data["startedAt"]) or data["startedAt"] <= 0):
+            raise ValueError("Invalid producer recovery identity.")
         with self.lock:
-            if key:
+            if key and key in self.runs:
                 run = self.runs[key]
                 if run.get("registered"):
+                    if recovery and run.get("pid") == data["pid"]:
+                        return key  # Idempotent retry after a lost registration response.
                     raise Conflict("Run already has a producer.")
             else:
+                if key and not recovery:
+                    raise ValueError("Unknown managed run.")
                 if len(self.runs) >= 128:
-                    raise Conflict(
-                        "Session has 128 runs; restart the daemon to clear it."
-                    )
-                key = uuid.uuid4().hex
-                run = dict(
-                    id=key,
-                    startedAt=time.time(),
-                    status="starting",
-                    sequence=0,
-                    createdBy="simulation",
-                )
+                    raise Conflict("Session has 128 runs; restart the daemon to clear it.")
+                key = key if recovery else uuid.uuid4().hex
+                run = dict(id=key, startedAt=data["startedAt"] if recovery else time.time(),
+                    status="paused" if recovery and data.get("paused") else "starting",
+                    sequence=0, createdBy="daemon" if recovery and data.get("managed") else "simulation",
+                    recovered=recovery,
+                    pause=bool(recovery and data.get("paused")))
                 self.runs[key] = run
             run.update(
                 name=data["name"],
@@ -244,7 +258,9 @@ class Manager:
                 staticRevision=None,
             )
 
-    def attach(self, key, viewer):
+    def attach(self, key, viewer, takeover=False):
+        if type(takeover) is not bool:
+            raise ValueError("Takeover must be a boolean.")
         if not isinstance(viewer, str) or not 16 <= len(viewer) <= 80:
             raise ValueError("Invalid viewer session.")
         with self.lock:
@@ -254,24 +270,27 @@ class Manager:
                 raise Conflict(
                     "The simulation is still starting. Attach once it registers."
                 )
+            # Validate the destination before releasing any existing connection.
+            if r.get("status") in ("completed", "failed", "stopped") and not r.get("snapshot"):
+                raise Conflict("This run has ended; attach while it is running.")
             for other in self.runs.values():
                 self.expire(other)
-                if other.get("lease") and other["lease"] != viewer:
-                    raise Conflict("A viewer already owns the live connection.")
-                if other is not r and other.get("lease") == viewer:
-                    other.update(
-                        lease=None,
-                        capture=False,
-                        snapshot=None,
-                        static=None,
-                        staticRevision=None,
-                    )
-            if r.get("status") in ("completed", "failed", "stopped") and not r.get(
-                "snapshot"
-            ):
-                raise Conflict("This run has ended; attach while it is running.")
+            if not takeover and any(other.get("lease") and other["lease"] != viewer
+                                    for other in self.runs.values()):
+                raise ViewerConflict("A viewer already owns the live connection.")
+            for other in self.runs.values():
+                if other is not r and other.get("lease") and (takeover or other["lease"] == viewer):
+                    other.update(lease=None, capture=False, snapshot=None, static=None,
+                                 staticRevision=None, metadata=None)
             if r.get("lease") != viewer:
+                # Invalidate producer uploads prepared for the displaced lease.
                 r["captureGeneration"] = r.get("captureGeneration", 0) + 1
+                if r.get("snapshot") is None:
+                    # A paused publisher must reissue its static revision, allowing
+                    # a fresh viewer to capture even at the same safe boundary.
+                    r.update(static=None, staticRevision=None, metadata=None)
+                # Otherwise retain the immutable pending snapshot + matching static
+                # arrays, including a final snapshot from a completed simulation.
             r.update(
                 lease=viewer,
                 leaseAt=time.monotonic(),
@@ -283,6 +302,8 @@ class Manager:
     def owned(self, key, viewer):
         r = self.runs[key]
         self.expire(r)
+        if viewer and r.get("lease") and r["lease"] != viewer:
+            raise ViewerConflict("The live connection was taken over by another viewer.")
         if not viewer or r.get("lease") != viewer:
             raise Conflict("Attach this viewer before requesting live data.")
         r["leaseAt"] = time.monotonic()
@@ -345,7 +366,10 @@ class Manager:
                 raise ValueError(checked.get('error', 'Invalid solver configuration.'))
         with self.lock:
             if any(
-                r.get("process") and r["process"].poll() is None
+                (r.get("process") and r["process"].poll() is None) or
+                (r.get("recovered") and r.get("createdBy") == "daemon" and
+                 r.get("status") in ("starting", "running", "paused") and
+                 time.time() - r.get("updatedAt", 0) < 10)
                 for r in self.runs.values()
             ):
                 raise Conflict(
@@ -488,8 +512,10 @@ class Manager:
                     threading.Thread(target=terminate_if_stuck, daemon=True).start()
             self.touch()
 
-    def shutdown(self):
+    def shutdown(self, *, stop_runs=True):
         self.closed = True
+        if not stop_runs:
+            return
         for key, r in list(self.runs.items()):
             if r.get("process") and r["process"].poll() is None:
                 self.stop(key)
@@ -594,7 +620,7 @@ class Handler(BaseHTTPRequestHandler):
                         "presets": self.manager.available_cases(refresh=parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]),
                         "loopbackOnly": True,
                         "maxSnapshotBytes": self.manager.max_snapshot_bytes,
-                        "features": ["pause", "recordedHistory", "configuration"],
+                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery"],
                     }
                 )
             if parts == ["v1", "configuration"]:
@@ -642,7 +668,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(body, "application/octet-stream", headers=headers)
             self.send_json({"error": "Unknown endpoint."}, 404)
         except (KeyError, ValueError, OSError) as e:
-            self.send_json({"error": str(e)}, 409 if isinstance(e, Conflict) else 400)
+            self.send_json({"error": str(e), **({"code": e.code} if isinstance(e, ViewerConflict) else {})},
+                           409 if isinstance(e, Conflict) else 400)
 
     def do_POST(self):
         parts = urlsplit(self.path).path.strip("/").split("/")
@@ -653,7 +680,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["producer", "runs"]:
                 data = self.json_body()
                 key = data.pop("id", None)
-                return self.send_json({"id": self.manager.register(data, key), "features": ["telemetry"]}, 201)
+                key = self.manager.register(data, key)
+                return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"],
+                    "features": ["telemetry", "producerRecovery"]}, 201)
             if len(parts) == 3 and parts[0] == "producer":
                 key, action = parts[1:]
                 if action == "status":
@@ -679,7 +708,9 @@ class Handler(BaseHTTPRequestHandler):
                 data = self.json_body()
                 viewer = self.headers.get("X-Viewer-Id")
                 if action == "attach":
-                    return self.send_json(self.manager.attach(key, viewer))
+                    if not isinstance(data, dict) or set(data) - {"takeover"}:
+                        raise ValueError("Invalid attachment request.")
+                    return self.send_json(self.manager.attach(key, viewer, data.get("takeover", False)))
                 if action in ("pause", "resume"):
                     self.manager.pause(key, action == "pause")
                     return self.send_json({"pauseRequested": action == "pause"})
@@ -713,7 +744,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True})
             self.send_json({"error": "Unknown endpoint."}, 404)
         except (KeyError, ValueError, OSError, TypeError) as e:
-            self.send_json({"error": str(e)}, 409 if isinstance(e, Conflict) else 400)
+            self.send_json({"error": str(e), **({"code": e.code} if isinstance(e, ViewerConflict) else {})},
+                           409 if isinstance(e, Conflict) else 400)
 
 
 def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready=None,
@@ -768,7 +800,7 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
         return True
     finally:
         if manager:
-            manager.shutdown()
+            manager.shutdown(stop_runs=False)
         if server:
             server.server_close()
         try:

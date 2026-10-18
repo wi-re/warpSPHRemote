@@ -420,3 +420,66 @@ test("identical live safe boundaries do not trigger another visualization update
     }),
   );
 });
+
+test("takeover is an explicit attachment request and ownership conflicts stay distinct from offline failures", async () => {
+  const {
+    viewerConnectionConflict,
+    companionUnavailableMessage,
+    CompanionHTTPError,
+  } = await import("../web/src/companion");
+  const original = globalThis.fetch;
+  const bodies: unknown[] = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response("{}");
+  };
+  try {
+    const client = new CompanionClient("http://127.0.0.1:8766", "fixture");
+    await client.attach("run");
+    await client.attach("run", true);
+    await client.request("/v1/runs/run/attach", {}); // Heartbeat never forces ownership.
+    assert.deepEqual(bodies, [{}, { takeover: true }, {}]);
+    assert(
+      viewerConnectionConflict(
+        new CompanionHTTPError(409, "new text", "viewer_conflict"),
+      ),
+    );
+    assert(
+      viewerConnectionConflict(
+        new CompanionHTTPError(
+          409,
+          "A viewer already owns the live connection.",
+        ),
+      ),
+    );
+    assert(
+      !viewerConnectionConflict(
+        new CompanionHTTPError(409, "stale acknowledgement"),
+      ),
+    );
+    assert.equal(
+      companionUnavailableMessage(new CompanionHTTPError(409, "lease")),
+      null,
+    );
+    assert.equal(
+      companionUnavailableMessage(new CompanionHTTPError(404, "run ended")),
+      null,
+    );
+    assert.match(
+      companionUnavailableMessage(new TypeError("Failed to fetch"))!,
+      /reconnect automatically/,
+    );
+    assert.match(
+      companionUnavailableMessage(
+        new DOMException("deadline", "TimeoutError"),
+      )!,
+      /unavailable/,
+    );
+    assert.match(
+      companionUnavailableMessage(new CompanionHTTPError(401, "bad token"))!,
+      /pair again/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});

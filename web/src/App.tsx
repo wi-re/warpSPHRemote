@@ -1824,7 +1824,7 @@ export default function App() {
                 }
                 title={
                   source?.live && !simulationControl?.canPause
-                    ? "Reconnect with an updated companion to control an active simulation"
+                    ? "Reconnect to the companion to control this simulation"
                     : undefined
                 }
                 disabled={
@@ -2622,6 +2622,11 @@ export default function App() {
             metadata,
           ]);
           if (first && sourceId !== metadata.id) chooseSource(metadata);
+          else if (first) {
+            // A recovered run can reuse its ID and restart its snapshot sequence.
+            setPresentation(null);
+            setRetryRevision((value) => value + 1);
+          }
         }}
         onDetached={(id) =>
           setSources((old) =>

@@ -10,7 +10,7 @@ import time
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import numpy as np
-from .daemon import ensure_daemon, descriptor
+from .daemon import ensure_daemon, descriptor, runtime_dir
 from .telemetry import StepTiming, ResourceSampler
 from .protocol import DEFAULT_SNAPSHOT_BYTES, encode_frame
 
@@ -28,10 +28,13 @@ def numpy_array(value):
 class SimulationPublisher:
     def __init__(self, name, *, runtime=None, autostart=True, interval=0.5):
         self.name = name
+        self.runtime = runtime_dir(runtime)
+        self.started_at = time.time()
         self.info = ensure_daemon(runtime) if autostart else descriptor(runtime)
         self.interval = interval
         self.max_snapshot_bytes = self.info.get("maxSnapshotBytes", DEFAULT_SNAPSHOT_BYTES)
         self._capture_retry_at = 0.0
+        self._transport_epoch = 0
         self.closed = threading.Event()
         self.stopping = threading.Event()
         self.pausing = threading.Event()
@@ -59,6 +62,7 @@ class SimulationPublisher:
             body["id"] = os.environ["WARPSPH_REMOTE_RUN"]
         registration = self._request("/producer/runs", body)
         self.id = registration["id"]
+        self.started_at = registration.get("startedAt", self.started_at)
         self.telemetry_supported = "telemetry" in registration.get("features", [])
         self.thread = threading.Thread(
             target=self._loop, name="warpsph-companion-publisher", daemon=True
@@ -86,6 +90,29 @@ class SimulationPublisher:
         )
         with urlopen(req, timeout=5) as r:
             return json.load(r)
+
+    def _recover(self):
+        """Rejoin an explicitly restarted daemon; never respawn one on failure."""
+        old_info = self.info
+        try:
+            self.info = descriptor(self.runtime)
+            registration = self._request("/producer/runs", dict(
+                id=self.id, name=self.name, pid=os.getpid(), reconnect=True,
+                startedAt=self.started_at, paused=self.pausing.is_set(),
+                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id))
+            if registration["id"] != self.id:
+                raise ValueError("Companion did not preserve the recovered run identity.")
+            self.telemetry_supported = "telemetry" in registration.get("features", [])
+            with self.lock:
+                self._transport_epoch += 1
+                self.pending = None
+                self.capture_target = self.captured = 0
+                self.static_revision = self._last_published = None
+                self.history_request = self.history_pending = self.history_seen = None
+            return True
+        except (OSError, ValueError, KeyError):
+            self.info = old_info
+            return False
 
     def _loop(self):
         while not self.closed.is_set():
@@ -137,6 +164,15 @@ class SimulationPublisher:
                 self.last_error = ""
             except (OSError, ValueError, KeyError) as e:
                 self.last_error = str(e)
+                # Credentials and run registry belong to the daemon process, while
+                # pause state belongs to this integrator's safe boundary.
+                try:
+                    info = descriptor(self.runtime)
+                    changed = (info.get("producerToken"), info.get("endpoint")) != (self.info.get("producerToken"), self.info.get("endpoint"))
+                except (OSError, ValueError, KeyError):
+                    changed = False
+                if changed or isinstance(e, HTTPError) and e.code in (400, 401, 404):
+                    self._recover()
                 with self.lock:
                     self.captured = (
                         0  # retry the next safe boundary after transport failure
@@ -159,6 +195,7 @@ class SimulationPublisher:
             if self.capture_target <= self.captured or self.pending is not None:
                 return False
             generation = self.capture_target
+            transport_epoch = self._transport_epoch
             expected = self.static_revision
         raw = {
             name: numpy_array(value)
@@ -233,6 +270,8 @@ class SimulationPublisher:
             ),
         }
         with self.lock:
+            if transport_epoch != self._transport_epoch or generation != self.capture_target:
+                return False
             self.captured = generation
             self._capture_retry_at = 0.0
             if self.meta.get("message", "").startswith("Live capture unavailable:"):

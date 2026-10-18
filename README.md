@@ -254,6 +254,13 @@ Updated adapters also report process/system RAM and PID-attributed NVIDIA VRAM,
 utilization, power and temperature. See [live metrics](reports/LIVE_METRICS.md)
 for measurement definitions, optional hardware support and verification.
 
+Refreshed/second viewers can explicitly **Take over connection**. An offline
+companion now offers reconnect and recovers automatically when it returns.
+Updated simulation adapters re-register surviving runs after a daemon restart,
+including paused runs, so **Resume** and **Stop** remain available. See
+[restart recovery](reports/LOCAL_COMPANION.md#viewer-takeover-and-daemon-restart-recovery)
+for upgrade requirements and shutdown behavior.
+
 Local companion pairing now persists per OS user/system across restarts. Retrieve
 it after an implicit launch with `warpsph-companion --show-token`. Stop the daemon
 and use `warpsph-companion --rotate-token` when you deliberately want a new token.

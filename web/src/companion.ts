@@ -127,10 +127,21 @@ export class CompanionHTTPError extends Error {
   constructor(
     public status: number,
     message: string,
+    public code?: string,
   ) {
     super(message);
     this.name = "CompanionHTTPError";
   }
+}
+export function viewerConnectionConflict(
+  error: unknown,
+): error is CompanionHTTPError {
+  return (
+    error instanceof CompanionHTTPError &&
+    error.status === 409 &&
+    (error.code === "viewer_conflict" ||
+      error.message === "A viewer already owns the live connection.")
+  );
 }
 export function companionConnectionMessage(error: unknown): string {
   if (error instanceof CompanionHTTPError) {
@@ -146,6 +157,22 @@ export function companionConnectionMessage(error: unknown): string {
     return error.message;
   }
   return "Could not connect to the companion.";
+}
+/** Distinguish an unreachable/restarted daemon from run or lease errors. */
+export function companionUnavailableMessage(error: unknown): string | null {
+  if (error instanceof CompanionHTTPError) {
+    if (error.status === 401)
+      return "The companion rejected the saved pairing token. Open connection settings to pair again.";
+    if (error.status >= 500)
+      return "The companion is not ready. Waiting for it to become available.";
+    return null;
+  }
+  if (
+    error instanceof Error &&
+    ["TypeError", "NetworkError", "TimeoutError"].includes(error.name)
+  )
+    return "The companion is unavailable. Start or restart it at the same address; this page will reconnect automatically.";
+  return null;
 }
 export class CompanionClient {
   readonly endpoint: string;
@@ -184,24 +211,27 @@ export class CompanionClient {
         : "local",
     };
     const response = await fetch(this.endpoint + path, init);
-    if (!response.ok)
+    if (!response.ok) {
+      const problem = await response.json().catch(() => ({}));
       throw new CompanionHTTPError(
         response.status,
-        (await response.json().catch(() => ({}))).error ||
-          `Companion returned HTTP ${response.status}.`,
+        problem.error || `Companion returned HTTP ${response.status}.`,
+        problem.code,
       );
+    }
     return response;
   }
   async session(
     signal?: AbortSignal,
     refresh = false,
+    timeoutMs = companionPairingTimeout,
   ): Promise<{ version: number; presets: Preset[]; features?: string[] }> {
     const value = await (
       await this.request(
         refresh ? "/v1/session?refresh=1" : "/v1/session",
         undefined,
         signal,
-        companionPairingTimeout,
+        timeoutMs,
       )
     ).json();
     if (value.version !== 1)
@@ -227,9 +257,12 @@ export class CompanionClient {
       await this.request("/v1/runs", spec, undefined, 65000)
     ).json()) as Simulation;
   }
-  async attach(id: string) {
+  async attach(id: string, takeover = false) {
     this.statics = undefined;
-    await this.request(`/v1/runs/${id}/attach`, {});
+    await this.request(
+      `/v1/runs/${id}/attach`,
+      takeover ? { takeover: true } : {},
+    );
   }
   async detach(id: string, keepalive = false) {
     await this.request(

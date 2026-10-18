@@ -355,7 +355,7 @@ flag, rejects non-loopback Host headers and cannot be made externally reachable
 by a simulation or website request. A future explicit remote mode must add TLS,
 CLI-only opt-in, separately scoped/revocable pairing, origin configuration and
 appropriate process exposure policy. A token alone does not encrypt traffic.
-Windows/macOS daemon installers, automatic reconnect across daemon restarts,
+Windows/macOS daemon installers,
 automatic recording of live snapshots, arbitrary case editing and launching
 multiple managed GPU workers are outside this pass.
 
@@ -489,3 +489,46 @@ checks stable viewer credentials with fresh producer credentials. It also checks
 CLI retrieval while stopped, refusal to rotate while active, and adoption of the
 rotated token by a later start. Test credentials are isolated under pytest's
 temporary XDG state directories; the tests never retain real user pairing state.
+
+
+## Viewer takeover and daemon restart recovery
+
+If a refreshed or second tab encounters an active viewer lease, its error panel
+offers **Take over connection**. This is an explicit authenticated attachment,
+not a forced heartbeat. The old viewer retains its last frame, stops renewing
+the lease and can reconnect deliberately. Simulation execution and pause state
+are unchanged. An old tab's delayed detach, acknowledgement or capture cannot
+displace the new owner. A takeover also works between two runs on the daemon's
+single live connection and for an acknowledged paused boundary.
+
+An unreachable daemon now appears as **Daemon unavailable**, with **Reconnect
+now** and **Connection settings**. The browser retains pairing and its last
+frame, disables unavailable run actions and retries at three-second intervals.
+Recovery refreshes the daemon's case catalogue and capabilities; monitor mode
+can reattach recovered runs. Authentication failures offer settings for pairing
+again rather than silently forgetting credentials. Initial pairing retains its
+existing sixty-second permission deadline; recovery requests use ten seconds.
+
+The producer thread reloads its private runtime descriptor after a daemon change
+and re-registers the same run ID, PID and original start time with the replacement
+producer credential. A paused integrator stays paused during the outage and is
+registered as paused before commands are accepted. The new daemon can then
+resume or stop it normally. Pending capture/history transport work is discarded
+and a fresh snapshot is requested after attachment. An existing recording is
+re-advertised through ordinary producer status, without enabling export.
+
+Stopping the daemon service itself now preserves its simulations; **Stop** on a
+run is the explicit operation for stopping a simulation. The daemon does not
+respawn automatically after being deliberately stopped. Producers wait for a
+replacement at the same runtime directory; its endpoint may change, while the
+browser must still be pointed at the corresponding address. Recovered workers
+are controlled cooperatively through the adapter, without claiming a new OS
+parent/child process handle or sending arbitrary signals.
+
+**Upgrade boundary:** restart the daemon and start simulations with the updated
+adapter once to enable this behavior. Python code already loaded in an older
+process does not acquire recovery retroactively; an already orphaned old adapter
+cannot be repaired by refreshing the website. Older daemons lack the takeover
+capability, and the viewer explains that a companion update/restart is needed.
+
+See [reconnection verification](RECONNECTION.md) for reproduction commands.

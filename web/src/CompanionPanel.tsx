@@ -15,7 +15,10 @@ import {
 import {
   CompanionClient,
   companionConnectionMessage,
+  companionUnavailableMessage,
+  companionRequestTimeout,
   CompanionHTTPError,
+  viewerConnectionConflict,
   canPauseSimulation,
   liveConnectionStatus,
   type SimulationControl,
@@ -39,6 +42,7 @@ interface PendingAttachment {
   run: Simulation;
   client: CompanionClient;
   reason: "launch" | "monitor" | "manual";
+  takeover?: boolean;
 }
 export type CompanionSection = "connection" | "running" | "history" | "launch";
 interface Props {
@@ -64,9 +68,15 @@ export function CompanionPanel({
   onControl,
 }: Props) {
   const backdropPress = useRef(false);
+  const [offlineMessage, setOfflineMessage] = useState("");
+  const offline = useRef(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const retryConnection = useRef<(() => void) | null>(null);
   const [monitor, setMonitor] = useState(recallMonitor);
   const monitorEnabled = useRef(monitor);
   monitorEnabled.current = monitor;
+  const [takeoverRequest, setTakeoverRequest] =
+    useState<PendingAttachment | null>(null);
   const [pending, setPending] = useState<PendingAttachment | null>(null);
   const [awaitingFrame, setAwaitingFrame] = useState<Simulation | null>(null);
   const pendingAttachment = useRef<PendingAttachment | null>(null);
@@ -124,9 +134,13 @@ export function CompanionPanel({
     enqueueAttachment,
   };
   const known = useRef<Set<string> | null>(null);
-  useEffect(() => onConnection(!!client), [client, onConnection]);
+  useEffect(
+    () => onConnection(!!client && !offlineMessage),
+    [client, offlineMessage, onConnection],
+  );
   useEffect(() => {
-    if (open && !client && saved && !connection.current && !error)
+    if (open && client && offline.current) retryConnection.current?.();
+    else if (open && !client && saved && !connection.current && !error)
       void connect(saved.endpoint, saved.token);
   }, [open]);
   useEffect(() => {
@@ -147,6 +161,9 @@ export function CompanionPanel({
     const attempt = new AbortController();
     connection.current = attempt;
     connectedClient.current = null;
+    offline.current = false;
+    setOfflineMessage("");
+    setTakeoverRequest(null);
     cancelAttachment();
     setClient(null);
     setRuns([]);
@@ -192,8 +209,55 @@ export function CompanionPanel({
       }
     }
   }
+  function forgetLiveSession() {
+    const session = active.current;
+    if (!session) return;
+    active.current = null;
+    session.abort.abort();
+    setAttached("");
+    setAwaitingFrame(null);
+    callbacks.current.onDetached(`live-${session.id}`);
+  }
+  function daemonUnavailable(owner: CompanionClient, error: unknown) {
+    const message = companionUnavailableMessage(error);
+    if (!message || connectedClient.current !== owner) return false;
+    offline.current = true;
+    setOfflineMessage(message);
+    setError("");
+    setTakeoverRequest(null);
+    cancelAttachment();
+    forgetLiveSession();
+    historySession.current?.abort();
+    setNotice(null);
+    setRuns((old) => old.map((run) => ({ ...run, stale: true })));
+    return true;
+  }
+  function reportError(
+    error: unknown,
+    owner: CompanionClient | null = connectedClient.current,
+  ) {
+    if (owner && connectedClient.current !== owner) return;
+    if (!owner || !daemonUnavailable(owner, error))
+      setError(companionConnectionMessage(error));
+  }
+  function connectionSettings() {
+    forgetLiveSession();
+    cancelAttachment();
+    connectedClient.current = null;
+    setClient(null);
+    setRuns([]);
+    setError("");
+    setTakeoverRequest(null);
+    offline.current = false;
+    setOfflineMessage("");
+  }
   async function togglePause(run: Simulation) {
-    if (!client || controlRequest.current || !canPauseSimulation(run, features))
+    if (
+      !client ||
+      offline.current ||
+      controlRequest.current ||
+      !canPauseSimulation(run, features)
+    )
       return;
     const next = !run.pauseRequested;
     controlRequest.current = run.id;
@@ -206,7 +270,7 @@ export function CompanionPanel({
         ),
       );
     } catch (e) {
-      setError((e as Error).message);
+      reportError(e, client);
       callbacks.current.onOpen();
     } finally {
       controlRequest.current = "";
@@ -285,7 +349,9 @@ export function CompanionPanel({
     run: Simulation,
     reason: PendingAttachment["reason"],
   ) {
-    if (!client || connectedClient.current !== client) return;
+    if (!client || offline.current || connectedClient.current !== client)
+      return;
+    setTakeoverRequest(null);
     known.current?.add(run.id);
     historySession.current?.abort();
     setNotice(null);
@@ -316,7 +382,7 @@ export function CompanionPanel({
     try {
       await previous.client.detach(previous.id);
     } catch (e) {
-      setError((e as Error).message);
+      reportError(e, previous.client);
     }
   }
   useEffect(() => {
@@ -324,10 +390,40 @@ export function CompanionPanel({
     let stopped = false;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
+    let polling = false;
     async function poll() {
+      if (polling || stopped) return;
+      clearTimeout(timer);
+      polling = true;
+      if (offline.current) setReconnecting(true);
       try {
+        if (offline.current) {
+          const info = await client!.session(
+            abort.signal,
+            false,
+            companionRequestTimeout,
+          );
+          if (stopped || connectedClient.current !== client) return;
+          setPresets(info.presets);
+          setFeatures(info.features || []);
+        }
         const list = await client!.runs(abort.signal);
         if (stopped || connectedClient.current !== client) return;
+        if (offline.current) {
+          known.current = null;
+          setError("");
+        }
+        offline.current = false;
+        setOfflineMessage("");
+        if (
+          active.current &&
+          !list.some((run) => run.id === active.current!.id)
+        ) {
+          forgetLiveSession();
+          setError(
+            "This simulation is no longer registered with the daemon. Surviving simulations using an updated adapter will reappear automatically.",
+          );
+        }
         const discovered = discoverSimulations(
           list,
           known.current,
@@ -345,15 +441,23 @@ export function CompanionPanel({
         setObservedAt(Date.now());
         setRuns(list);
       } catch (e) {
-        if (!stopped) setError((e as Error).message);
+        if (!stopped && !daemonUnavailable(client!, e))
+          setError(companionConnectionMessage(e));
+      } finally {
+        polling = false;
+        if (!stopped) {
+          setReconnecting(false);
+          timer = setTimeout(poll, offline.current ? 3000 : 1000);
+        }
       }
-      if (!stopped) timer = setTimeout(poll, 1000);
     }
+    retryConnection.current = () => void poll();
     void poll();
     return () => {
       stopped = true;
       abort.abort();
       clearTimeout(timer);
+      retryConnection.current = null;
     };
   }, [client]);
   useEffect(() => {
@@ -403,6 +507,7 @@ export function CompanionPanel({
     });
   }, [pending, runs, client, attachmentRevision]);
   async function attach(id: string) {
+    if (offline.current) return;
     const run = runs.find((row) => row.id === id);
     if (run) enqueueAttachment(run, "manual");
   }
@@ -417,7 +522,7 @@ export function CompanionPanel({
     try {
       await detachActive();
       if (pendingAttachment.current !== request) return;
-      await client.attach(id);
+      await client.attach(id, request.takeover);
       if (pendingAttachment.current !== request) {
         await client.detach(id).catch(() => {});
         return;
@@ -436,12 +541,35 @@ export function CompanionPanel({
       setNotice(null);
       onClose();
       setTransfer(undefined);
+      setTakeoverRequest(null);
+      function connectionLost(error: unknown) {
+        if (daemonUnavailable(client, error)) return true;
+        if (
+          !(error instanceof CompanionHTTPError) ||
+          ![400, 404, 409].includes(error.status)
+        )
+          return false;
+        if (active.current === session) {
+          active.current = null;
+          session.abort.abort();
+          clearInterval(heartbeat);
+          setAttached("");
+          setAwaitingFrame(null);
+          callbacks.current.onDetached(`live-${id}`);
+          setError(
+            "This live connection is no longer owned by this viewer. Another viewer may have taken over. The simulation is unaffected; choose Watch live to reconnect.",
+          );
+          callbacks.current.onOpen();
+        }
+        return true;
+      }
       // Lease renewal carries no particle data, even while a costly grid is being rendered.
       const heartbeat = setInterval(() => {
         void client
           .request(`/v1/runs/${id}/attach`, {}, session.abort.signal)
           .catch((e) => {
-            if (!session.abort.signal.aborted) setError(e.message);
+            if (!session.abort.signal.aborted && !connectionLost(e))
+              reportError(e, client);
           });
       }, 5000);
       const pump = async () => {
@@ -465,7 +593,11 @@ export function CompanionPanel({
                 session.waiting = true;
                 const ack = async () => {
                   if (active.current !== session) return;
-                  await client.ack(id, snapshot.sequence);
+                  try {
+                    await client.ack(id, snapshot.sequence);
+                  } catch (error) {
+                    if (!connectionLost(error)) throw error;
+                  }
                   session.waiting = false;
                 };
                 if (session.reader?.sameState(snapshot)) {
@@ -482,9 +614,9 @@ export function CompanionPanel({
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
         } catch (e) {
-          if (!session.abort.signal.aborted) {
+          if (!session.abort.signal.aborted && !connectionLost(e)) {
             setAwaitingFrame(null);
-            setError((e as Error).message);
+            reportError(e, client);
             callbacks.current.onOpen();
           }
         } finally {
@@ -495,12 +627,38 @@ export function CompanionPanel({
     } catch (e) {
       if (pendingAttachment.current === request) {
         cancelAttachment();
-        setError((e as Error).message);
+        if (daemonUnavailable(client, e)) return;
+        if (viewerConnectionConflict(e)) {
+          setTakeoverRequest(request);
+          setError(
+            features.includes("viewerTakeover")
+              ? "Another viewer holds the live connection. You can take it over here; its live updates will stop, and the simulation will keep running."
+              : "Another viewer holds the live connection. Restart the updated companion to enable Take over connection, or close the other viewer and retry.",
+          );
+        } else reportError(e, client);
         callbacks.current.onOpen();
       }
     } finally {
       setBusy(false);
     }
+  }
+  function takeOverConnection() {
+    if (
+      !takeoverRequest ||
+      takeoverRequest.client !== client ||
+      !features.includes("viewerTakeover")
+    )
+      return;
+    const request = {
+      ...takeoverRequest,
+      reason: "manual" as const,
+      takeover: true,
+    };
+    setTakeoverRequest(null);
+    setError("");
+    pendingAttachment.current = request;
+    setPending(request);
+    callbacks.current.onClose();
   }
   useEffect(() => {
     if (!awaitingFrame) return;
@@ -516,7 +674,7 @@ export function CompanionPanel({
     }
   }, [runs, awaitingFrame]);
   async function viewHistory(id: string) {
-    if (!client) return;
+    if (!client || offline.current) return;
     setBusy(true);
     setError("");
     historySession.current?.abort();
@@ -536,19 +694,19 @@ export function CompanionPanel({
           if (changed && !abort.signal.aborted)
             callbacks.current.onFrame(reader, false);
         } catch (e) {
-          if (!abort.signal.aborted) setError((e as Error).message);
+          if (!abort.signal.aborted) reportError(e, client);
         }
         if (!abort.signal.aborted) setTimeout(refresh, 2000);
       };
       setTimeout(refresh, 2000);
     } catch (e) {
-      if (!abort.signal.aborted) setError((e as Error).message);
+      if (!abort.signal.aborted) reportError(e, client);
     } finally {
       setBusy(false);
     }
   }
   async function launch(spec: object) {
-    if (!client) return;
+    if (!client || offline.current) return;
     setBusy(true);
     setError("");
     try {
@@ -557,7 +715,7 @@ export function CompanionPanel({
       setRuns((old) => [...old.filter((row) => row.id !== run.id), run]);
       enqueueAttachment(run, "launch");
     } catch (e) {
-      setError((e as Error).message);
+      reportError(e, client);
     } finally {
       setBusy(false);
     }
@@ -659,11 +817,45 @@ export function CompanionPanel({
                 <X size={20} />
               </button>
             </header>
+            {client && offlineMessage && (
+              <div className="companion-offline" role="status">
+                <strong>Daemon unavailable</strong>
+                <p>
+                  {offlineMessage} Pairing is retained. The last displayed frame
+                  remains available.
+                </p>
+                <button
+                  className="secondary-button"
+                  disabled={reconnecting}
+                  onClick={() => retryConnection.current?.()}
+                >
+                  {reconnecting ? "Reconnecting…" : "Reconnect now"}
+                </button>
+                <button className="text-button" onClick={connectionSettings}>
+                  Connection settings
+                </button>
+              </div>
+            )}
             {error && (
               <div className="companion-error" role="alert">
-                <span>{error}</span>
+                <div>
+                  <span>{error}</span>
+                  {takeoverRequest?.client === client &&
+                    features.includes("viewerTakeover") && (
+                      <button
+                        className="secondary-button"
+                        disabled={!!offlineMessage || busy}
+                        onClick={takeOverConnection}
+                      >
+                        Take over connection
+                      </button>
+                    )}
+                </div>
                 <button
-                  onClick={() => setError("")}
+                  onClick={() => {
+                    setError("");
+                    setTakeoverRequest(null);
+                  }}
                   aria-label="Dismiss companion error"
                 >
                   <X size={16} />
@@ -695,14 +887,14 @@ export function CompanionPanel({
                       }}
                       autoComplete="off"
                       spellCheck={false}
-                      disabled={busy}
+                      disabled={!!offlineMessage || busy}
                     />
                   </label>
                   <label>
                     Pairing token
                     <input
                       type="password"
-                      disabled={busy}
+                      disabled={!!offlineMessage || busy}
                       value={token}
                       onChange={(e) => setToken(e.target.value)}
                       autoComplete="off"
@@ -710,7 +902,7 @@ export function CompanionPanel({
                   </label>
                   <button
                     className="primary-button"
-                    disabled={busy || !token}
+                    disabled={!!offlineMessage || busy || !token}
                     onClick={() => void connect()}
                   >
                     <Link2 size={15} /> {busy ? "Connecting…" : "Connect"}
@@ -728,7 +920,7 @@ export function CompanionPanel({
                   <input
                     type="checkbox"
                     checked={remember}
-                    disabled={busy}
+                    disabled={!!offlineMessage || busy}
                     onChange={(e) => {
                       setRemember(e.target.checked);
                       if (!e.target.checked) {
@@ -798,7 +990,7 @@ export function CompanionPanel({
                         Disconnect
                       </button>
                       <button
-                        disabled={busy}
+                        disabled={!!offlineMessage || busy}
                         onClick={async () => {
                           setBusy(true);
                           setError("");
@@ -807,7 +999,7 @@ export function CompanionPanel({
                             setPresets(info.presets);
                             setFeatures(info.features || []);
                           } catch (e) {
-                            setError((e as Error).message);
+                            reportError(e, client);
                           } finally {
                             setBusy(false);
                           }
@@ -976,6 +1168,7 @@ export function CompanionPanel({
                               <button
                                 className="primary-button"
                                 disabled={
+                                  !!offlineMessage ||
                                   busy ||
                                   !!controlBusy ||
                                   !canPauseSimulation(run, features)
@@ -988,7 +1181,7 @@ export function CompanionPanel({
                             {run.recording?.enabled && (
                               <button
                                 className="secondary-button"
-                                disabled={busy}
+                                disabled={!!offlineMessage || busy}
                                 onClick={() => void viewHistory(run.id)}
                               >
                                 <History size={14} /> View history
@@ -1001,6 +1194,7 @@ export function CompanionPanel({
                                 <button
                                   className="secondary-button"
                                   disabled={
+                                    !!offlineMessage ||
                                     !run.registered ||
                                     !["running", "starting", "paused"].includes(
                                       run.status,
@@ -1022,6 +1216,7 @@ export function CompanionPanel({
                             <button
                               className="secondary-button"
                               disabled={
+                                !!offlineMessage ||
                                 !["running", "starting", "paused"].includes(
                                   run.status,
                                 )
@@ -1029,7 +1224,7 @@ export function CompanionPanel({
                               onClick={() => {
                                 void client
                                   .stop(run.id)
-                                  .catch((e) => setError(e.message));
+                                  .catch((e) => reportError(e, client));
                               }}
                             >
                               <Square size={12} /> Stop
@@ -1052,7 +1247,7 @@ export function CompanionPanel({
                     presets={presets}
                     features={features}
                     runs={runs}
-                    busy={busy}
+                    busy={!!offlineMessage || busy}
                     onLaunch={launch}
                   />
                 </div>

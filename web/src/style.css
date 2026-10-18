@@ -3711,3 +3711,21 @@ kbd {
 .live-metrics .properties dd {
   overflow-wrap: anywhere;
 }
+
+.companion-offline {
+  border: 1px solid var(--border);
+  padding: 16px;
+  border-radius: 8px;
+  margin: 16px 0;
+}
+.companion-offline p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.companion-offline button {
+  margin: 4px 10px 0 0;
+}
+.companion-error .secondary-button {
+  display: block;
+  margin-top: 12px;
+}
