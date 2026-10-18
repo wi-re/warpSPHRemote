@@ -1,3 +1,4 @@
+import type { FrameTransfer, Resources } from "./liveMetrics";
 import { decodeFrame } from "./data";
 import { ServiceSource } from "./sources/client";
 import { reduceDiagnostic } from "./sources/core";
@@ -39,6 +40,13 @@ export interface Simulation {
   message?: string;
   pauseRequested?: boolean;
   recording?: { enabled: boolean; mode: string };
+  performance?: {
+    stepMs?: number;
+    simulationRate?: number;
+    targetTime?: number;
+    targetStep?: number;
+  };
+  resources?: Resources;
 }
 /** Keep capture failures visible while the producer retries and controls remain available. */
 export function liveConnectionStatus(run: Simulation): string {
@@ -55,6 +63,9 @@ export interface SimulationControl {
   canPause: boolean;
   busy: boolean;
   toggle: () => void;
+  run?: Simulation;
+  observedAt?: number;
+  transfer?: FrameTransfer;
 }
 export function canPauseSimulation(
   run: Simulation | undefined,
@@ -67,6 +78,7 @@ export function canPauseSimulation(
   );
 }
 export interface Snapshot {
+  transfer?: FrameTransfer;
   frame: Frame;
   metadata: Source;
   sequence: number;
@@ -274,6 +286,7 @@ export class CompanionClient {
     await this.request(`/v1/runs/${id}/ack`, { sequence });
   }
   async snapshot(id: string, signal?: AbortSignal): Promise<Snapshot | null> {
+    const started = performance.now();
     const r = await this.request(`/v1/runs/${id}/snapshot`, undefined, signal);
     if (r.status === 204) return null;
     const revision = r.headers.get("X-Static-Revision"),
@@ -287,16 +300,23 @@ export class CompanionClient {
       !Array.isArray(info.fields)
     )
       throw new Error("Invalid live metadata.");
-    const dynamic = decodeFrame(await r.arrayBuffer());
+    const dynamicBuffer = await r.arrayBuffer();
+    let elapsed = performance.now() - started,
+      staticBytes = 0;
+    const dynamic = decodeFrame(dynamicBuffer);
     if (this.statics?.revision !== revision) {
+      const staticStarted = performance.now();
       const s = await this.request(`/v1/runs/${id}/static`, undefined, signal);
       if (s.status === 204)
         throw new Error(
           "The simulation has not provided its static particle data.",
         );
+      const staticBuffer = await s.arrayBuffer();
+      staticBytes = staticBuffer.byteLength;
+      elapsed += performance.now() - staticStarted;
       this.statics = {
         revision,
-        frame: decodeFrame(await s.arrayBuffer(), true),
+        frame: decodeFrame(staticBuffer, true),
       };
     }
     const arrays = { ...this.statics.frame.arrays, ...dynamic.arrays },
@@ -307,6 +327,13 @@ export class CompanionClient {
     if (!arrays.UIDs || !arrays.kinds)
       throw new Error("Live particle identities are missing.");
     return {
+      transfer: {
+        bytes: dynamicBuffer.byteLength + staticBytes,
+        staticBytes,
+        durationMs: elapsed,
+        receivedAt: Date.now(),
+        totalBytes: dynamicBuffer.byteLength + staticBytes,
+      },
       sequence,
       frame: {
         ...dynamic,

@@ -118,6 +118,11 @@ test("live snapshot merges exact static IDs, reuses static revision, and never a
       b = await client.snapshot("run");
     assert.equal(a?.frame.arrays.UIDs.data[0], 2n ** 54n + 1n);
     assert.equal(a?.metadata.liveStep, 10);
+    assert.equal(a?.transfer?.bytes, dynamic.byteLength + statics.byteLength);
+    assert.equal(a?.transfer?.staticBytes, statics.byteLength);
+    assert.equal(b?.transfer?.bytes, dynamic.byteLength);
+    assert.equal(b?.transfer?.staticBytes, 0);
+    assert.ok(a!.transfer!.durationMs >= 0);
     assert.equal(a?.frame.index, 0);
     assert.equal(a?.frame.step, 10);
     assert.equal(a?.frame.liveRevision, 1);

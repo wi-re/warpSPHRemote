@@ -44,7 +44,7 @@ def main():
                densities=np.ones(n, np.float32), supports=np.ones(n, np.float32)*.15,
                masses=np.ones(n, np.float32)/n, kinds=np.zeros(n, np.int32),
                UIDs=np.arange(n, dtype=np.int64))
-    ctx = NS(spec=NS(store=False), scratch={}, exportPath=None, scheme='test',
+    ctx = NS(spec=NS(store=False, tLimit=9000), scratch={}, exportPath=None, scheme='test',
              config=NS(dt=.01, domain=NS(min=np.zeros(2), max=np.ones(2),
                                         periodic=np.ones(2, dtype=bool))))
     publisher = SimulationPublisher('Live controls verification', runtime=root,

@@ -149,6 +149,8 @@ class Manager:
             "message",
             "launch",
             "registered",
+            "performance",
+            "resources",
         )
         row = {k: run[k] for k in keys if k in run}
         row["pauseRequested"] = bool(run.get("pause"))
@@ -173,9 +175,13 @@ class Manager:
             "status",
             "message",
             "recording",
+            "performance",
+            "resources",
         }
         if not isinstance(data, dict) or set(data) - allowed:
             raise ValueError("Invalid simulation status.")
+        from .telemetry import validate_telemetry
+        validate_telemetry(data)
         for k in ("time", "dt"):
             if k in data and (
                 type(data[k]) not in (float, int)
@@ -647,7 +653,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["producer", "runs"]:
                 data = self.json_body()
                 key = data.pop("id", None)
-                return self.send_json({"id": self.manager.register(data, key)}, 201)
+                return self.send_json({"id": self.manager.register(data, key), "features": ["telemetry"]}, 201)
             if len(parts) == 3 and parts[0] == "producer":
                 key, action = parts[1:]
                 if action == "status":

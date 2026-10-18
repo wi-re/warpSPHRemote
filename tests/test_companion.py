@@ -637,3 +637,40 @@ def test_daemon_descriptor_advertises_custom_snapshot_budget(tmp_path):
     with pytest.raises(Checked):
         serve(root, port=0, incidental=True, ready=ready, max_snapshot_bytes=512 * 1024**2)
     assert not (root / 'daemon.json').exists()
+
+
+def test_public_telemetry_validation(api):
+    manager, _, _ = api
+    key = manager.register(dict(name="monitoring", pid=123))
+    manager.status(key, dict(performance=dict(stepMs=2, targetTime=10),
+        resources=dict(sampledAt=100, processRamBytes=1024, gpus=[])))
+    public = manager.public(manager.runs[key])
+    assert public['performance']['stepMs'] == 2
+    assert public['resources']['processRamBytes'] == 1024
+    with pytest.raises(ValueError):
+        manager.status(key, dict(performance=dict(stepMs=float('inf'))))
+
+
+def test_old_daemon_without_telemetry_capability(api, monkeypatch):
+    from types import SimpleNamespace as NS
+    manager, _, endpoint = api
+    info = dict(endpoint=endpoint, producerToken=manager.producer_token)
+    (manager.root / "daemon.json").write_text(json.dumps(info))
+    (manager.root / "daemon.json").chmod(0o600)
+    request = SimulationPublisher._request
+    def old_register(self, path, data, headers=None):
+        result = request(self, path, data, headers)
+        if path == '/producer/runs':
+            result.pop('features', None)
+        return result
+    monkeypatch.setattr(SimulationPublisher, '_request', old_register)
+    publisher = SimulationPublisher('old daemon', runtime=manager.root, autostart=False, interval=.01)
+    try:
+        assert not publisher.telemetry_supported
+        publisher.resources.sample = lambda: pytest.fail('Old daemon must not be sent resource telemetry')
+        ctx = NS(spec=NS(store=False), scratch={}, config=NS(dt=.01), scheme='test')
+        publisher.post_step(ctx, NS(t=.01, state=NS(positions=np.zeros((2,2)))), 1)
+        assert 'performance' not in publisher.meta
+        wait_for(lambda: manager.runs[publisher.id].get('step') == 1)
+    finally:
+        publisher.close()

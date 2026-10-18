@@ -248,6 +248,12 @@ profile plots are available under **Quantity analysis → Profile / scatter plot
 See [profiles and simulation workflows](reports/PROFILES_AND_SIMULATION_WORKFLOWS.md)
 for controls, configuration requirements and reproduction checks.
 
+The left **Live performance** tracker shows solver step/Δt, recent wall time per
+step, remaining-time estimates, update intervals, frame download MB and MB/s.
+Updated adapters also report process/system RAM and PID-attributed NVIDIA VRAM,
+utilization, power and temperature. See [live metrics](reports/LIVE_METRICS.md)
+for measurement definitions, optional hardware support and verification.
+
 Local companion pairing now persists per OS user/system across restarts. Retrieve
 it after an implicit launch with `warpsph-companion --show-token`. Stop the daemon
 and use `warpsph-companion --rotate-token` when you deliberately want a new token.

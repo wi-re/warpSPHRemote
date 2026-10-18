@@ -1,3 +1,4 @@
+import type { FrameTransfer } from "./liveMetrics";
 import { LaunchWizard } from "./LaunchWizard";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -87,6 +88,8 @@ export function CompanionPanel({
     [busy, setBusy] = useState(false);
   const [attached, setAttached] = useState(""),
     [notice, setNotice] = useState<Simulation | null>(null);
+  const [observedAt, setObservedAt] = useState(Date.now);
+  const [transfer, setTransfer] = useState<FrameTransfer>();
   const [controlBusy, setControlBusy] = useState("");
   const controlRequest = useRef("");
   const [features, setFeatures] = useState<string[]>([]);
@@ -97,6 +100,7 @@ export function CompanionPanel({
     abort: AbortController;
     reader?: LiveSource;
     waiting: boolean;
+    transfer?: FrameTransfer;
   } | null>(null);
   const connection = useRef<AbortController | null>(null);
   const callbacks = useRef({
@@ -215,6 +219,9 @@ export function CompanionPanel({
       run && client
         ? {
             sourceId: `live-${run.id}`,
+            run,
+            observedAt,
+            transfer,
             status: run.status,
             pauseRequested: !!run.pauseRequested,
             canPause: canPauseSimulation(run, features),
@@ -223,7 +230,7 @@ export function CompanionPanel({
           }
         : null,
     );
-  }, [runs, attached, client, features, controlBusy]);
+  }, [runs, attached, client, features, controlBusy, transfer, observedAt]);
   async function forgetSavedPairing() {
     cancelConnection();
     const removed = forgetPairing();
@@ -335,6 +342,7 @@ export function CompanionPanel({
           active.current?.id !== discovered.notice.id
         )
           setNotice(discovered.notice);
+        setObservedAt(Date.now());
         setRuns(list);
       } catch (e) {
         if (!stopped) setError((e as Error).message);
@@ -415,7 +423,7 @@ export function CompanionPanel({
         return;
       }
       cancelAttachment();
-      const session = {
+      const session: NonNullable<typeof active.current> = {
         id,
         client,
         abort: new AbortController(),
@@ -427,6 +435,7 @@ export function CompanionPanel({
       setAwaitingFrame(request.run);
       setNotice(null);
       onClose();
+      setTransfer(undefined);
       // Lease renewal carries no particle data, even while a costly grid is being rendered.
       const heartbeat = setInterval(() => {
         void client
@@ -441,6 +450,18 @@ export function CompanionPanel({
             if (!session.waiting) {
               const snapshot = await client.snapshot(id, session.abort.signal);
               if (snapshot) {
+                if (snapshot.transfer) {
+                  const previous = session.transfer;
+                  session.transfer = {
+                    ...snapshot.transfer,
+                    intervalMs: previous
+                      ? snapshot.transfer.receivedAt - previous.receivedAt
+                      : undefined,
+                    totalBytes:
+                      (previous?.totalBytes ?? 0) + snapshot.transfer.bytes,
+                  };
+                  setTransfer(session.transfer);
+                }
                 session.waiting = true;
                 const ack = async () => {
                   if (active.current !== session) return;

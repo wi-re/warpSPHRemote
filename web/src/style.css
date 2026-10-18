@@ -3698,3 +3698,16 @@ kbd {
   gap: 8px;
   margin-top: 8px;
 }
+
+.live-metrics-detail {
+  margin-top: 12px;
+}
+.live-metrics-detail > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 0;
+}
+.live-metrics .properties dd {
+  overflow-wrap: anywhere;
+}

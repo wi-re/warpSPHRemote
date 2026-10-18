@@ -1,3 +1,4 @@
+import { LiveMetrics } from "./LiveMetrics";
 import { ProfilePlots } from "./ProfilePlots";
 import { CompanionPanel, type CompanionSection } from "./CompanionPanel";
 import { LiveSource, type SimulationControl } from "./companion";
@@ -55,7 +56,7 @@ import {
 } from "./session";
 import type { DiagnosticMetric } from "./types";
 import { useParticleTrace, TraceControls } from "./ParticleTrace";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -184,6 +185,7 @@ export default function App() {
     })),
     [range, setRange] = useState<[number, number]>([0, 1]),
     [validRange, setValidRange] = useState(true);
+  const [displayedOptions, setDisplayedOptions] = useState(options);
   const [playing, setPlaying] = useState(false),
     [loop, setLoop] = useState(true),
     [speed, setSpeed] = useState(1);
@@ -753,13 +755,14 @@ export default function App() {
       abort.abort();
     };
   }, [presentationKey, retryRevision]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!presentation || !frame || !source || !engine.current) return;
     try {
       const e = engine.current;
       // Both calls happen before the renderer's next animation frame.
       e.setFrame(frame, source, presentation.field, optionsRef.current);
       e.setFieldView(presentation.result, presentation.mode);
+      setDisplayedOptions(optionsRef.current);
       setRange([...e.range]);
       setValidRange(e.validRange);
       setEngineError("");
@@ -772,13 +775,15 @@ export default function App() {
       setEngineError(String(e));
     }
   }, [presentation, sourceId]);
-  useEffect(() => {
-    if (engine.current) {
+  useLayoutEffect(() => {
+    // Keep the old quantity, mapping and legend together while its replacement loads.
+    if (engine.current && presentation?.key === presentationKey) {
       engine.current.setOptions(options);
+      setDisplayedOptions(options);
       setRange([...engine.current.range]);
       setValidRange(engine.current.validRange);
     }
-  }, [options]);
+  }, [options, presentation, presentationKey]);
   useEffect(() => {
     engine.current?.setLICAnimation(fieldView.licAnimated, fieldView.licSpeed);
   }, [fieldView.licAnimated, fieldView.licSpeed]);
@@ -1130,11 +1135,12 @@ export default function App() {
   const scalarTitle = shownDerivative
     ? gridQuantityLabel(presentation?.result?.grid.quantity)
     : fieldLabel(presentation?.field ?? field) +
-      (isVector
+      ((source?.fields.find((f) => f.name === presentation?.field)
+        ?.components ?? 1) > 1
         ? " · " +
-          (options.mapping === "magnitude"
+          (displayedOptions.mapping === "magnitude"
             ? "magnitude"
-            : options.mapping.toUpperCase())
+            : displayedOptions.mapping.toUpperCase())
         : "");
   const seek = (i: number) => {
     setPlaying(false);
@@ -1375,6 +1381,7 @@ export default function App() {
               <dd>{frame ? `${(frame.bytes / 1e6).toFixed(2)} MB` : "—"}</dd>
             </dl>
           </section>
+          {simulationControl && <LiveMetrics control={simulationControl} />}
           <DiagnosticsPanel
             current={current}
             metrics={activeMetrics}
@@ -1742,14 +1749,14 @@ export default function App() {
                 <div className="color-legend">
                   <div className="legend-title">
                     {scalarTitle}
-                    {options.normalization === "cyclic" &&
-                    options.colorPeriod > 0
-                      ? ` · modulo ${options.colorPeriod}`
+                    {displayedOptions.normalization === "cyclic" &&
+                    displayedOptions.colorPeriod > 0
+                      ? ` · modulo ${displayedOptions.colorPeriod}`
                       : ""}
                   </div>
                   <div
                     className="legend-gradient"
-                    style={{ background: gradient(options.palette) }}
+                    style={{ background: gradient(displayedOptions.palette) }}
                   />
                   <div className="legend-values">
                     <span>{formatNumber(range[0], 4)}</span>

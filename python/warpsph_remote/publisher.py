@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import numpy as np
 from .daemon import ensure_daemon, descriptor
+from .telemetry import StepTiming, ResourceSampler
 from .protocol import DEFAULT_SNAPSHOT_BYTES, encode_frame
 
 
@@ -44,6 +45,8 @@ class SimulationPublisher:
         self.static_revision = None
         self.pending = None
         self._last_published = None
+        self.timing = StepTiming()
+        self.resources = ResourceSampler()
         self.meta = {
             "status": "starting",
             "step": 0,
@@ -54,7 +57,9 @@ class SimulationPublisher:
         body = {"name": name, "pid": os.getpid()}
         if os.environ.get("WARPSPH_REMOTE_RUN"):
             body["id"] = os.environ["WARPSPH_REMOTE_RUN"]
-        self.id = self._request("/producer/runs", body)["id"]
+        registration = self._request("/producer/runs", body)
+        self.id = registration["id"]
+        self.telemetry_supported = "telemetry" in registration.get("features", [])
         self.thread = threading.Thread(
             target=self._loop, name="warpsph-companion-publisher", daemon=True
         )
@@ -86,8 +91,11 @@ class SimulationPublisher:
         while not self.closed.is_set():
             active = False
             try:
+                resources = self.resources.sample() if self.telemetry_supported else None
                 with self.lock:
                     meta = dict(self.meta)
+                    if resources is not None:
+                        meta["resources"] = resources
                     pending = self.pending
                     self.pending = None
                     history_pending = self.history_pending
@@ -265,24 +273,41 @@ class SimulationPublisher:
 
     def post_step(self, ctx, state, step):
         self.recording(ctx)
+        pause_start = None
         while True:
             if self.stopping.is_set() or self.closed.is_set():
                 raise SimulationStopped("Stopped from the companion.")
             paused = self.pausing.is_set()
             now = time.monotonic()
+            if paused and pause_start is None:
+                pause_start = now
             if now - getattr(self, "_last_meta", 0) > 0.5 or getattr(self, "_paused", None) != paused:
+                simulation_time = float(state.t)
+                telemetry = {}
+                if self.telemetry_supported:
+                    timing = self.timing.observe(int(step), simulation_time, time.monotonic())
+                    spec = ctx.spec
+                    limit_steps = getattr(spec, "nSteps", None)
+                    if limit_steps is not None:
+                        timing["targetStep"] = max(0, int(limit_steps) + getattr(spec, "resumeStepOffset", 0) - 1)
+                    elif getattr(spec, "tLimit", None) is not None:
+                        timing["targetTime"] = float(spec.tLimit)
+                    telemetry["performance"] = timing
                 self._last_meta = now
                 self._paused = paused
                 self.update(
-                    step=int(step), time=float(state.t), dt=float(ctx.config.dt),
+                    step=int(step), time=simulation_time, dt=float(ctx.config.dt),
                     particles=int(state.state.positions.shape[0]),
                     dimension=int(state.state.positions.shape[1]),
                     scheme=str(ctx.scheme).split(".")[-1],
                     status="paused" if paused else "running",
+                    **telemetry,
                 )
             self._history(ctx)
             self._capture(ctx, state, step)
             if not paused:
+                if pause_start is not None:
+                    self.timing.exclude_pause(time.monotonic() - pause_start)
                 return
             # Status, stop, recording reads and live captures remain serviced
             # while the integrator is held at this completed-step boundary.

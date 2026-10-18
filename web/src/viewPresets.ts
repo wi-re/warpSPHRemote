@@ -55,7 +55,7 @@ export const colorPresets: ColorPreset[] = [
   },
   {
     id: "speed",
-    label: "Speed · sequential",
+    label: "Velocity · sequential",
     field: "velocities",
     quantity: "field",
     palette: "viridis",
@@ -64,7 +64,7 @@ export const colorPresets: ColorPreset[] = [
   },
   {
     id: "speed-log",
-    label: "Speed · logarithmic",
+    label: "Velocity · logarithmic",
     field: "velocities",
     quantity: "field",
     palette: "magma",
