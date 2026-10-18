@@ -1,3 +1,4 @@
+import { particleCoverageGLSL } from "./particleCoverage";
 import { periodicColorValue } from "./periodicColor";
 import { fieldFragment } from "./fieldShader";
 import {
@@ -26,6 +27,7 @@ attribute float aRadius;
 attribute float aKind;
 attribute float aIndex;
 uniform float uHeight;
+uniform float uPixelRatio;
 uniform float uScale;
 uniform float uPhysical;
 uniform float uBoundaries;
@@ -41,15 +43,22 @@ varying float vHidden;
 varying float vSelected;
 varying vec3 vCenter;
 varying float vRadius;
+varying float vPixelRadius;
 void main(){
- vUv=position.xy;vValue=aValue;vKind=aKind;vSelected=abs(aIndex-uSelected)<0.1?1.0:0.0;
+ vValue=aValue;vKind=aKind;vSelected=abs(aIndex-uSelected)<0.1?1.0:0.0;
  vHidden=(aKind<0.5&&uFluid<0.5)||(aKind>0.5&&aKind<1.5&&uBoundaries<0.5)||(aKind>1.5&&uGhosts<0.5)?1.0:0.0;
  float coordinate=uClipAxis<0.5?aCenter.x:(uClipAxis<1.5?aCenter.y:aCenter.z);
  if(uClipAxis>=0.0&&coordinate>uClip)vHidden=1.0;
  vec4 center=modelViewMatrix*vec4(aCenter,1.0);
  float radius=uPhysical>0.5?aRadius*uScale:4.0*uScale/(uHeight*projectionMatrix[1][1]);
+ // Expand geometry to contain the entire pixel filter, including its outer fringe.
+ float pixelsPerWorld=0.5*uHeight*uPixelRatio*abs(projectionMatrix[1][1]);
+ radius=max(radius,1.e-8);
+ float paddedRadius=radius+1.0/pixelsPerWorld;
+ vPixelRadius=radius*pixelsPerWorld;
+ vUv=position.xy*paddedRadius/radius;
  vRadius=radius;vCenter=center.xyz;
- center.xy+=position.xy*radius;
+ center.xy+=position.xy*paddedRadius;
  gl_Position=projectionMatrix*center;
 }`;
 const fragment = `
@@ -69,10 +78,15 @@ varying float vHidden;
 varying float vSelected;
 varying vec3 vCenter;
 varying float vRadius;
+varying float vPixelRadius;
+${particleCoverageGLSL}
 float transformValue(float v){if(uNorm<0.5)return v;if(uNorm<1.5)return log(max(v,1.e-30));float a=abs(v);return sign(v)*(a<0.01?a*(1.0-a*(0.5-a/3.0)):log(1.0+a));}
 void main(){
- float r2=dot(vUv,vUv);if(r2>1.0||vHidden>0.5)discard;
- float alpha=1.0-smoothstep(1.0-fwidth(r2)*1.5,1.0,r2);
+ if(vHidden>0.5)discard;
+ float r2=dot(vUv,vUv);
+ float alpha=diskCoverage(vUv,vPixelRadius);
+ if(alpha<=0.0)discard;
+ gl_FragDepth=gl_FragCoord.z;
  bool invalid=(vValue!=vValue)||abs(vValue)>3.4e38||(uNorm>0.5&&uNorm<1.5&&vValue<=0.0);
  float t=uNorm>2.5?fract(vValue/uColorPeriod):clamp((transformValue(vValue)-transformValue(uMin))/(transformValue(uMax)-transformValue(uMin)),0.0,1.0);
  vec3 color=texture2D(uPalette,vec2(t,0.5)).rgb;
@@ -81,7 +95,7 @@ void main(){
  if(vSelected>0.5&&r2>0.5)color=vec3(1.0);
  if(u3D>0.5){
   float z=sqrt(max(0.0,1.0-r2));
-  color*=0.70+0.30*max(0.0,dot(vec3(vUv,z),normalize(vec3(-0.35,0.5,1.0))));
+  color*=0.70+0.30*max(0.0,dot(vec3(vUv/max(1.0,sqrt(r2)),z),normalize(vec3(-0.35,0.5,1.0))));
   vec4 clip=projectionMatrix*vec4(vCenter+vec3(0.0,0.0,z*vRadius),1.0);
   gl_FragDepth=clip.z/clip.w*0.5+0.5;
  }
@@ -189,6 +203,7 @@ export class ParticleRenderer {
         uNorm: { value: 0 },
         uColorPeriod: { value: 256 },
         uHeight: { value: 1 },
+        uPixelRatio: { value: this.renderer.getPixelRatio() },
         uScale: { value: 1 },
         uPhysical: { value: 1 },
         uBoundaries: { value: 1 },
@@ -306,6 +321,7 @@ export class ParticleRenderer {
     this.camera.right = (half * w) / h;
     this.camera.updateProjectionMatrix();
     this.material.uniforms.uHeight.value = h;
+    this.material.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
     this.dirty = true;
   }
   private updateAttribute(name: string, data: Float32Array, size: number) {
@@ -858,6 +874,9 @@ export class ParticleRenderer {
           options.clip;
     }
     u.u3D.value = this.source?.dimension === 3 ? 1 : 0;
+    // Coplanar 2D coverage must blend without transparent fringes occluding disks.
+    // 3D retains sphere depth and occlusion, including the analytical cap depth.
+    this.material.depthWrite = this.source?.dimension === 3;
     u.uLight.value = options.background === "light" ? 1 : 0;
     u.uSelected.value = this.selected;
     this.grid.visible = options.grid;
