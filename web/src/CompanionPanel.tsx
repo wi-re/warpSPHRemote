@@ -713,7 +713,8 @@ export function CompanionPanel({
                 </details>
                 <small>
                   Remembered pairing stays in this browser's site storage.
-                  Restarting the companion rotates its token. The companion
+                  Updated companions keep the token across restarts. Use
+                  warpsph-companion --show-token to retrieve it. The companion
                   listens only on localhost.
                 </small>
               </section>

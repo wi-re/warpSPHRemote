@@ -23,6 +23,7 @@ import uuid
 from .catalogue import CATALOGUE, validate_launch
 from .configuration import query_solver
 from .protocol import validate_packet
+from .pairing_token import persistent_token
 
 MAX_PACKET = 128 * 1024 * 1024
 DEFAULT_ORIGINS = {
@@ -721,6 +722,7 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
         server = ThreadingHTTPServer(
             ("127.0.0.1", port), partial(Handler, manager=manager)
         )
+        manager.token = persistent_token()
         server.daemon_threads = True
         info = dict(
             version=1,
@@ -813,6 +815,25 @@ def ensure_daemon(root=None, python=None, port=8766):
     raise RuntimeError("Local daemon did not start. Inspect its daemon.log.")
 
 
+def pairing_command(root=None, *, rotate=False):
+    """Read an active credential, or manage the persistent one without starting a daemon."""
+    root = runtime_dir(root)
+    lock = os.open(root / 'daemon.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if rotate:
+                raise ValueError('Stop this daemon before rotating its pairing token.')
+            token = descriptor(root)['token']
+            # Preserve the current credential during the first upgrade from session tokens.
+            persistent_token(initial=token)
+            return token
+        return persistent_token(rotate=rotate)
+    finally:
+        os.close(lock)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--runtime", type=Path)
@@ -820,10 +841,20 @@ def main():
     p.add_argument("--python", help="Trusted simulation Python executable (CLI only).")
     p.add_argument("--origin", action="append", default=[])
     p.add_argument("--incidental", action="store_true", help=argparse.SUPPRESS)
+    credential = p.add_mutually_exclusive_group()
+    credential.add_argument('--show-token', action='store_true', help='Print the current pairing token without starting a daemon.')
+    credential.add_argument('--rotate-token', action='store_true', help='Replace the persistent pairing token while this daemon is stopped.')
     a = p.parse_args()
+    if a.show_token or a.rotate_token:
+        try:
+            print(pairing_command(a.runtime, rotate=a.rotate_token))
+        except (OSError, ValueError, KeyError) as error:
+            p.error(str(error))
+        return
     if not serve(a.runtime, a.port, a.python, a.origin, a.incidental):
         info = descriptor(a.runtime)
         if not a.incidental:
+            persistent_token(initial=info["token"])
             print(
                 f"Daemon already running: {info['endpoint']}\nPairing token: {info['token']}"
             )

@@ -22,6 +22,11 @@ from warpsph_remote.publisher import SimulationPublisher
 from warpsph_remote.protocol import encode_frame
 
 
+@pytest.fixture(autouse=True)
+def private_pairing_state(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'pairing-state'))
+
+
 @pytest.fixture
 def api(tmp_path):
     m = Manager(tmp_path / "private")
@@ -263,7 +268,8 @@ def test_desktop_handler_and_secret_fragment(tmp_path):
     assert parse_qs(urlsplit(url).fragment)["pair"] == ["secret"]
 
 
-def test_concurrent_simulation_starts_reuse_one_loopback_daemon(tmp_path):
+def test_concurrent_simulation_starts_reuse_one_loopback_daemon(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     from concurrent.futures import ThreadPoolExecutor
     from warpsph_remote.daemon import ensure_daemon
     import signal

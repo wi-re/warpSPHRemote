@@ -247,3 +247,7 @@ uses its parameter schemas when available. Generic coordinate, radial and vector
 profile plots are available under **Quantity analysis → Profile / scatter plots**.
 See [profiles and simulation workflows](reports/PROFILES_AND_SIMULATION_WORKFLOWS.md)
 for controls, configuration requirements and reproduction checks.
+
+Local companion pairing now persists per OS user/system across restarts. Retrieve
+it after an implicit launch with `warpsph-companion --show-token`. Stop the daemon
+and use `warpsph-companion --rotate-token` when you deliberately want a new token.

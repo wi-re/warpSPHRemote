@@ -22,14 +22,51 @@ Source installations must retain their usual warpSPH/Core/Boundaries import
 paths and build environment. CPU can be selected with `WARPSPH_REMOTE_DEVICE=cpu`;
 the default worker device is CUDA.
 
-The command prints `http://127.0.0.1:8766` and a fresh random pairing token.
-In the hosted viewer choose **Local simulations**, enter the address/token and
+The command prints `http://127.0.0.1:8766` and the persistent local pairing token.
+In the hosted viewer choose **Connect daemon**, enter the address/token and
 Connect. A custom `--port`, private `--runtime` directory and additional exact
 `--origin https://your-viewer.example` can be supplied on the CLI. The default
 origin allowlist contains `https://fluids.dev` and Vite localhost ports 5173/5174.
 An already-running singleton prints its existing address/token instead of
-starting a second server. Tokens last for the daemon process lifetime; restarting
-it rotates them. A completed simulation does not stop the resident daemon.
+starting a second server. Pairing tokens persist per OS user and system across restarts, reboots,
+Python environments and custom runtime directories. Producer credentials remain
+random per daemon process. A completed simulation does not stop the resident daemon.
+
+Retrieve the token at any time, including after an implicit launch, without
+starting another daemon:
+
+```bash
+warpsph-companion --show-token
+```
+
+This prints the active daemon token if running, or the stored token if stopped.
+The first use against an older running daemon preserves its existing token for
+the upgrade when no persistent token has been created yet. The normal explicit
+`warpsph-companion` invocation against an already-running daemon also performs
+that migration. After this first upgrade, browser-saved pairing survives restarts.
+
+To deliberately invalidate saved pairing, stop the daemon first, then run:
+
+```bash
+warpsph-companion --rotate-token
+warpsph-companion --python /path/to/warp/bin/python
+```
+
+Rotation prints the new token and does not start a server. It refuses while the
+selected runtime's daemon is running. All daemons for this OS user/system share
+the persistent token; other custom-runtime daemons must also restart to adopt a
+rotation. `--runtime /path/to/private/runtime` selects which active daemon is
+queried or checked before rotation.
+
+The credential lives in `$XDG_STATE_HOME/warpsph-remote/<system-scope>/pairing-token`
+(default `~/.local/state/...`), with private directories and a mode-0600 file.
+The scope hashes `/etc/machine-id`, falling back to the hostname, so shared home
+directories do not automatically share pairing between systems. File locking and
+atomic writes serialize first creation and rotation. Unsafe permissions,
+symlinks, hard links, malformed credentials and oversized token files are rejected.
+Runtime descriptor cleanup and reboot do not delete the persistent credential.
+Incidental launches never print it to simulation logs. The daemon remains bound
+to localhost; persistence does not enable external listening.
 
 The browser and companion must be on the same machine, or use an explicit SSH
 loopback forwarding arrangement. `localhost` means the browser's device. The
@@ -76,7 +113,8 @@ browser** to keep it in memory only. **Disconnect** retains remembered pairing;
 shared view links. Browser storage is scoped to the viewer origin and stores
 the bearer token as readable JSON; it is not an OS credential vault. Changing
 the address clears the prefilled saved token so it cannot follow a new server.
-Restarting the companion rotates the token; a rejected saved token is removed
+Restarting an updated companion preserves the token; explicit rotation changes
+it. A rejected saved token is removed
 and must be replaced from the terminal. Avoid sharing a
 handoff URL. `warpsph-remote-open --print-url` is available for an explicit manual
 handoff; treat its output as a credential.
@@ -202,7 +240,7 @@ HDF5 file; graceful stop/normal completion is the supported history handoff.
   concurrent simulation-triggered starts. The daemon binds **only 127.0.0.1**.
   Incidental launches cannot enable external listening and do not print a token
   into incidental logs. An explicit CLI invocation can retrieve the token.
-- A random browser bearer token controls manager/viewer endpoints. A separate
+- A persistent random browser bearer token controls manager/viewer endpoints. A separate
   random producer credential is held in a private descriptor (directory 0700,
   file 0600); it is never sent to the webpage. Host and exact Origin checks defend
   the loopback endpoint against unrelated websites and DNS rebinding.
@@ -413,3 +451,15 @@ then create `register-delayed` to allow registration. The current view should
 remain unchanged. Ctrl+C stops fixture-owned runs. This is a UI/acquisition
 check; it does not validate new numerical methods. Evidence is under
 `../warpSPHDevelopment/remote/auto-monitor-20261018/`.
+
+### Persistent pairing verification
+
+Run `PYTHONPATH=python python -m pytest tests/test_persistent_pairing.py -q` to
+exercise concurrent creation, system scoping, private file/directory checks,
+symlink and hard-link rejection, relative-path rejection, explicit rotation and
+legacy-token migration. The integration check starts and stops actual incidental
+loopback daemons, deletes the temporary runtime directory between starts, and
+checks stable viewer credentials with fresh producer credentials. It also checks
+CLI retrieval while stopped, refusal to rotate while active, and adoption of the
+rotated token by a later start. Test credentials are isolated under pytest's
+temporary XDG state directories; the tests never retain real user pairing state.
