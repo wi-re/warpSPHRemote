@@ -82,7 +82,7 @@ def test_authentication_and_browser_producer_separation(api):
         assert e.value.code == 401
     session=json.load(call("/v1/session"))
     assert session["loopbackOnly"]
-    assert set(session["features"]) == {"pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart", "runLibrary", "diagnosticRecording", "oneDimensional"}
+    assert set(session["features"]) == {"pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart", "runLibrary", "diagnosticRecording", "oneDimensional", "captureDiagnostics", "stepVideo", "recordingEstimates"}
     assert json.load(call("/producer/runs", {"name": "test"}, m.producer_token))["id"]
 
 

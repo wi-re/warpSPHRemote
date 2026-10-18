@@ -1,3 +1,5 @@
+import { videoPlan, videoPlanText, validCadence } from "./recording";
+import { memorySize } from "./liveMetrics";
 import { NumberControl } from "./NumberControl";
 import { useEffect, useState, useRef } from "react";
 import { ArrowLeft, Play } from "lucide-react";
@@ -39,6 +41,10 @@ export function LaunchWizard({
     [duration, setDuration] = useState(3);
   const [record, setRecord] = useState(false),
     [interval, setIntervalValue] = useState(0.05);
+  const [exportMode, setExportMode] = useState<"time" | "steps">("time"),
+    [exportEverySteps, setExportEverySteps] = useState(10);
+  const [videoMode, setVideoMode] = useState<"time" | "steps">("time"),
+    [videoEverySteps, setVideoEverySteps] = useState(10);
   const [measurementInterval, setMeasurementInterval] = useState(0);
   const [measurements, setMeasurements] = useState(false);
   const [startPaused, setStartPaused] = useState(false);
@@ -127,14 +133,52 @@ export function LaunchWizard({
     duration < 0.000001 ||
     duration > 10000 ||
     (captureVideo &&
-      (!Number.isInteger(videoFPS) ||
-        videoFPS < 1 ||
-        videoFPS > 120 ||
-        !Number.isFinite(videoInterval) ||
-        videoInterval < 0.000001 ||
-        videoInterval > 10000)) ||
+      !validCadence(
+        videoFPS,
+        videoInterval,
+        videoMode === "steps" ? videoEverySteps : undefined,
+      )) ||
     (record &&
-      (!Number.isFinite(interval) || interval < 0.000001 || interval > 10000));
+      (!Number.isFinite(interval) ||
+        interval < 1e-6 ||
+        interval > 10000 ||
+        (exportMode === "steps" &&
+          (!Number.isInteger(exportEverySteps) ||
+            exportEverySteps < 1 ||
+            exportEverySteps > 1e9))));
+  const resolvedDuration = chosen?.derivedEndTime ? undefined : duration;
+  const targetSteps =
+    typeof simulation.nSteps === "number" ? simulation.nSteps : undefined;
+  const initialDT =
+    typeof simulation.dt === "number" && simulation.dt > 0
+      ? simulation.dt
+      : undefined;
+  const stepCount =
+    targetSteps ??
+    (resolvedDuration !== undefined && initialDT
+      ? Math.ceil(resolvedDuration / initialDT)
+      : undefined);
+  const videoSummary =
+    videoMode === "steps"
+      ? videoPlan(
+          videoFPS,
+          0,
+          stepCount,
+          videoEverySteps,
+          targetSteps === undefined,
+        )
+      : videoPlan(videoFPS, 0, resolvedDuration, videoInterval, true);
+  const trajectoryFrames =
+    exportMode === "steps"
+      ? videoPlan(1, 0, stepCount, exportEverySteps).frames
+      : videoPlan(1, 0, resolvedDuration, interval).frames;
+  const roughFrameBytes =
+    nx ** (chosen?.dimension ?? 2) * (8 * (chosen?.dimension ?? 2) + 24) +
+    32768;
+  const roughTotal =
+    trajectoryFrames === undefined
+      ? undefined
+      : trajectoryFrames * roughFrameBytes;
   return (
     <form
       ref={form}
@@ -500,17 +544,47 @@ export function LaunchWizard({
                             />
                           </div>
                           <div className="launch-number-field">
+                            <label>Capture cadence</label>
+                            <select
+                              aria-label="Launch video capture cadence"
+                              value={videoMode}
+                              onChange={(e) =>
+                                setVideoMode(e.target.value as "time" | "steps")
+                              }
+                            >
+                              <option value="time">Simulation time</option>
+                              <option
+                                value="steps"
+                                disabled={!features.includes("stepVideo")}
+                              >
+                                Every N simulation steps
+                              </option>
+                            </select>
                             <label htmlFor="launch-video-interval">
-                              Video interval (simulation time)
+                              {videoMode === "steps"
+                                ? "Simulation steps between video frames"
+                                : "Video interval (simulation time)"}
                             </label>
                             <NumberControl
                               id="launch-video-interval"
-                              aria-label="Video interval (simulation time)"
-                              value={videoInterval}
-                              onValueChange={setVideoInterval}
-                              min={0.000001}
-                              max={10000}
-                              step="any"
+                              aria-label={
+                                videoMode === "steps"
+                                  ? "Steps between video frames"
+                                  : "Video interval (simulation time)"
+                              }
+                              value={
+                                videoMode === "steps"
+                                  ? videoEverySteps
+                                  : videoInterval
+                              }
+                              onValueChange={
+                                videoMode === "steps"
+                                  ? setVideoEverySteps
+                                  : setVideoInterval
+                              }
+                              min={videoMode === "steps" ? 1 : 0.000001}
+                              max={videoMode === "steps" ? 1e9 : 10000}
+                              step={videoMode === "steps" ? 1 : "any"}
                               required
                             />
                           </div>
@@ -518,19 +592,58 @@ export function LaunchWizard({
                       )}
                     </>
                   )}
+                  {captureVideo && (
+                    <p className="capture-estimate" role="status">
+                      {videoPlanText(videoSummary)} at {videoFPS} fps. First and
+                      final frames included.{" "}
+                      {videoMode === "steps" && stepCount === undefined
+                        ? "A step limit or initialized Δt is needed; the live export panel refines this after startup."
+                        : "Adaptive stepping may reduce a time-based capture count."}
+                    </p>
+                  )}
                   {record && (
                     <div className="launch-number-field">
+                      <label>Export cadence</label>
+                      <select
+                        aria-label="Trajectory export cadence"
+                        value={exportMode}
+                        onChange={(e) =>
+                          setExportMode(e.target.value as "time" | "steps")
+                        }
+                      >
+                        <option value="time">
+                          Simulation time (converted to steps at startup)
+                        </option>
+                        <option
+                          value="steps"
+                          disabled={!features.includes("recordingEstimates")}
+                        >
+                          Every N simulation steps
+                        </option>
+                      </select>
                       <label htmlFor="launch-export-interval">
-                        Export interval (simulation time)
+                        {exportMode === "steps"
+                          ? "Steps between trajectory frames"
+                          : "Export interval (simulation time)"}
                       </label>
                       <NumberControl
                         id="launch-export-interval"
-                        aria-label="Export interval (simulation time)"
-                        min={0.000001}
-                        max={10000}
-                        step="any"
-                        value={interval}
-                        onValueChange={setIntervalValue}
+                        aria-label={
+                          exportMode === "steps"
+                            ? "Steps between trajectory frames"
+                            : "Export interval (simulation time)"
+                        }
+                        min={exportMode === "steps" ? 1 : 0.000001}
+                        max={exportMode === "steps" ? 1e9 : 10000}
+                        step={exportMode === "steps" ? 1 : "any"}
+                        value={
+                          exportMode === "steps" ? exportEverySteps : interval
+                        }
+                        onValueChange={
+                          exportMode === "steps"
+                            ? setExportEverySteps
+                            : setIntervalValue
+                        }
                         required
                       />
                     </div>
@@ -540,6 +653,16 @@ export function LaunchWizard({
                   <p role="status">
                     A managed simulation is already active. Stop it before
                     launching another.
+                  </p>
+                )}
+                {record && (
+                  <p className="capture-estimate" role="status">
+                    {roughTotal !== undefined
+                      ? `Before initialization: roughly ${memorySize(roughTotal * 0.5)}–${memorySize(roughTotal * 3)} for ≈ ${trajectoryFrames?.toLocaleString()} frames.`
+                      : "Storage estimate available after initialization."}{" "}
+                    Geometry, boundaries and extra fields affect size. The live
+                    panel refines this from actual initialized arrays; adaptive
+                    Δt changes projected counts.
                   </p>
                 )}
                 <button
@@ -558,7 +681,15 @@ export function LaunchWizard({
                         ? { paused: startPaused || captureVideo }
                         : {}),
                       ...(captureVideo && features.includes("videoFromStart")
-                        ? { video: { fps: videoFPS, interval: videoInterval } }
+                        ? {
+                            video: {
+                              fps: videoFPS,
+                              interval: videoInterval,
+                              ...(videoMode === "steps"
+                                ? { everySteps: videoEverySteps }
+                                : {}),
+                            },
+                          }
                         : {}),
                       ...(measurements
                         ? {
@@ -569,7 +700,13 @@ export function LaunchWizard({
                           }
                         : {}),
                       ...(features.includes("recordedHistory")
-                        ? { record, exportInterval: interval }
+                        ? {
+                            record,
+                            exportInterval: interval,
+                            ...(record && exportMode === "steps"
+                              ? { exportEverySteps }
+                              : {}),
+                          }
                         : {}),
                       ...(schema
                         ? {

@@ -15,6 +15,7 @@ export interface Preset {
   duration: number;
   derivedEndTime?: boolean;
   maxNx?: number;
+  dimension?: number;
   variants: Record<string, object>;
   image: string | null;
   family?: string;
@@ -23,7 +24,24 @@ export interface Preset {
   configurable?: boolean;
   nativeVariants?: boolean;
 }
+export interface Pipeline {
+  solver: string;
+  solverSeconds: number;
+  capture: string;
+}
+export interface StorageEstimate {
+  everySteps: number;
+  bytesPerFrame: number;
+  initialBytes: number;
+  frames?: number;
+  totalBytes?: number;
+  estimated: boolean;
+}
 export interface Simulation {
+  frameBuffer?: { ready: boolean; bytes: number; ageSeconds: number };
+  pipeline?: Pipeline;
+  storageEstimate?: StorageEstimate;
+  capabilities?: string[];
   id: string;
   name: string;
   status: string;
@@ -48,6 +66,7 @@ export interface Simulation {
   video?: {
     active: boolean;
     interval: number;
+    everySteps?: number;
     fps?: number;
     armed?: boolean;
     orphaned?: boolean;
@@ -83,6 +102,7 @@ export interface SimulationControl {
     active: boolean,
     interval: number,
     adopt?: boolean,
+    everySteps?: number,
   ) => Promise<void>;
   status: string;
   pauseRequested: boolean;
@@ -99,6 +119,8 @@ export interface SimulationControl {
   run?: Simulation;
   observedAt?: number;
   transfer?: FrameTransfer;
+  viewerStage?: string;
+  canStepVideo?: boolean;
 }
 export function canPauseSimulation(
   run: Simulation | undefined,
@@ -435,11 +457,13 @@ export class CompanionClient {
     active: boolean,
     interval: number,
     adopt = false,
+    everySteps?: number,
   ) {
     return this.request(`/v1/runs/${id}/video`, {
       active,
       interval,
       ...(adopt ? { adopt } : {}),
+      ...(everySteps !== undefined ? { everySteps } : {}),
     });
   }
   async ack(id: string, sequence: number) {

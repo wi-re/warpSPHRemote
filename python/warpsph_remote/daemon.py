@@ -153,7 +153,7 @@ class Manager:
                 interval = data['video'].get('interval',.04)
                 if type(interval) not in (int,float) or not math.isfinite(interval) or interval<=0:
                     raise ValueError('Invalid recovered video interval.')
-                run['video'] = dict(active=True, interval=interval, fps=data['video'].get('fps',30), armed=data['video'].get('armed',False), nextTime=-1, ackTime=-1, ackStep=-1, orphaned=True)
+                run['video'] = dict(active=True, interval=interval, fps=data['video'].get('fps',30), armed=data['video'].get('armed',False), nextTime=-1, nextStep=-1, ackTime=-1, ackStep=-1, orphaned=True, **({'everySteps':data['video']['everySteps']} if 'everySteps' in data['video'] else {}))
             run["measurements"] = bool(data.get("measurements",run.get("measurements",run.get("launch",{}).get("measurements",False))))
             run.update(
                 name=data["name"],
@@ -196,11 +196,13 @@ class Manager:
             "launch",
             "registered",
             "performance",
-            "resources",
+            "resources", "pipeline", "storageEstimate", "capabilities",
             "streamPaused", "video",
             "captureInterval", "measurements", "libraryError", "libraryWarning",
         )
         row = {k: run[k] for k in keys if k in run}
+        row['frameBuffer']=dict(ready=run.get('snapshot') is not None,bytes=len(run.get('snapshot') or b''),
+            ageSeconds=max(0,time.time()-run.get('snapshotPublishedAt',time.time())) if run.get('snapshot') is not None else 0)
         row["pauseRequested"] = bool(run.get("pause"))
         row["configurationAvailable"] = bool(run.get("configuration"))
         row["videoSupported"] = "synchronizedVideo" in run.get("capabilities",[])
@@ -226,7 +228,7 @@ class Manager:
             "message",
             "recording",
             "performance",
-            "resources", "videoFinishing", "physical", "measurementSamples",
+            "resources", "videoFinishing", "physical", "measurementSamples", "pipeline", "storageEstimate",
         }
         if not isinstance(data, dict) or set(data) - allowed:
             raise ValueError("Invalid simulation status.")
@@ -295,6 +297,7 @@ class Manager:
             self.touch()
             return dict(
                 capture=bool(r.get("capture")) and not r.get("streamPaused", False),
+                streamPaused=r.get("streamPaused",False),
                 captureInterval=0 if r.get("video",{}).get("active") else r.get("captureInterval", 0.5),
                 diagnosticProbes=r.get("diagnosticProbes",[]),
                 video=r.get("video"),
@@ -374,11 +377,13 @@ class Manager:
             return self.public(r)
 
     def video_capture(self, key, viewer, data):
-        if not isinstance(data, dict) or set(data) - {'active', 'interval', 'adopt'} or type(data.get('active')) is not bool:
+        if not isinstance(data, dict) or set(data) - {'active', 'interval', 'adopt', 'everySteps'} or type(data.get('active')) is not bool:
             raise ValueError('Invalid video capture settings.')
         if 'adopt' in data and type(data['adopt']) is not bool:
             raise ValueError('Video adoption flag must be boolean.')
-        interval = data.get('interval', .04)
+        from .catalogue import validate_video
+        cadence=validate_video({k:v for k,v in data.items() if k in ('interval','everySteps')})
+        interval = cadence['interval']
         if type(interval) not in (int,float) or not math.isfinite(interval) or interval <= 0:
             raise ValueError('Video simulation interval must be positive.')
         with self.lock:
@@ -387,6 +392,8 @@ class Manager:
                 raise Conflict('Restart this simulation with an updated adapter to synchronize video capture.')
             if data['active'] and r.get('status') in ('completed','failed','stopped'):
                 raise Conflict('The simulation has ended; export its recorded trajectory instead.')
+            if data.get('everySteps') is not None and 'stepVideo' not in r.get('capabilities',[]):
+                raise Conflict('Restart the simulation with an updated adapter for step-based video.')
             if data.get('adopt'):
                 initial_pending=(r.get('snapshot') is not None and (r.get('metadata') or {}).get('videoArmed')
                     and r.get('video',{}).get('ackTime',-1)<(r.get('metadata') or {}).get('time',0))
@@ -394,10 +401,11 @@ class Manager:
                     raise Conflict('This run has no armed initial video frame.')
                 # Keep its pending initial snapshot and generation: the viewer
                 # must encode this exact state before acknowledging it.
-                r['video'].update(active=True,armed=False,orphaned=False,interval=interval)
+                r['video'].pop('everySteps',None)
+                r['video'].update(active=True,armed=False,orphaned=False,interval=interval,**({'everySteps':cadence['everySteps']} if 'everySteps' in cadence else {}))
                 self.touch()
                 return self.public(r)
-            r['video'] = dict(active=data['active'], interval=interval, nextTime=-1, ackTime=-1, ackStep=-1, orphaned=False)
+            r['video'] = dict(active=data['active'], interval=interval, nextTime=-1, nextStep=-1, ackTime=-1, ackStep=-1, orphaned=False,**({'everySteps':cadence['everySteps']} if 'everySteps' in cadence else {}))
             r['captureGeneration'] = r.get('captureGeneration',0)+1
             r.update(snapshot=None, static=None, staticRevision=None, streamPaused=False,
                 capture=data['active'] or r.get('status') not in ('completed','failed','stopped'))
@@ -467,6 +475,7 @@ class Manager:
                 staticRevision=revision,
                 metadata=metadata,
                 sequence=r["sequence"] + 1,
+                snapshotPublishedAt=time.time(),
                 capture=False,
             )
             self.touch()
@@ -761,7 +770,7 @@ class Handler(BaseHTTPRequestHandler):
                         "loopbackOnly": not self.remote,
                         "transport": "https" if self.remote else "http",
                         "maxSnapshotBytes": self.manager.max_snapshot_bytes,
-                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart", "runLibrary", "diagnosticRecording", "oneDimensional"],
+                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart", "runLibrary", "diagnosticRecording", "oneDimensional", "captureDiagnostics", "stepVideo", "recordingEstimates"],
                     }
                 )
             if parts == ["v1", "configuration"]:
@@ -836,7 +845,7 @@ class Handler(BaseHTTPRequestHandler):
                 key = data.pop("id", None)
                 key = self.manager.register(data, key)
                 return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"], "video": self.manager.runs[key].get("video"), "pause":bool(self.manager.runs[key].get("pause")), "measurements":bool(self.manager.runs[key].get("measurements")), "runDirectory":str(self.manager.library.root / "runs" / key),
-                    "features": ["telemetry", "producerRecovery", "bufferedCapture", "configurationInspection", "synchronizedVideo"]}, 201)
+                    "features": ["telemetry", "producerRecovery", "bufferedCapture", "configurationInspection", "synchronizedVideo", "captureDiagnostics"]}, 201)
             if len(parts) == 3 and parts[0] == "producer":
                 key, action = parts[1:]
                 if action == "configuration":
@@ -918,7 +927,7 @@ class Handler(BaseHTTPRequestHandler):
                         if video.get('active'):
                             meta = r.get('metadata') or {}
                             video.update(ackTime=meta.get('time',0), ackStep=meta.get('step',0),
-                                nextTime=meta.get('time',0)+video['interval'])
+                                nextTime=meta.get('time',0)+video['interval'],nextStep=meta.get('step',0)+video.get('everySteps',1))
                         r["captureGeneration"] = r.get("captureGeneration", 0) + 1
                         r.update(
                             snapshot=None,

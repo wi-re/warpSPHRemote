@@ -1,3 +1,4 @@
+import type { ViewportSettings } from "./recording";
 import { mappedCoordinate } from "./spatial";
 import type { ParticleRenderer } from "./renderer";
 import type { Frame, Source, ViewOptions } from "./types";
@@ -362,6 +363,22 @@ export class ProfileRenderer {
       b.top - 12,
     );
     this.onRender(performance.now() - start);
+  }
+  viewportSettings(): ViewportSettings {
+    return {
+      kind: "profile",
+      x: [...this.x],
+      y: [...this.y],
+      follow: this.follow,
+    };
+  }
+  restoreViewport(v: ViewportSettings) {
+    if (v.kind !== "profile") return;
+    this.x = [...v.x];
+    this.y = [...v.y];
+    this.follow = v.follow;
+    this.onFollowChanged();
+    this.draw();
   }
   captureCanvas() {
     this.draw();

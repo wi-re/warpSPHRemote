@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { SimulationControl } from "./companion";
 import {
   duration,
+  solverActivity,
+  captureActivity,
+  limitingStage,
   megabytes,
   memorySize,
   remainingSeconds,
@@ -10,7 +13,19 @@ import {
 import { NumberControl } from "./NumberControl";
 import { formatNumber } from "./data";
 
-export function LiveMetrics({ control }: { control: SimulationControl }) {
+export function LiveMetrics({
+  control,
+  viewer,
+}: {
+  control: SimulationControl;
+  viewer?: {
+    reconstructing: boolean;
+    encoding: boolean;
+    renderMs: number;
+    prepareMs?: number;
+    encodeMs?: number;
+  };
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -46,6 +61,29 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
       <dl className="properties">
         <dt>Status</dt>
         <dd>{run?.stale ? "Heartbeat overdue" : control.status}</dd>
+        <dt>Solver activity</dt>
+        <dd>
+          {["completed", "stopped", "failed"].includes(control.status)
+            ? `Run ${control.status}`
+            : solverActivity(run?.pipeline?.solver)}
+          {run?.pipeline ? ` · ${run.pipeline.solverSeconds.toFixed(1)} s` : ""}
+        </dd>
+        <dt>Capture pipeline</dt>
+        <dd>{captureActivity(run?.pipeline?.capture)}</dd>
+        <dt>Viewer activity</dt>
+        <dd>
+          {run?.video?.armed
+            ? "Initial view ready · waiting for Start video"
+            : viewer?.encoding
+              ? "Encoding video frame"
+              : viewer?.reconstructing
+                ? "Preparing / reconstructing frame"
+                : control.viewerStage === "downloading"
+                  ? "Requesting / downloading frame"
+                  : control.viewerStage === "rendering"
+                    ? "Rendering frame / waiting for acknowledgement"
+                    : "Waiting for next snapshot"}
+        </dd>
         <dt>Current step</dt>
         <dd>{run?.step?.toLocaleString() ?? "—"}</dd>
         <dt>Simulation time</dt>
@@ -88,6 +126,15 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
             : "—"}
         </dd>
       </dl>
+      <p className="subtle-note" role="status">
+        {limitingStage(
+          run,
+          transfer,
+          viewer?.prepareMs,
+          viewer?.renderMs,
+          viewer?.encodeMs,
+        )}
+      </p>
       {run?.video?.active && (
         <p className="subtle-note">
           Synchronized video holds the solver until frames are rendered. Step
@@ -109,10 +156,22 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
           <dd>
             {p?.encodeMs !== undefined ? `${p.encodeMs.toFixed(1)} ms` : "—"}
           </dd>
+          <dt>Daemon frame buffer</dt>
+          <dd>
+            {run?.frameBuffer?.ready
+              ? `${memorySize(run.frameBuffer.bytes)} ready · ${run.frameBuffer.ageSeconds.toFixed(1)} s`
+              : "Waiting for capture / next frame"}
+          </dd>
           <dt>Adapter → daemon</dt>
           <dd>
             {p?.publishMs !== undefined ? `${p.publishMs.toFixed(1)} ms` : "—"}
           </dd>
+          <dt>Frame preparation</dt>
+          <dd>{viewer?.prepareMs?.toFixed(1) ?? "—"} ms</dd>
+          <dt>Viewport draw</dt>
+          <dd>{viewer?.renderMs?.toFixed(1) ?? "—"} ms</dd>
+          <dt>Video encoding</dt>
+          <dd>{viewer?.encodeMs?.toFixed(1) ?? "—"} ms</dd>
           <dt>Owned CPU state</dt>
           <dd>{memorySize(p?.captureBytes)}</dd>
           <dt title="How far the simulation has advanced beyond the last downloaded snapshot.">
@@ -157,6 +216,35 @@ export function LiveMetrics({ control }: { control: SimulationControl }) {
           background.
         </p>
       </details>
+      {run?.storageEstimate && (
+        <details className="live-metrics-detail" open>
+          <summary>Trajectory storage estimate</summary>
+          <dl className="properties">
+            <dt>Export cadence</dt>
+            <dd>
+              Every {run.storageEstimate.everySteps.toLocaleString()} steps
+            </dd>
+            <dt>Expected frames</dt>
+            <dd>
+              {run.storageEstimate.estimated ? "≈ " : ""}
+              {run.storageEstimate.frames?.toLocaleString() ?? "Unknown"}
+            </dd>
+            <dt>Per frame (raw + overhead)</dt>
+            <dd>{memorySize(run.storageEstimate.bytesPerFrame)}</dd>
+            <dt>Estimated trajectory</dt>
+            <dd>≈ {memorySize(run.storageEstimate.totalBytes)}</dd>
+          </dl>
+          <p className="subtle-note">
+            Based on initialized particle arrays and exported fields, with HDF5
+            overhead. Includes an allowance for initial data; separate
+            checkpoints/configuration, changing particle counts and rigid bodies
+            can add storage.{" "}
+            {run.storageEstimate.estimated
+              ? "Frame count projects the remaining steps using current Δt; adaptive time steps can change it."
+              : "Frame count follows the configured step limit."}
+          </p>
+        </details>
+      )}
       <details className="live-metrics-detail" open>
         <summary>Simulation hardware{staleResources ? " · stale" : ""}</summary>
         <dl className="properties">

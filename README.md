@@ -303,3 +303,10 @@ legacy import/reindex and more storage-management tools. Reconstructed 3D views,
 shared GPU rendering and validated LCS methods remain separate gaps; direct remote
 HTTPS work is parked in favour of SSH forwarding.
 See [current status and remaining priorities](reports/ROADMAP.md).
+
+Live capture now exposes solver/capture/viewer wait stages and approximate trajectory
+storage. Video and trajectory exports can use explicit step intervals; video
+setup shows frame counts and playback duration. **Restore recording view** returns
+to the visualization and camera saved when encoding began. See
+[Capture diagnostics and planning](reports/CAPTURE_DIAGNOSTICS.md) for cadence,
+estimate assumptions and reproduction commands.

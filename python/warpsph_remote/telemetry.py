@@ -120,6 +120,15 @@ def validate_telemetry(data):
                 raise ValueError('Invalid telemetry number.')
     if 'performance' in data:
         numeric(data['performance'], ('stepMs', 'simulationRate', 'targetTime', 'targetStep', 'captureMs', 'encodeMs', 'publishMs', 'captureBytes', 'captureStep'))
+    if 'pipeline' in data:
+        p=data['pipeline']
+        if not isinstance(p,dict) or set(p)!={'solver','solverSeconds','capture'} or p['solver'] not in ('initializing','running','paused','video_viewer','video_frame') or p['capture'] not in ('idle','copying','queued','configuration','history','encoding','publishing','transfers_paused','not_attached','awaiting_ack','capture_interval','next_step'):
+            raise ValueError('Invalid pipeline telemetry.')
+        numeric({'solverSeconds':p['solverSeconds']},('solverSeconds',))
+    if 'storageEstimate' in data:
+        e=data['storageEstimate']
+        if not isinstance(e,dict) or type(e.get('estimated')) is not bool: raise ValueError('Invalid recording estimate.')
+        numeric({k:v for k,v in e.items() if k!='estimated'},('everySteps','bytesPerFrame','initialBytes','frames','totalBytes'))
     if 'resources' in data:
         resources = data['resources']
         if not isinstance(resources, dict):

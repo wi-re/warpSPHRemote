@@ -1,3 +1,4 @@
+import type { ViewportSettings } from "./recording";
 import { particleCoverageGLSL } from "./particleCoverage";
 import { periodicColorValue } from "./periodicColor";
 import { fieldFragment } from "./fieldShader";
@@ -1018,6 +1019,36 @@ export class ParticleRenderer {
       );
       return [v.x, v.y];
     });
+  }
+  viewportSettings(): ViewportSettings {
+    return {
+      kind: "particles",
+      position: this.camera.position.toArray(),
+      up: this.camera.up.toArray(),
+      target: this.controls.target.toArray(),
+      top: this.camera.top,
+      bottom: this.camera.bottom,
+      zoom: this.camera.zoom,
+      near: this.camera.near,
+      far: this.camera.far,
+    };
+  }
+  restoreViewport(v: ViewportSettings) {
+    if (v.kind !== "particles") return;
+    this.camera.position.fromArray(v.position);
+    this.camera.up.fromArray(v.up);
+    this.controls.target.fromArray(v.target);
+    this.camera.top = v.top;
+    this.camera.bottom = v.bottom;
+    const half = (v.top - v.bottom) / 2;
+    this.camera.left = (-half * this.width) / this.height;
+    this.camera.right = (half * this.width) / this.height;
+    this.camera.zoom = v.zoom;
+    this.camera.near = v.near;
+    this.camera.far = v.far;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.dirty = true;
   }
   captureCanvas() {
     this.renderer.render(this.scene, this.camera);

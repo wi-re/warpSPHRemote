@@ -3852,3 +3852,26 @@ kbd {
 .profile-viewport .scene-caption > span:last-child { display: none; }
 .main-panel:has(.profile-viewport) { overflow-y: auto; }
 .profile-viewport[data-profile-narrow="true"] .color-legend { top: 110px; bottom: auto; width: 130px; }
+
+.capture-estimate {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+.live-metrics .properties dt {
+  min-width: 0;
+}
+.viewport-heading-actions .small-button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+@media (max-width: 720px) {
+  .viewport-heading-actions .small-button {
+    max-width: 130px;
+    white-space: normal;
+  }
+}

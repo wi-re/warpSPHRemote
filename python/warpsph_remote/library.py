@@ -10,7 +10,7 @@ import time
 
 TERMINAL = ('completed','stopped','failed','interrupted')
 PERSIST = ('id','name','startedAt','updatedAt','status','pid','step','time','dt','particles','dimension','scheme',
-           'createdBy','message','launch','recording','configuration','performance','resources','capabilities','pause','measurements','diagnosticProbes','recordedProbeDefinitions','libraryWarning')
+           'createdBy','message','launch','recording','configuration','performance','resources','capabilities','pause','measurements','diagnosticProbes','recordedProbeDefinitions','libraryWarning','pipeline','storageEstimate')
 
 class RunLibrary:
     def __init__(self, runtime):
@@ -72,7 +72,7 @@ class RunLibrary:
         identity=None if not physical else (physical.get('step'),physical.get('time'))
         terminal=run.get('status') in TERMINAL
         if now-previous[0]<1 and identity==previous[2] and previous[1]==run.get('status'): return
-        row={k:run[k] for k in ('step','time','dt','status','performance','resources') if k in run}
+        row={k:run[k] for k in ('step','time','dt','status','performance','resources','pipeline','storageEstimate') if k in run}
         if physical: row['physical']=physical
         row['wallTime']=now;row['elapsedSeconds']=max(0,now-run['startedAt'])
         self.last[run['id']]=(now,run.get('status'),identity)

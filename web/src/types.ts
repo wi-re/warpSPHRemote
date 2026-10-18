@@ -23,7 +23,7 @@ export interface Source {
   liveRevision?: number;
   liveStep?: number;
   initialFrame?: number;
-  videoArmed?: { fps: number; interval: number };
+  videoArmed?: { fps: number; interval: number; everySteps?: number };
   scheme?: string;
   kernel?: string;
   integrator?: string;

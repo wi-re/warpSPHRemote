@@ -27,7 +27,7 @@ def numpy_array(value):
 
 
 class SimulationPublisher:
-    def __init__(self, name, *, runtime=None, autostart=True, interval=0.5, video=None, measurements=False, diagnostic_interval=None):
+    def __init__(self, name, *, runtime=None, autostart=True, interval=0.5, video=None, measurements=False, diagnostic_interval=None, export_every_steps=None):
         from collections import deque
         if type(measurements) is not bool or diagnostic_interval is not None and (not math.isfinite(diagnostic_interval) or diagnostic_interval<=0): raise ValueError('Invalid diagnostic recording options.')
         self.measurements=measurements
@@ -36,6 +36,12 @@ class SimulationPublisher:
         self._diagnostic_next=0.0
         self._measurement_drops=0
         self.diagnostic_probes=[]
+        if export_every_steps is not None and (type(export_every_steps) is not int or not 1<=export_every_steps<=1000000000): raise ValueError("Invalid export step interval.")
+        self.export_every_steps = export_every_steps
+        self._solver_activity = "initializing"
+        self._solver_since = time.monotonic()
+        self._transfer_phase = "idle"
+        self._attached = self._stream_paused = False
         self.name = name
         self.runtime = runtime_dir(runtime)
         self.started_at = time.time()
@@ -75,7 +81,7 @@ class SimulationPublisher:
             "time": 0.0,
             "dt": 0.0,
         }
-        body = {"measurements":measurements, "name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo"]}
+        body = {"measurements":measurements, "name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo", "stepVideo"]}
         if video is not None:
             from .catalogue import validate_video
             body['videoCapture']=validate_video(video)
@@ -96,6 +102,7 @@ class SimulationPublisher:
         self.telemetry_supported = "telemetry" in registration.get("features", [])
         self.capture_metrics_supported = "bufferedCapture" in registration.get("features", [])
         self.configuration_supported = "configurationInspection" in registration.get("features", [])
+        self.pipeline_supported = "captureDiagnostics" in registration.get("features", [])
         self.thread = threading.Thread(
             target=self._loop, name="warpsph-companion-publisher", daemon=True
         )
@@ -134,12 +141,13 @@ class SimulationPublisher:
             registration = self._request("/producer/runs", dict(
                 id=self.id, name=self.name, pid=os.getpid(), reconnect=True,
                 startedAt=self.started_at, paused=self.pausing.is_set(),
-                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, measurements=self.measurements, capabilities=["synchronizedVideo"]))
+                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, measurements=self.measurements, capabilities=["synchronizedVideo", "stepVideo"]))
             if registration["id"] != self.id:
                 raise ValueError("Companion did not preserve the recovered run identity.")
             self.telemetry_supported = "telemetry" in registration.get("features", [])
             self.capture_metrics_supported = "bufferedCapture" in registration.get("features", [])
             self.configuration_supported = "configurationInspection" in registration.get("features", [])
+            self.pipeline_supported = "captureDiagnostics" in registration.get("features", [])
             with self.lock:
                 self._transport_epoch += 1
                 self.pending = self._queued_capture = None
@@ -160,6 +168,7 @@ class SimulationPublisher:
                 resources = self.resources.sample() if self.telemetry_supported else None
                 with self.lock:
                     meta = dict(self.meta)
+                    if self.pipeline_supported: meta["pipeline"] = self._pipeline()
                     measurement_rows=list(self._measurement_rows)[:32]
                     if measurement_rows: meta['measurementSamples']=measurement_rows
                     if resources is not None:
@@ -169,6 +178,8 @@ class SimulationPublisher:
                     with self.lock:
                         for _ in measurement_rows: self._measurement_rows.popleft()
                 with self.lock:
+                    self._attached = response.get("attached", False)
+                    self._stream_paused = response.get("streamPaused", False)
                     self.max_snapshot_bytes = response.get("maxSnapshotBytes", self.max_snapshot_bytes)
                     self.capture_interval = response.get("captureInterval", self.capture_interval)
                     self.video = response.get("video")
@@ -206,6 +217,23 @@ class SimulationPublisher:
                         0  # retry the next safe boundary after transport failure
                     )
             self.closed.wait(0.02 if active else self.interval)
+
+    def _pipeline(self):
+        now=time.monotonic()
+        capture=("copying" if self._copy_busy else
+                 self._transfer_phase if self._transfer_busy else
+                 "queued" if self._queued_capture is not None else
+                 "transfers_paused" if self._stream_paused else
+                 "not_attached" if not self._attached else
+                 "awaiting_ack" if self.capture_target == 0 or self.captured >= self.capture_target else
+                 "capture_interval" if now < max(self._capture_retry_at,self._next_capture_at) else "next_step")
+        return dict(solver=self._solver_activity,solverSeconds=max(0,now-self._solver_since),capture=capture)
+
+    def _activity(self, activity):
+        with self.lock:
+            if self._solver_activity != activity:
+                self._solver_activity=activity
+                self._solver_since=time.monotonic()
 
     def update(self, **metadata):
         with self.lock:
@@ -273,13 +301,16 @@ class SimulationPublisher:
                 self._transfer_busy = True
             try:
                 if configuration:
+                    self._transfer_phase = "configuration"
                     self._publish_configuration(configuration)
                 if history:
+                    self._transfer_phase = "history"
                     try:
                         self._request(f'/producer/{self.id}/history', history[0], history[1])
                     except HTTPError as error:
                         if error.code != 409: raise
                 if capture:
+                    self._transfer_phase = "encoding"
                     started = time.perf_counter()
                     packet = encode_capture(capture, self.name, self.max_snapshot_bytes)
                     encoded_ms = (time.perf_counter()-started)*1000
@@ -288,6 +319,7 @@ class SimulationPublisher:
                             continue
                         self.pending = packet
                     started = time.perf_counter()
+                    self._transfer_phase = 'publishing'
                     self._request(f'/producer/{self.id}/snapshot', packet[0], packet[1])
                     with self.lock:
                         if capture.epoch == self._transport_epoch:
@@ -308,6 +340,7 @@ class SimulationPublisher:
                 with self.lock:
                     self.pending = None
                     self._transfer_busy = False
+                    self._transfer_phase = "idle"
 
     def _publish_configuration(self, configuration):
         """A failed optional configuration upload must never discard a frame."""
@@ -403,16 +436,25 @@ class SimulationPublisher:
             with self.lock:
                 self.configuration = self.configuration_pending = configuration
             self.transfer_event.set()
+        if self.pipeline_supported and getattr(ctx.spec,'store',False):
+            from .cadence import recording_estimate
+            try:
+                estimate=recording_estimate(ctx,state,step)
+            except (ValueError,TypeError,AttributeError,IndexError,OverflowError):
+                estimate=None # Optional inspection must not stop a valid solver.
+            if estimate: self.update(storageEstimate=estimate)
         pause_start = None
         while True:
             if self.stopping.is_set() or self.closed.is_set():
                 raise SimulationStopped("Stopped from the companion.")
             video = self.video or {}
+            from .cadence import video_due
             video_wait = video.get('active') and (video.get('orphaned') or
-                (float(state.t) >= video.get('nextTime',-1) and
+                (video_due(video,int(step),float(state.t),self.meta.get('videoFinishing',False)) and
                  (video.get('ackStep',-1) < int(step) or video.get('ackTime',-1) < float(state.t))))
             paused = self.pausing.is_set()
             held = paused or video_wait
+            self._activity("paused" if paused else "video_viewer" if video_wait and video.get("orphaned") else "video_frame" if video_wait else "running")
             now = time.monotonic()
             if held and pause_start is None:
                 pause_start = now
@@ -424,7 +466,7 @@ class SimulationPublisher:
                     spec = ctx.spec
                     limit_steps = getattr(spec, "nSteps", None)
                     if limit_steps is not None:
-                        timing["targetStep"] = max(0, int(limit_steps) + getattr(spec, "resumeStepOffset", 0) - 1)
+                        timing["targetStep"] = max(0, int(limit_steps) + getattr(spec, "resumeStepOffset", 0))
                     elif getattr(spec, "tLimit", None) is not None:
                         timing["targetTime"] = float(spec.tLimit)
                     with self.lock:
@@ -445,6 +487,7 @@ class SimulationPublisher:
             if not held:
                 if pause_start is not None:
                     self.timing.exclude_pause(time.monotonic() - pause_start)
+                self._activity("running")
                 return
             # Status, stop, recording reads and live captures remain serviced
             # while the integrator is held at this completed-step boundary.
@@ -460,7 +503,8 @@ class SimulationPublisher:
 
     def _capture(self, ctx, state, step):
         video=self.video or {}
-        if video.get('active') and float(state.t) < video.get('nextTime',-1) and not self.meta.get('videoFinishing'):
+        from .cadence import video_due
+        if video.get('active') and not video_due(video,int(step),float(state.t),self.meta.get('videoFinishing',False)):
             return
         if not self.wants_snapshot:
             return
@@ -492,7 +536,7 @@ class SimulationPublisher:
                 details=dict(**self._physical_geometry(ctx, state), dt=float(ctx.config.dt), scheme=str(ctx.scheme).split(".")[-1],
                     kernel=str(getattr(ctx.config,'kernel','')).split('.')[-1],
                     integrator=str(getattr(ctx.config,'integrationScheme','')).split('.')[-1],
-                    **({'videoArmed':dict(fps=video.get('fps',30),interval=video['interval'])} if video.get('armed') else {}))
+                    **({'videoArmed':dict(fps=video.get('fps',30),interval=video['interval'],**({'everySteps':video['everySteps']} if 'everySteps' in video else {}))} if video.get('armed') else {}))
             )
         except (ValueError, TypeError, IndexError) as error:
             # Viewing is optional: an unsupported capture must not kill a valid solver run.
@@ -504,6 +548,10 @@ class SimulationPublisher:
         """The extraData hook sees initialized physics before the first step."""
         if getattr(self,'_initial_seen',False): return
         self._initial_seen=True
+        if self.export_every_steps is not None and getattr(ctx.spec,'store',False):
+            ctx.spec.exportInterval=math.nextafter(self.export_every_steps*float(ctx.config.dt),math.inf)
+        if getattr(ctx.spec,'store',False) and hasattr(ctx.spec,'exportInterval'):
+            ctx.scratch['_remote_export_stride']=max(1,int(ctx.spec.exportInterval/float(ctx.config.dt)))
         if (self.video or {}).get('active') or self.pausing.is_set():
             self.post_step(ctx,state,0)
 
@@ -512,7 +560,9 @@ class SimulationPublisher:
         old_post,old_extra=case.postStep,case.extraData
         def post(ctx,state,step):
             if old_post: old_post(ctx,state,step)
-            self.post_step(ctx,state,step)
+            # The runner's postStep index is zero-based after a completed
+            # advance. Expose completed-step counts, reserving zero for t=0.
+            self.post_step(ctx,state,int(step)+1)
         def extra(ctx,state):
             data=old_extra(ctx,state) if old_extra else {}
             self.initial_state(ctx,state)

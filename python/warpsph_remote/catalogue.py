@@ -9,18 +9,21 @@ CATALOGUE = json.loads(Path(__file__).with_name("presets.json").read_text())
 
 
 def validate_video(data):
-    if not isinstance(data,dict) or set(data)-{'fps','interval'}:
+    if not isinstance(data,dict) or set(data)-{'fps','interval','everySteps'}:
         raise ValueError('Video capture requires fps and a simulation-time interval.')
     fps,interval=data.get('fps',30),data.get('interval',.04)
+    every=data.get('everySteps')
+    if every is not None and (type(every) is not int or not 1<=every<=1000000000):
+        raise ValueError('Video step interval must be a positive integer up to 1,000,000,000.')
     if type(fps) is not int or not 1<=fps<=120:
         raise ValueError('Video fps must be an integer between 1 and 120.')
     if type(interval) not in (int,float) or not math.isfinite(interval) or not .000001<=interval<=10000:
         raise ValueError('Video interval must be finite and between 1e-6 and 10000.')
-    return dict(fps=fps,interval=float(interval))
+    return dict(fps=fps,interval=float(interval),**({'everySteps':every} if every is not None else {}))
 
 
 def armed_video(settings):
-    return dict(active=True,armed=True,**validate_video(settings),nextTime=-1,ackTime=-1,ackStep=-1,orphaned=False)
+    return dict(active=True,armed=True,**validate_video(settings),nextTime=-1,nextStep=-1,ackTime=-1,ackStep=-1,orphaned=False)
 
 
 def validate_launch(data, catalogue=None):
@@ -33,6 +36,7 @@ def validate_launch(data, catalogue=None):
         "steps",
         "record",
         "exportInterval",
+        "exportEverySteps",
         "video",
         "paused",
         "configuration",
@@ -87,6 +91,10 @@ def validate_launch(data, catalogue=None):
         record=record,
         exportInterval=export_interval,
     )
+    if 'exportEverySteps' in data:
+        every=data['exportEverySteps']
+        if type(every) is not int or not 1<=every<=1000000000: raise ValueError('Export step interval must be a positive integer.')
+        result['exportEverySteps']=every
     if data.get('measurements'): result['measurements']=True
     if 'diagnosticInterval' in data:
         interval=data['diagnosticInterval']

@@ -98,7 +98,7 @@ def main():
     c = next(c for c in catalogue if c["id"] == spec["preset"])
     # Registration precedes costly CUDA compilation, so the manager shows startup.
     publisher = SimulationPublisher(
-        c["name"], runtime=os.environ["WARPSPH_REMOTE_RUNTIME"], autostart=False, measurements=spec.get("measurements",False), diagnostic_interval=spec.get("diagnosticInterval")
+        c["name"], runtime=os.environ["WARPSPH_REMOTE_RUNTIME"], autostart=False, measurements=spec.get("measurements",False), diagnostic_interval=spec.get("diagnosticInterval"), export_every_steps=spec.get("exportEverySteps")
     )
     try:
         from warpSPHBootstrap import bootstrap

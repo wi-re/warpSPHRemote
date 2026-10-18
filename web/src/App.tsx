@@ -1,3 +1,12 @@
+import {
+  saveRecordingView,
+  readRecordingView,
+  videoPlan,
+  videoPlanText,
+  validCadence,
+  type RecordingView,
+  type ViewportSettings,
+} from "./recording";
 import { ProfileRenderer } from "./ProfileRenderer";
 import {
   ViewportVideo,
@@ -174,6 +183,16 @@ export default function App() {
     useState<CompanionSection>("running");
   const [daemonConnected, setDaemonConnected] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
+  const [recordingView, setRecordingView] = useState<RecordingView | null>(
+    null,
+  );
+  const pendingViewport = useRef<ViewportSettings | null>(null);
+  const [videoMode, setVideoMode] = useState<"time" | "steps">("time");
+  const [videoEverySteps, setVideoEverySteps] = useState(10);
+  const [videoEncoding, setVideoEncoding] = useState(false);
+  const [videoEncodeMs, setVideoEncodeMs] = useState<number>();
+  const [prepareMs, setPrepareMs] = useState<number>();
+  const prepareStarted = useRef<number | undefined>(undefined);
   const preparedVideo = useRef("");
   const [videoOpen, setVideoOpen] = useState(false);
   const [videoFPS, setVideoFPS] = useState(30),
@@ -207,6 +226,9 @@ export default function App() {
   const source = sources.find((s) => s.id === sourceId);
   const simulationControl =
     source?.live && liveControl?.sourceId === source.id ? liveControl : null;
+  useEffect(() => {
+    setRecordingView(sourceId ? readRecordingView(sourceId) : null);
+  }, [sourceId]);
   const [reconstructionWarning, setReconstructionWarning] = useState("");
   const [retryRevision, setRetryRevision] = useState(0);
   const [presentation, setPresentation] = useState<Presentation | null>(null),
@@ -227,6 +249,13 @@ export default function App() {
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [engineError, setEngineError] = useState("");
+  useEffect(() => {
+    if (loading) prepareStarted.current = performance.now();
+    else if (prepareStarted.current !== undefined) {
+      setPrepareMs(performance.now() - prepareStarted.current);
+      prepareStarted.current = undefined;
+    }
+  }, [loading]);
   const [settingsOpen, setSettingsOpen] = useState(false),
     [theme, setTheme] = useState(() => readPreferences().theme),
     [pickerTab, setPickerTab] = useState<PickerTab>("examples"),
@@ -805,6 +834,10 @@ export default function App() {
       // Both calls happen before the renderer's next animation frame.
       e.setFrame(frame, source, presentation.field, optionsRef.current);
       e.setFieldView(presentation.result, presentation.mode);
+      if (pendingViewport.current) {
+        e.restoreViewport(pendingViewport.current);
+        pendingViewport.current = null;
+      }
       setDisplayedOptions(optionsRef.current);
       setRange([...e.range]);
       setValidRange(e.validRange);
@@ -838,13 +871,17 @@ export default function App() {
             session.encoder.width,
             session.encoder.height,
           );
+          setVideoEncoding(true);
+          const encodeStarted = performance.now();
           session.pending = session.encoder
             .add(canvas)
             .then(async () => {
+              setVideoEncodeMs(performance.now() - encodeStarted);
+              setVideoEncoding(false);
               if (reader instanceof LiveSource)
                 await reader.displayed(frame.liveRevision);
               setVideoProgress(
-                `${session.encoder.frames} frames encoded${session.live ? " · Live capture waits for rendering" : ""}`,
+                `${session.encoder.frames} frames encoded · ${(session.encoder.frames / session.encoder.fps).toFixed(2)} s video${session.live ? " · Live capture waits for rendering" : ""}`,
               );
               if (!session.live && !session.stopping) {
                 if (frame.index >= session.end) void finishVideo();
@@ -855,6 +892,7 @@ export default function App() {
             .catch((error) => {
               // Preserve an unacknowledged live frame on encoder failure. Only
               // explicit Finish/release may let an unrecorded solver advance.
+              setVideoEncoding(false);
               setVideoError(
                 `${String(error)} · Finish & save video to keep the encoded portion and release capture.`,
               );
@@ -1036,6 +1074,8 @@ export default function App() {
     videoOpen,
     videoFPS,
     videoInterval,
+    videoMode,
+    videoEverySteps,
     loading,
     presentation,
     presentationKey,
@@ -1252,6 +1292,44 @@ export default function App() {
             ? "magnitude"
             : displayedOptions.mapping.toUpperCase())
         : "");
+  function restoreRecordingPreset() {
+    if (!recordingView || !source || recordingView.sourceId !== source.id)
+      return;
+    setField(recordingView.field);
+    setOptions(structuredClone(recordingView.options));
+    setTheme(recordingView.options.background);
+    fieldView.restore(structuredClone(recordingView.fieldView), source.id);
+    pendingViewport.current = structuredClone(recordingView.viewport);
+    setRetryRevision((v) => v + 1);
+  }
+  const plannedVideo = source?.live
+    ? videoMode === "steps"
+      ? videoPlan(
+          videoFPS,
+          frame?.step ?? source.liveStep ?? 0,
+          simulationControl?.run?.performance?.targetStep ??
+            (simulationControl?.run?.performance?.targetTime !== undefined &&
+            source.dt! > 0
+              ? (frame?.step ?? source.liveStep ?? 0) +
+                Math.ceil(
+                  Math.max(
+                    0,
+                    simulationControl.run.performance.targetTime -
+                      (frame?.time ?? 0),
+                  ) / source.dt!,
+                )
+              : undefined),
+          videoEverySteps,
+          simulationControl?.run?.performance?.targetStep === undefined,
+        )
+      : videoPlan(
+          videoFPS,
+          frame?.time ?? 0,
+          simulationControl?.run?.performance?.targetTime,
+          videoInterval,
+          true,
+        )
+    : videoPlan(videoFPS, videoStart, videoEnd, videoStride);
   async function finishVideo() {
     const session = videoSession.current;
     if (!session || session.stopping) return;
@@ -1282,6 +1360,22 @@ export default function App() {
   async function startVideo() {
     if (!source || !frame || !engine.current || videoSession.current)
       return false;
+    if (loading || presentation?.key !== presentationKey) {
+      setVideoError(
+        "Wait for the configured frame to finish rendering before recording.",
+      );
+      return false;
+    }
+    if (
+      !validCadence(
+        videoFPS,
+        videoInterval,
+        videoMode === "steps" ? videoEverySteps : undefined,
+      )
+    ) {
+      setVideoError("Choose valid video timing settings.");
+      return false;
+    }
     const armed = source.live ? source.videoArmed : undefined;
     const fps = videoFPS,
       captureInterval = videoInterval;
@@ -1312,10 +1406,24 @@ export default function App() {
           ? () => simulationControl!.setVideo!(false, captureInterval)
           : undefined,
       };
+      const preset: RecordingView = structuredClone({
+        version: 1,
+        sourceId: source.id,
+        field,
+        options,
+        fieldView: fieldView.preferences,
+        viewport: engine.current.viewportSettings(),
+        time: frame.time,
+      });
       videoSession.current = session;
       try {
         if (source.live)
-          await simulationControl!.setVideo!(true, captureInterval, !!armed);
+          await simulationControl!.setVideo!(
+            true,
+            captureInterval,
+            !!armed,
+            videoMode === "steps" ? videoEverySteps : undefined,
+          );
         if (armed) {
           setVideoFPS(fps);
           setVideoInterval(captureInterval);
@@ -1330,6 +1438,7 @@ export default function App() {
         session.encoder.dispose();
         throw error;
       }
+      setRecordingView(saveRecordingView(preset));
       setVideoProgress("Waiting for the first rendered frame…");
       setVideoOpen(false);
       return true;
@@ -1364,6 +1473,9 @@ export default function App() {
     preparedVideo.current = key;
     setVideoFPS(source.videoArmed.fps);
     setVideoInterval(source.videoArmed.interval);
+    setVideoMode(source.videoArmed.everySteps ? "steps" : "time");
+    if (source.videoArmed.everySteps)
+      setVideoEverySteps(source.videoArmed.everySteps);
   }, [sourceId, source?.videoArmed, frame, simulationControl]);
   useEffect(() => {
     const session = videoSession.current;
@@ -1619,7 +1731,16 @@ export default function App() {
           </section>
           {simulationControl && (
             <>
-              <LiveMetrics control={simulationControl} />
+              <LiveMetrics
+                control={simulationControl}
+                viewer={{
+                  reconstructing: loading,
+                  encoding: videoEncoding,
+                  renderMs,
+                  prepareMs,
+                  encodeMs: videoEncodeMs,
+                }}
+              />
               {simulationControl?.run?.video?.active &&
                 (!videoSession.current ||
                   simulationControl.run.video.orphaned) && (
@@ -1634,7 +1755,14 @@ export default function App() {
                         className="secondary-button"
                         onClick={() =>
                           void simulationControl
-                            .setVideo?.(true, videoInterval)
+                            .setVideo?.(
+                              true,
+                              videoInterval,
+                              false,
+                              videoMode === "steps"
+                                ? videoEverySteps
+                                : undefined,
+                            )
                             .catch((error) => setVideoError(String(error)))
                         }
                       >
@@ -1815,6 +1943,16 @@ export default function App() {
               </h1>
             </div>
             <div className="viewport-heading-actions">
+              {recordingView?.sourceId === sourceId && (
+                <button
+                  className="small-button"
+                  onClick={restoreRecordingPreset}
+                  disabled={loading}
+                  title="Restore quantity, colors, grid, flow and camera from the start of recording"
+                >
+                  Restore recording view
+                </button>
+              )}
               {source &&
                 (source.format === "Recorded demo" ||
                   !source.id.startsWith("demo-")) && (
@@ -3064,12 +3202,38 @@ export default function App() {
             {source?.live ? (
               <>
                 <label>
-                  Simulation time between frames
+                  Capture cadence
+                  <select
+                    aria-label="Video capture cadence"
+                    value={videoMode}
+                    onChange={(e) =>
+                      setVideoMode(e.target.value as "time" | "steps")
+                    }
+                  >
+                    <option value="time">Simulation time</option>
+                    <option
+                      value="steps"
+                      disabled={!simulationControl?.canStepVideo}
+                    >
+                      Every N simulation steps
+                    </option>
+                  </select>
+                </label>
+                <label>
+                  {videoMode === "steps"
+                    ? "Simulation steps between frames"
+                    : "Simulation time between frames"}
                   <NumberControl
-                    min={0.000001}
-                    step={0.01}
-                    value={videoInterval}
-                    onValueChange={setVideoInterval}
+                    min={videoMode === "steps" ? 1 : 0.000001}
+                    step={videoMode === "steps" ? 1 : 0.01}
+                    value={
+                      videoMode === "steps" ? videoEverySteps : videoInterval
+                    }
+                    onValueChange={
+                      videoMode === "steps"
+                        ? setVideoEverySteps
+                        : setVideoInterval
+                    }
                   />
                 </label>
                 <p>
@@ -3112,6 +3276,22 @@ export default function App() {
                 </label>
               </div>
             )}
+            <p className="capture-estimate" role="status">
+              {videoPlanText(plannedVideo)} at {videoFPS} fps. Includes the
+              first and final frame.
+            </p>
+            {source?.live && (
+              <p className="subtle-note">
+                Time-based counts are estimates: capture occurs at completed
+                simulation steps and Δt may vary. For exact step counts, use a
+                step-limited run. Final off-cadence frames are included.
+              </p>
+            )}
+            {recordingView?.sourceId === sourceId && (
+              <button onClick={restoreRecordingPreset}>
+                Restore recording view
+              </button>
+            )}
             <p className="subtle-note">
               WebM / VP8. Encoded video is held in browser memory until saved.
               Keep this tab open; background tabs may capture more slowly.
@@ -3120,8 +3300,14 @@ export default function App() {
             <button
               className="primary-button"
               disabled={
-                !!source?.videoArmed &&
-                (loading || presentation?.key !== presentationKey)
+                (!!source?.live && !simulationControl?.setVideo) ||
+                !validCadence(
+                  videoFPS,
+                  videoInterval,
+                  videoMode === "steps" ? videoEverySteps : undefined,
+                ) ||
+                loading ||
+                presentation?.key !== presentationKey
               }
               onClick={() =>
                 source?.videoArmed

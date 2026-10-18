@@ -85,6 +85,7 @@ export function CompanionPanel({
   const [pending, setPending] = useState<PendingAttachment | null>(null);
   const [awaitingFrame, setAwaitingFrame] = useState<Simulation | null>(null);
   const pendingAttachment = useRef<PendingAttachment | null>(null);
+  const [viewerStage, setViewerStage] = useState("idle");
   const attaching = useRef(false);
   const [attachmentRevision, setAttachmentRevision] = useState(0);
   const [saved, setSaved] = useState(recallPairing);
@@ -334,7 +335,7 @@ export function CompanionPanel({
             sourceId: `live-${run.id}`,
             setVideo:
               features.includes("synchronizedVideo") && run.videoSupported
-                ? async (enabled, interval, adopt) => {
+                ? async (enabled, interval, adopt, everySteps) => {
                     const session = active.current;
                     if (!session || session.id !== run.id)
                       throw new Error("Reconnect the simulation first.");
@@ -348,6 +349,7 @@ export function CompanionPanel({
                         enabled,
                         interval,
                         adopt,
+                        everySteps,
                       );
                     } catch (error) {
                       session.video = false;
@@ -356,6 +358,10 @@ export function CompanionPanel({
                   }
                 : undefined,
             run,
+            canStepVideo:
+              features.includes("stepVideo") &&
+              !!run.capabilities?.includes("stepVideo"),
+            viewerStage,
             observedAt,
             transfer,
             transfersPaused,
@@ -377,6 +383,7 @@ export function CompanionPanel({
         : null,
     );
   }, [
+    viewerStage,
     runs,
     attached,
     client,
@@ -679,6 +686,7 @@ export function CompanionPanel({
               session.download = download;
               let snapshot;
               try {
+                setViewerStage("downloading");
                 snapshot = await client.snapshot(
                   id,
                   AbortSignal.any([session.abort.signal, download.signal]),
@@ -690,7 +698,11 @@ export function CompanionPanel({
               } finally {
                 session.download = undefined;
               }
-              if (session.transfersPaused) continue;
+              if (session.transfersPaused) {
+                setViewerStage("transfers_paused");
+                continue;
+              }
+              setViewerStage(snapshot ? "rendering" : "waiting_snapshot");
               if (snapshot) {
                 if (snapshot.transfer) {
                   const previous = session.transfer;
@@ -713,6 +725,7 @@ export function CompanionPanel({
                     if (!connectionLost(error)) throw error;
                   }
                   session.waiting = false;
+                  setViewerStage("waiting_snapshot");
                 };
                 if (
                   !session.video &&

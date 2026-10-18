@@ -65,6 +65,62 @@ export const transferRate = (transfer: FrameTransfer) =>
 export const memorySize = (bytes: number | undefined) =>
   bytes === undefined
     ? "—"
-    : bytes >= 1e9
-      ? `${(bytes / 1e9).toFixed(2)} GB`
-      : megabytes(bytes);
+    : bytes < 1e6
+      ? `${(bytes / 1e3).toFixed(1)} KB`
+      : bytes >= 1e9
+        ? `${(bytes / 1e9).toFixed(2)} GB`
+        : megabytes(bytes);
+
+const solverLabels: Record<string, string> = {
+  initializing: "Initializing the simulation",
+  running: "Integrating simulation steps",
+  paused: "Paused by user",
+  video_viewer: "Waiting for video viewer to reconnect",
+  video_frame: "Waiting for video frame render / encode acknowledgement",
+};
+const captureLabels: Record<string, string> = {
+  idle: "Idle",
+  copying: "Copying state to CPU",
+  queued: "Owned CPU frame queued",
+  configuration: "Publishing configuration",
+  history: "Reading recorded history",
+  encoding: "Encoding frame on adapter",
+  publishing: "Sending frame to daemon",
+  transfers_paused: "Transfers paused; solver can continue",
+  not_attached: "No live viewer attached",
+  awaiting_ack: "Waiting for viewer to finish the current frame",
+  capture_interval: "Waiting for capture interval",
+  next_step: "Waiting for next safe simulation boundary",
+};
+export const solverActivity = (value?: string) =>
+  value ? (solverLabels[value] ?? value) : "Adapter stage unavailable";
+export const captureActivity = (value?: string) =>
+  value ? (captureLabels[value] ?? value) : "Adapter stage unavailable";
+export function limitingStage(
+  run: Simulation | undefined,
+  transfer: FrameTransfer | undefined,
+  prepareMs?: number,
+  renderMs?: number,
+  encodeMs?: number,
+) {
+  if (!run) return "Waiting for run status.";
+  if (run.pipeline?.solver === "paused")
+    return "Solver is paused. Transfers and inspection can still run.";
+  if (run.pipeline?.solver === "video_viewer")
+    return "Video is holding the solver until a viewer reconnects.";
+  const p = run.performance;
+  const stages: [string, number | undefined][] = [
+    ["CPU state copy", p?.captureMs],
+    ["adapter encoding", p?.encodeMs],
+    ["adapter → daemon", p?.publishMs],
+    ["frame download", transfer?.durationMs],
+    ["frame preparation / reconstruction", prepareMs],
+    ["viewport rendering", renderMs],
+    ["video encoding", encodeMs],
+  ];
+  const slow = stages
+    .filter((s): s is [string, number] => s[1] !== undefined && s[1] > 0)
+    .sort((a, b) => b[1] - a[1])[0];
+  if (!slow) return "Waiting for first frame timings.";
+  return `Largest measured frame stage: ${slow[0]} (${slow[1].toFixed(1)} ms). ${run.video?.active ? "Video synchronization can hold the solver for frame delivery." : "This limits live updates; background transfer does not hold the solver."}`;
+}
