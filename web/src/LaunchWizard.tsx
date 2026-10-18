@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 import { useEffect, useState, useRef } from "react";
 import { ArrowLeft, Play } from "lucide-react";
 import { CompanionClient, type Preset, type Simulation } from "./companion";
@@ -130,6 +131,7 @@ export function LaunchWizard({
       <nav className="wizard-progress" aria-label="Launch steps">
         {titles.map((t, i) => (
           <button
+            type="button"
             key={t}
             disabled={i > step}
             aria-current={i === step ? "step" : undefined}
@@ -140,7 +142,11 @@ export function LaunchWizard({
         ))}
       </nav>
       {step > 0 && (
-        <button className="text-button" onClick={() => setStep((s) => s - 1)}>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setStep((s) => s - 1)}
+        >
           <ArrowLeft size={15} /> Back
         </button>
       )}
@@ -149,6 +155,7 @@ export function LaunchWizard({
         <div className="family-gallery">
           {families.map((f) => (
             <button
+              type="button"
               className="case-card"
               key={f}
               onClick={() => {
@@ -186,6 +193,7 @@ export function LaunchWizard({
               .filter((p) => (p.family || "other") === family)
               .map((p) => (
                 <button
+                  type="button"
                   key={p.id}
                   className="case-card"
                   disabled={p.available === false}
@@ -278,6 +286,7 @@ export function LaunchWizard({
                 )
               )}
               <button
+                type="button"
                 className="primary-button"
                 disabled={loading}
                 onClick={() => {
@@ -290,37 +299,72 @@ export function LaunchWizard({
           )}
           {step === 3 && (
             <>
-              <div className="companion-form">
-                <label>
-                  Resolution (nx)
-                  <input
-                    type="number"
+              <div className="launch-run-controls">
+                <section className="launch-number-field">
+                  <label htmlFor="launch-resolution">Resolution (nx)</label>
+                  <NumberControl
+                    id="launch-resolution"
+                    aria-label="Resolution (nx)"
                     min={8}
                     max={chosen.maxNx ?? 512}
                     step={1}
                     value={nx}
-                    onChange={(e) => setNx(+e.target.value)}
+                    onValueChange={setNx}
+                    required
                   />
-                </label>
-                <label>
-                  End time
-                  <input
-                    type="number"
+                  <div
+                    className="resolution-presets"
+                    role="group"
+                    aria-label="Resolution presets"
+                  >
+                    {[...new Set([32, 64, 128, 256, 512, chosen.maxNx ?? 512])]
+                      .filter((n) => n <= (chosen.maxNx ?? 512))
+                      .map((n) => (
+                        <button
+                          type="button"
+                          key={n}
+                          aria-pressed={nx === n}
+                          onClick={() => setNx(n)}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    <button type="button" onClick={() => setNx(chosen.nx)}>
+                      Default · {chosen.nx}
+                    </button>
+                  </div>
+                  <small>
+                    Enter any whole number from 8 to {chosen.maxNx ?? 512}, or
+                    drag ↕. Hold Shift for finer adjustment.
+                  </small>
+                </section>
+                <section className="launch-number-field">
+                  <label htmlFor="launch-duration">End time</label>
+                  <NumberControl
+                    id="launch-duration"
+                    aria-label="End time"
                     min={0.000001}
                     max={10000}
                     step="any"
                     value={duration}
-                    onChange={(e) => setDuration(+e.target.value)}
+                    onValueChange={setDuration}
+                    required
                   />
-                </label>
+                  <small>Simulation time at which to stop the run.</small>
+                </section>
               </div>
               <p>
                 Enable an override to change a parameter. Unchecked values
                 inherit the case, variant and solver defaults.
               </p>
               {properties?.simulation && (
-                <details>
-                  <summary>General simulation parameters</summary>
+                <details className="control-disclosure parameter-group launch-parameter-panel">
+                  <summary>
+                    <span>
+                      General simulation parameters
+                      <small>Time stepping, kernel and discretization</small>
+                    </span>
+                  </summary>
                   <ConfigurationFields
                     schema={properties.simulation}
                     defaults={variantConfiguration.simulation || {}}
@@ -331,8 +375,13 @@ export function LaunchWizard({
                 </details>
               )}
               {properties?.solver && (
-                <details>
-                  <summary>Numerical solver parameters</summary>
+                <details className="control-disclosure parameter-group launch-parameter-panel">
+                  <summary>
+                    <span>
+                      Numerical solver parameters
+                      <small>Diffusion and method-specific controls</small>
+                    </span>
+                  </summary>
                   <ConfigurationFields
                     schema={properties.solver}
                     defaults={variantConfiguration.solver || {}}
@@ -342,80 +391,95 @@ export function LaunchWizard({
                   />
                 </details>
               )}
-              {features.includes("recordedHistory") && (
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={record}
-                    onChange={(e) => setRecord(e.target.checked)}
-                  />{" "}
-                  Record trajectory (off by default; uses disk space)
-                </label>
-              )}
-              {record && (
-                <label>
-                  Export interval (simulation time)
-                  <input
-                    type="number"
-                    min={0.000001}
-                    max={10000}
-                    step="any"
-                    value={interval}
-                    onChange={(e) => setIntervalValue(+e.target.value)}
-                  />
-                </label>
-              )}
-              {occupied && (
-                <p role="status">
-                  A managed simulation is already active. Stop it before
-                  launching another.
-                </p>
-              )}
-              <button
-                className="primary-button"
-                disabled={busy || loading || invalid || occupied}
-                onClick={() =>
-                  form.current?.reportValidity() &&
-                  void onLaunch({
-                    preset: chosen.id,
-                    scheme,
-                    variant,
-                    nx,
-                    duration,
-                    ...(features.includes("recordedHistory")
-                      ? { record, exportInterval: interval }
-                      : {}),
-                    ...(schema
-                      ? {
-                          configuration: {
-                            params: activeOverrides(
-                              properties!.params,
-                              params,
-                              scheme,
-                              {
-                                ...schemaDefaults(properties!.params),
-                                ...defaults,
-                              },
-                            ),
-                            solver: activeOverrides(
-                              properties!.solver,
-                              solver,
-                              scheme,
-                            ),
-                            simulation: activeOverrides(
-                              properties!.simulation,
-                              simulation,
-                              scheme,
-                            ),
-                          },
-                        }
-                      : {}),
-                  })
-                }
-              >
-                <Play size={15} />
-                {busy ? "Validating and starting…" : `Run ${chosen.name}`}
-              </button>
+              <div className="launch-footer">
+                <div className="recording-controls">
+                  {features.includes("recordedHistory") && (
+                    <>
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={record}
+                          onChange={(e) => setRecord(e.target.checked)}
+                        />{" "}
+                        Record trajectory
+                      </label>
+                      <small>
+                        Off by default. Saves exported frames for replay and
+                        uses disk space.
+                      </small>
+                    </>
+                  )}
+                  {record && (
+                    <div className="launch-number-field">
+                      <label htmlFor="launch-export-interval">
+                        Export interval (simulation time)
+                      </label>
+                      <NumberControl
+                        id="launch-export-interval"
+                        aria-label="Export interval (simulation time)"
+                        min={0.000001}
+                        max={10000}
+                        step="any"
+                        value={interval}
+                        onValueChange={setIntervalValue}
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+                {occupied && (
+                  <p role="status">
+                    A managed simulation is already active. Stop it before
+                    launching another.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={busy || loading || invalid || occupied}
+                  onClick={() =>
+                    form.current?.reportValidity() &&
+                    void onLaunch({
+                      preset: chosen.id,
+                      scheme,
+                      variant,
+                      nx,
+                      duration,
+                      ...(features.includes("recordedHistory")
+                        ? { record, exportInterval: interval }
+                        : {}),
+                      ...(schema
+                        ? {
+                            configuration: {
+                              params: activeOverrides(
+                                properties!.params,
+                                params,
+                                scheme,
+                                {
+                                  ...schemaDefaults(properties!.params),
+                                  ...defaults,
+                                },
+                              ),
+                              solver: activeOverrides(
+                                properties!.solver,
+                                solver,
+                                scheme,
+                              ),
+                              simulation: activeOverrides(
+                                properties!.simulation,
+                                simulation,
+                                scheme,
+                              ),
+                            },
+                          }
+                        : {}),
+                    })
+                  }
+                >
+                  <Play size={15} />
+                  {busy ? "Validating and starting…" : `Run ${chosen.name}`}
+                </button>
+              </div>
             </>
           )}
         </>

@@ -1,3 +1,4 @@
+import { NumberControl } from "./NumberControl";
 export interface ParameterSchema {
   type?: string | string[];
   properties?: Record<string, ParameterSchema>;
@@ -95,7 +96,7 @@ export function ConfigurationFields({
       {[...groups].map(([group, fields]) => (
         <details
           key={group}
-          className="parameter-group"
+          className="control-disclosure parameter-group"
           open={groups.size === 1}
         >
           <summary>{group}</summary>
@@ -220,6 +221,18 @@ function ParameterInput({
           value={value}
           disabled={!enabled || readonly}
           onChange={onChange}
+        />
+      ) : ["number", "integer"].includes(kind || "") &&
+        !(Array.isArray(s.type) && s.type.includes("null")) ? (
+        <NumberControl
+          aria-label={name}
+          disabled={!enabled || readonly}
+          value={value ?? 0}
+          onValueChange={onChange}
+          step={kind === "integer" ? 1 : "any"}
+          min={s.minimum ?? s.exclusiveMinimum}
+          max={s.maximum ?? s.exclusiveMaximum}
+          required
         />
       ) : (
         <input

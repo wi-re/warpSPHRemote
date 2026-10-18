@@ -61,6 +61,7 @@ export function CompanionPanel({
   onDetached,
   onControl,
 }: Props) {
+  const backdropPress = useRef(false);
   const [monitor, setMonitor] = useState(recallMonitor);
   const monitorEnabled = useRef(monitor);
   monitorEnabled.current = monitor;
@@ -126,11 +127,16 @@ export function CompanionPanel({
   useEffect(() => {
     if (!open) return;
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closePanel();
+      if (
+        e.key === "Escape" &&
+        !e.defaultPrevented &&
+        !(client && section === "launch")
+      )
+        closePanel();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [open]);
+  }, [open, client, section]);
   async function connect(address = endpoint, secret = token) {
     connection.current?.abort();
     const attempt = new AbortController();
@@ -571,8 +577,32 @@ export function CompanionPanel({
           </button>
         </div>
       )}
-      {open && (
-        <div className="modal-backdrop" onClick={closePanel}>
+      {(open || client) && (
+        <div
+          className="modal-backdrop"
+          hidden={!open}
+          style={open ? undefined : { display: "none" }}
+          onPointerDown={(e) => {
+            backdropPress.current = e.target === e.currentTarget;
+          }}
+          onPointerUp={(e) => {
+            backdropPress.current =
+              backdropPress.current && e.target === e.currentTarget;
+          }}
+          onPointerCancel={() => {
+            backdropPress.current = false;
+          }}
+          onClick={(e) => {
+            const outside = backdropPress.current;
+            backdropPress.current = false;
+            if (
+              outside &&
+              e.target === e.currentTarget &&
+              !(client && section === "launch")
+            )
+              closePanel();
+          }}
+        >
           <section
             className="modal companion-modal"
             role="dialog"
@@ -587,7 +617,9 @@ export function CompanionPanel({
                 <p>
                   {!client
                     ? "Pair once, then choose the simulation task you want."
-                    : "Your daemon manages the available cases and resident simulations."}
+                    : section === "launch"
+                      ? "Close this window to leave setup. Your draft is kept while connected to this daemon."
+                      : "Your daemon manages the available cases and resident simulations."}
                 </p>
               </div>
               <button
@@ -985,7 +1017,7 @@ export function CompanionPanel({
                     </small>
                   </section>
                 )}
-                {section === "launch" && (
+                <div hidden={section !== "launch"}>
                   <LaunchWizard
                     client={client}
                     presets={presets}
@@ -994,7 +1026,7 @@ export function CompanionPanel({
                     busy={busy}
                     onLaunch={launch}
                   />
-                )}
+                </div>
               </>
             )}
           </section>

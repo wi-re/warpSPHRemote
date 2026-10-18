@@ -109,3 +109,35 @@ rendered; stop appeared in the separate history view with recording disabled.
 Recorded KHH (65,536 particles) also exercised the profile worker and vector
 projection. Generated evidence belongs outside source, under
 `warpSPHDevelopment/remote` or a fresh disposable `/tmp` directory.
+
+## Setup interaction refinement
+
+Simulation setup now ignores backdrop clicks and Escape; use the explicit Close
+button, which remains visible in a sticky header. Other companion menus require
+both the pointer press and release to originate on the backdrop before dismissing,
+so releasing an input-selection drag outside the dialog does not count as a
+backdrop click. Closing setup or visiting another daemon task keeps the same
+mounted draft (case, wizard stage, values, overrides and disclosure state) until
+disconnect or page reload. A successful launch still closes and attaches normally.
+
+Resolution offers bounded quick choices, a case-default reset, direct custom
+integer entry and the existing accelerated vertical drag control. End time,
+export interval and nonnullable numeric case/solver fields share that control.
+Clearing an input temporarily is supported while typing; blur restores the last
+accepted value if no replacement was entered. Escape on a drag handle cancels
+the drag without propagating to the dialog.
+
+All case and solver parameter groups use the same bordered disclosure cards with
+hover/focus treatment and chevrons. Recording and Run occupy a distinct footer.
+Number cards stack on narrow screens.
+
+Browser regression reproduction: run the Vite viewer and
+`examples/auto_monitor_fixture.py` with a new output directory outside source and
+an available `--port`; connect to its printed test endpoint/token. Select Gresho,
+continue to solver/run settings, enter nx=173, drag across the resolution text
+and release outside the modal. Verify setup stays open after that drag, a
+backdrop click, and Escape. Enable a solver override, close setup, open/close Run
+history and reopen Run simulation: the stage, nx and override must remain.
+Verify clearing/retyping nx, arrow adjustment, out-of-range launch disabling,
+quick choices, numeric drag bounds, and the stacked layout at a 390px viewport.
+No simulation launch or trajectory generation is needed for these UI checks.

@@ -1,4 +1,4 @@
-import { useRef, useState, type InputHTMLAttributes } from "react";
+import { useEffect, useRef, useState, type InputHTMLAttributes } from "react";
 import { dragNumber } from "./numberDrag";
 type Props = Omit<
   InputHTMLAttributes<HTMLInputElement>,
@@ -16,6 +16,8 @@ export function NumberControl({
   disabled,
   ...props
 }: Props) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{
     pointer: number;
@@ -48,8 +50,13 @@ export function NumberControl({
         min={min}
         max={max}
         disabled={disabled}
-        value={value}
+        value={draft}
+        onBlur={(e) => {
+          setDraft(String(value));
+          props.onBlur?.(e);
+        }}
         onChange={(e) => {
+          setDraft(e.target.value);
           if (e.target.value !== "" && Number.isFinite(e.target.valueAsNumber))
             onValueChange(e.target.valueAsNumber);
         }}
@@ -100,6 +107,7 @@ export function NumberControl({
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.preventDefault();
+            e.stopPropagation();
             end(true);
             return;
           }

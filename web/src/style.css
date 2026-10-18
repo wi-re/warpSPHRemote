@@ -3525,3 +3525,145 @@ kbd {
     height: 30px;
   }
 }
+
+/* Case and solver settings use the same full-width disclosure cards. */
+.launch-wizard .parameter-group {
+  padding: 0;
+  overflow: clip;
+  background: var(--bg);
+}
+.launch-wizard .parameter-group > summary {
+  padding: 12px 14px;
+  min-height: 46px;
+  font-weight: 600;
+}
+.launch-wizard .parameter-group > summary:hover {
+  background: #75ddba0c;
+}
+.launch-wizard .parameter-group > summary:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+.launch-wizard .parameter-group > summary::-webkit-details-marker {
+  display: none;
+}
+.launch-wizard .parameter-group[open] > summary {
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+}
+.launch-wizard .parameter-group > .configuration-fields,
+.launch-wizard .launch-parameter-panel > .parameter-group {
+  margin: 12px;
+}
+.launch-wizard .parameter-group > summary small {
+  display: block;
+  font-weight: 400;
+  margin-top: 4px;
+}
+.launch-run-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+  margin: 18px 0;
+}
+.launch-wizard .launch-number-field {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.launch-number-field > label {
+  font-weight: 600;
+}
+.launch-number-field .number-control {
+  width: 100%;
+  min-height: 42px;
+}
+.launch-number-field .number-control > input {
+  font-size: 16px;
+  padding: 10px;
+}
+.launch-wizard .number-drag-handle {
+  width: 34px;
+}
+.launch-wizard .number-control {
+  min-height: 36px;
+  width: 100%;
+}
+.resolution-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.resolution-presets button {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+  font-size: 11px;
+}
+.resolution-presets button[aria-pressed="true"] {
+  color: var(--mint);
+  border-color: var(--mint);
+  background: #75ddba14;
+}
+.launch-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.launch-footer > .primary-button {
+  margin-left: auto;
+  min-height: 42px;
+}
+.recording-controls {
+  flex: 1;
+  min-width: 220px;
+  max-width: 560px;
+}
+.recording-controls > small {
+  margin-top: 6px;
+}
+.launch-wizard .recording-controls .launch-number-field {
+  margin-top: 14px;
+}
+@media (max-width: 700px) {
+  .launch-run-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .launch-footer > .primary-button {
+    width: 100%;
+  }
+  .configuration-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.companion-modal > .companion-heading {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--panel);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.companion-modal > .companion-heading::before {
+  content: "";
+  position: absolute;
+  top: -32px;
+  left: 0;
+  right: 0;
+  height: 32px;
+  background: var(--panel);
+  pointer-events: none;
+}
