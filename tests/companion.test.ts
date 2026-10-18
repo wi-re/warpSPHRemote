@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CompanionClient,
+  liveConnectionStatus,
   companionConnectionMessage,
   LiveSource,
   companionEndpoint,
@@ -336,4 +337,25 @@ test("page-exit detach keeps the authenticated lease release alive", async () =>
   } finally {
     globalThis.fetch = previous;
   }
+});
+
+test("live connection notice distinguishes startup, first frame, and capture failures", () => {
+  const run = {
+    status: "starting",
+    stale: false,
+  } as import("../web/src/companion").Simulation;
+  assert.equal(liveConnectionStatus(run), "waiting for startup…");
+  assert.equal(
+    liveConnectionStatus({ ...run, status: "running" }),
+    "waiting for the first live frame…",
+  );
+  const message = "Live capture unavailable: increase --max-snapshot-mib";
+  assert.equal(
+    liveConnectionStatus({ ...run, status: "running", message }),
+    message,
+  );
+  assert.equal(
+    liveConnectionStatus({ ...run, status: "paused", stale: true }),
+    "waiting for a producer heartbeat…",
+  );
 });

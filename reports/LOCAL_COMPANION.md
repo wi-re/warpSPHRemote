@@ -230,8 +230,8 @@ Both trajectory exports and completed per-state HDF5 exports are supported;
 per-state history contains the initial state and `state_*` exports. The existing
 viewer supports 2D/3D numerical arrays; a 1D recording still requires a viewer
 adaptation. Only fields actually exported are available for recorded analysis.
-Live captures and recorded-history packets retain the existing 128 MiB /
-600,000-particle protocol limits. Abrupt process kills may leave an incomplete
+Numerical packets have no fixed particle-count cap. The live snapshot budget
+(default 128 MiB, configurable below) also bounds active history uploads. Abrupt process kills may leave an incomplete
 HDF5 file; graceful stop/normal completion is the supported history handoff.
 
 ## Snapshot ownership and backpressure
@@ -262,9 +262,28 @@ HDF5 file; graceful stop/normal completion is the supported history handoff.
   This still has a measurable synchronization/copy cost while visualized. It is
   independent of rendering, not a zero-cost/zero-copy solver integration.
 
-Live captures support up to 600,000 particles and a 128 MiB packet limit. An
-unsupported optional capture reports a status message instead of stopping the
-solver.
+There is no fixed live particle-count cap. The daemon defaults to a **128 MiB
+budget per snapshot envelope**, including any static revision accompanying it.
+This is an allocation/transfer guard for whole buffered packets, not a WebGPU,
+HTTP or particle-count limit. Explicitly starting the daemon with, for example,
+`warpsph-companion --max-snapshot-mib 512 --python /path/to/warp/bin/python`
+raises the budget; restart the daemon to change it. The descriptor and producer
+status response advertise the selected byte budget, so the adapter checks the
+same limit before encoding. Active history uploads use that budget too. The
+current WPR1 envelope uses 32-bit part lengths; CLI budgets are 1–4095 MiB.
+
+Larger frames naturally reduce capture frequency through the same acknowledgement
+handshake. They still require GPU-to-CPU synchronization, encoding and multiple
+resident copies across producer, daemon and browser; 128 MiB on the wire does
+not mean 128 MiB total process memory. Browser/GPU resources and transfer time
+remain practical constraints. Chunked numerical transfers and field selection
+are future memory/latency improvements, not prerequisites for nx=256 triplePoint.
+
+A rejected optional capture reports its reason in the live connection notice and
+run row without stopping the solver or disabling controls. It does not consume
+the outstanding request: capture retries at most twice a second at safe boundaries,
+including while paused, and clears its capture message on successful preparation.
+See [large live-frame reproduction](LARGE_LIVE_FRAMES.md).
 
 Live mode shares particle rendering, wrapping, GPU reconstruction/derivatives,
 instantaneous streamlines, LIC, picked values and quantity analysis with recordings.

@@ -16,6 +16,7 @@ import {
   companionConnectionMessage,
   CompanionHTTPError,
   canPauseSimulation,
+  liveConnectionStatus,
   type SimulationControl,
   LiveSource,
   RecordedSource,
@@ -544,15 +545,18 @@ export function CompanionPanel({
         history: "Simulation history",
         launch: "Run a simulation",
       }[section];
-  const connectingRun = pending?.run ?? awaitingFrame;
+  const connectingTarget = pending?.run ?? awaitingFrame;
+  const connectingRun = connectingTarget
+    ? (runs.find((run) => run.id === connectingTarget.id) ?? connectingTarget)
+    : null;
   return (
     <>
       {connectingRun && !open && (
         <div className="companion-notice" role="status">
           <Radio size={16} />
           <span>
-            Connecting to <strong>{connectingRun.name}</strong> · waiting for
-            startup…
+            Connecting to <strong>{connectingRun.name}</strong> ·{" "}
+            {liveConnectionStatus(connectingRun)}
           </span>
           <button onClick={onOpen}>View simulations</button>
           <button

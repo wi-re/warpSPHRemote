@@ -4,6 +4,7 @@ import struct
 import numpy as np
 
 MAGIC = b"WPR1"
+DEFAULT_SNAPSHOT_BYTES = 128 * 1024 * 1024
 
 
 def encode_frame(arrays, *, index, time):
@@ -47,7 +48,7 @@ def validate_packet(packet):
             shape, offset, count = spec['shape'], spec['offset'], spec['bytes']
             width = {'<f4':4, '<i4':4, '<i8':8}.get(spec['dtype'])
             if (not width or len(name)>80 or not isinstance(shape,list) or len(shape) not in (1,2)
-                or any(type(n) is not int or n<1 or n>600000 for n in shape)
+                or any(type(n) is not int or n<1 for n in shape)
                 or type(offset) is not int or offset<0 or (base+offset)%width
                 or math.prod(shape)*width != count or base+offset+count>len(packet)):
                 raise ValueError("Invalid numerical array descriptor.")

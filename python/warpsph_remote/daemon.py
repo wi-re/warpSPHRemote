@@ -22,10 +22,9 @@ from urllib.parse import urlsplit, parse_qs
 import uuid
 from .catalogue import CATALOGUE, validate_launch
 from .configuration import query_solver
-from .protocol import validate_packet
+from .protocol import DEFAULT_SNAPSHOT_BYTES, validate_packet
 from .pairing_token import persistent_token
 
-MAX_PACKET = 128 * 1024 * 1024
 DEFAULT_ORIGINS = {
     "https://fluids.dev",
     "http://127.0.0.1:5174",
@@ -65,7 +64,11 @@ class Conflict(ValueError):
 
 
 class Manager:
-    def __init__(self, root, python=None, origins=()):
+    def __init__(self, root, python=None, origins=(),
+                 max_snapshot_bytes=DEFAULT_SNAPSHOT_BYTES):
+        if type(max_snapshot_bytes) is not int or not 1 <= max_snapshot_bytes < 2**32:
+            raise ValueError("Snapshot budget must be positive and below 4 GiB (WPR1 envelope limit).")
+        self.max_snapshot_bytes = max_snapshot_bytes
         self.root = runtime_dir(root)
         self.python = str(Path(python or sys.executable).resolve())
         self.origins = DEFAULT_ORIGINS | set(origins)
@@ -219,6 +222,7 @@ class Manager:
                 attached=bool(r.get("lease")),
                 captureSequence=r.get("captureGeneration", 0),
                 staticRevision=r.get("staticRevision"),
+                maxSnapshotBytes=self.max_snapshot_bytes,
                 stop=bool(r.get("stop")),
                 pause=bool(r.get("pause")),
                 historyRequest=(r.get("historyPending") or {}).get("request"),
@@ -281,10 +285,11 @@ class Manager:
     def upload(self, key, body, metadata, revision, generation):
         if len(body) < 8:
             raise ValueError("Incomplete snapshot envelope.")
-        if len(body) > MAX_PACKET:
-            raise ValueError("Snapshot exceeds its limit.")
+        if len(body) > self.max_snapshot_bytes:
+            raise ValueError("Snapshot exceeds the daemon memory budget; increase --max-snapshot-mib.")
         ns, nd = struct.unpack("<II", body[:8])
-        if 8 + ns + nd != len(body) or not nd or ns > MAX_PACKET or nd > MAX_PACKET:
+        if (8 + ns + nd != len(body) or not nd
+                or ns > self.max_snapshot_bytes or nd > self.max_snapshot_bytes):
             raise ValueError("Invalid snapshot sizes.")
         for part in (body[8 : 8 + ns] if ns else None, body[8 + ns :]):
             if part is not None:
@@ -582,6 +587,7 @@ class Handler(BaseHTTPRequestHandler):
                         "revision": self.manager.revision,
                         "presets": self.manager.available_cases(refresh=parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]),
                         "loopbackOnly": True,
+                        "maxSnapshotBytes": self.manager.max_snapshot_bytes,
                         "features": ["pause", "recordedHistory", "configuration"],
                     }
                 )
@@ -648,13 +654,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(self.manager.status(key, self.json_body()))
                 if action == "history":
                     self.manager.history_result(key, self.headers.get("X-History-Request"),
-                        self.body(MAX_PACKET), self.headers.get("Content-Type"))
+                        self.body(self.manager.max_snapshot_bytes), self.headers.get("Content-Type"))
                     return self.send_json({"accepted": True})
                 if action == "snapshot":
                     meta = json.loads(self.headers.get("X-Snapshot-Metadata", "{}"))
                     self.manager.upload(
                         key,
-                        self.body(MAX_PACKET),
+                        self.body(self.manager.max_snapshot_bytes),
                         meta,
                         self.headers.get("X-Static-Revision"),
                         int(self.headers.get("X-Capture-Generation", "-1")),
@@ -704,7 +710,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(e)}, 409 if isinstance(e, Conflict) else 400)
 
 
-def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready=None):
+def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready=None,
+          max_snapshot_bytes=DEFAULT_SNAPSHOT_BYTES):
     root = runtime_dir(root)
     lock = os.open(root / "daemon.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
@@ -718,7 +725,7 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
     manager = server = None
     previous = {}
     try:
-        manager = Manager(root, python, origins)
+        manager = Manager(root, python, origins, max_snapshot_bytes)
         server = ThreadingHTTPServer(
             ("127.0.0.1", port), partial(Handler, manager=manager)
         )
@@ -730,6 +737,7 @@ def serve(root=None, port=8766, python=None, origins=(), incidental=False, ready
             endpoint=f"http://127.0.0.1:{server.server_port}",
             token=manager.token,
             producerToken=manager.producer_token,
+            maxSnapshotBytes=manager.max_snapshot_bytes,
         )
         temp = root / f".descriptor-{os.getpid()}"
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -840,18 +848,23 @@ def main():
     p.add_argument("--port", type=int, default=8766)
     p.add_argument("--python", help="Trusted simulation Python executable (CLI only).")
     p.add_argument("--origin", action="append", default=[])
+    p.add_argument("--max-snapshot-mib", type=int, default=128,
+                   help="Memory budget per buffered live snapshot in MiB (default: 128; 1–4095).")
     p.add_argument("--incidental", action="store_true", help=argparse.SUPPRESS)
     credential = p.add_mutually_exclusive_group()
     credential.add_argument('--show-token', action='store_true', help='Print the current pairing token without starting a daemon.')
     credential.add_argument('--rotate-token', action='store_true', help='Replace the persistent pairing token while this daemon is stopped.')
     a = p.parse_args()
+    if not 1 <= a.max_snapshot_mib <= 4095:
+        p.error("--max-snapshot-mib must be 1–4095 (WPR1 envelope limit: below 4 GiB).")
     if a.show_token or a.rotate_token:
         try:
             print(pairing_command(a.runtime, rotate=a.rotate_token))
         except (OSError, ValueError, KeyError) as error:
             p.error(str(error))
         return
-    if not serve(a.runtime, a.port, a.python, a.origin, a.incidental):
+    if not serve(a.runtime, a.port, a.python, a.origin, a.incidental,
+                 max_snapshot_bytes=a.max_snapshot_mib * 1024 * 1024):
         info = descriptor(a.runtime)
         if not a.incidental:
             persistent_token(initial=info["token"])

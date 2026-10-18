@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import numpy as np
 from .daemon import ensure_daemon, descriptor
-from .protocol import encode_frame
+from .protocol import DEFAULT_SNAPSHOT_BYTES, encode_frame
 
 
 class SimulationStopped(Exception):
@@ -29,6 +29,8 @@ class SimulationPublisher:
         self.name = name
         self.info = ensure_daemon(runtime) if autostart else descriptor(runtime)
         self.interval = interval
+        self.max_snapshot_bytes = self.info.get("maxSnapshotBytes", DEFAULT_SNAPSHOT_BYTES)
+        self._capture_retry_at = 0.0
         self.closed = threading.Event()
         self.stopping = threading.Event()
         self.pausing = threading.Event()
@@ -107,6 +109,7 @@ class SimulationPublisher:
                             self.captured = 0
                 response = self._request(f"/producer/{self.id}/status", meta)
                 with self.lock:
+                    self.max_snapshot_bytes = response.get("maxSnapshotBytes", self.max_snapshot_bytes)
                     if response["capture"]:
                         self.capture_target = response["captureSequence"]
                         self.static_revision = response["staticRevision"]
@@ -136,14 +139,14 @@ class SimulationPublisher:
     @property
     def wants_snapshot(self):
         with self.lock:
-            return self.capture_target > self.captured and self.pending is None
+            return (self.capture_target > self.captured and self.pending is None
+                    and time.monotonic() >= self._capture_retry_at)
 
     def snapshot(self, arrays, *, step, time_value, domain=None):
         """Call only at a safe completed-step boundary. One pending capture maximum."""
         with self.lock:
             if self.capture_target <= self.captured or self.pending is not None:
                 return False
-            self.captured = self.capture_target
             generation = self.capture_target
             expected = self.static_revision
         raw = {
@@ -166,11 +169,20 @@ class SimulationPublisher:
             )
         p = raw["positions"]
         n, dim = p.shape
-        if dim not in (2, 3) or not n or n > 600000:
-            raise ValueError("Live snapshots support up to 600,000 2D/3D particles.")
+        if dim not in (2, 3) or not n:
+            raise ValueError("Live snapshots require nonempty 2D/3D positions.")
         for name, a in raw.items():
-            if a.shape[0] != n or a.ndim not in (1, 2) or not np.isfinite(a).all():
+            if a.ndim not in (1, 2) or a.shape[0] != n or not np.isfinite(a).all():
                 raise ValueError(f"Invalid live field {name}.")
+        # Bound bytes, not particle count: different fields/dimensions cost differently.
+        payload_bytes = sum(
+            a.size * (4 if a.dtype.kind == "f" or a.dtype.itemsize <= 4 else 8)
+            for a in raw.values()
+        )
+        if payload_bytes > self.max_snapshot_bytes:
+            raise ValueError(
+                f"Snapshot payload needs {payload_bytes / 2**20:.1f} MiB; daemon budget is "
+                f"{self.max_snapshot_bytes / 2**20:g} MiB. Increase --max-snapshot-mib on the daemon.")
         static = {k: raw.pop(k) for k in ("UIDs", "kinds", "masses")}
         digest = hashlib.sha256()
         for k, a in static.items():
@@ -200,17 +212,21 @@ class SimulationPublisher:
             time=time_value,
         )
         packet = struct.pack("<II", len(statics), len(dynamics)) + statics + dynamics
+        if len(packet) > self.max_snapshot_bytes:
+            raise ValueError("Snapshot including headers exceeds the daemon budget; increase --max-snapshot-mib.")
+        headers = {
+            "X-Capture-Generation": str(generation),
+            "X-Static-Revision": revision,
+            "X-Snapshot-Metadata": json.dumps(
+                metadata, separators=(",", ":"), allow_nan=False
+            ),
+        }
         with self.lock:
-            self.pending = (
-                packet,
-                {
-                    "X-Capture-Generation": str(generation),
-                    "X-Static-Revision": revision,
-                    "X-Snapshot-Metadata": json.dumps(
-                        metadata, separators=(",", ":"), allow_nan=False
-                    ),
-                },
-            )
+            self.captured = generation
+            self._capture_retry_at = 0.0
+            if self.meta.get("message", "").startswith("Live capture unavailable:"):
+                self.meta["message"] = ""
+            self.pending = (packet, headers)
         return True
 
     def recording(self, ctx):
@@ -287,17 +303,19 @@ class SimulationPublisher:
                 "internalEnergies",
             )
         }
-        domain = {
-            name: numpy_array(getattr(ctx.config.domain, name)).tolist()
-            for name in ("min", "max", "periodic")
-        }
         try:
+            domain = {
+                name: numpy_array(getattr(ctx.config.domain, name)).tolist()
+                for name in ("min", "max", "periodic")
+            }
             self.snapshot(
                 arrays, step=int(step), time_value=float(state.t), domain=domain
             )
         except (ValueError, TypeError, IndexError) as error:
             # Viewing is optional: an unsupported capture must not kill a valid solver run.
-            self.update(message=("Live capture unavailable: " + str(error))[:500])
+            with self.lock:
+                self._capture_retry_at = time.monotonic() + max(0.5, self.interval)
+                self.meta["message"] = ("Live capture unavailable: " + str(error))[:500]
 
     def close(self, status="completed", message=""):
         self.closed.set()

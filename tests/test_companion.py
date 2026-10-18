@@ -511,3 +511,115 @@ def test_existing_checkpoint_exports_are_history_without_copying_files(tmp_path)
     assert set(directory.iterdir())==before
     with pytest.raises(ValueError,match='out of range'):
         read_recording(recording,'frame',3,'velocities')
+
+
+def test_large_live_frame_is_bounded_by_bytes_not_particle_count(api):
+    # Actual equal-mass triplePoint nx=256 particle count, above the old 600k cap.
+    from warpsph_remote.protocol import validate_packet
+    m, call, endpoint = api
+    (m.root / "daemon.json").write_text(json.dumps(dict(endpoint=endpoint, producerToken=m.producer_token)))
+    (m.root / "daemon.json").chmod(0o600)
+    p = SimulationPublisher("triplePoint-sized fixture", runtime=m.root, autostart=False, interval=.01)
+    n = 765418
+    values = {"positions": np.zeros((n, 2), np.float32), "velocities": np.zeros((n, 2), np.float32),
+              "UIDs": np.arange(n, dtype=np.int32), "kinds": np.zeros(n, np.int32),
+              **{k: np.ones(n, np.float32) for k in ("masses", "supports", "densities", "pressures", "internalEnergies")}}
+    try:
+        m.attach(p.id, "viewer-aaaaaaaaaaaa")
+        wait_for(lambda: p.wants_snapshot)
+        assert p.snapshot(values, step=1, time_value=.002)
+        wait_for(lambda: m.runs[p.id]["snapshot"] is not None)
+        run = m.runs[p.id]
+        assert validate_packet(run["snapshot"])["arrays"]["positions"]["shape"] == [n, 2]
+        static = run["static"]
+        assert validate_packet(static)["arrays"]["UIDs"]["shape"] == [n]
+        # A delayed consumer never triggers another full capture until acknowledgement.
+        assert not p.wants_snapshot
+        headers = {"X-Viewer-Id": "viewer-aaaaaaaaaaaa"}
+        call(f"/v1/runs/{p.id}/ack", {"sequence": run["sequence"]}, headers=headers).close()
+        wait_for(lambda: p.wants_snapshot)
+        assert p.snapshot(values, step=2, time_value=.004)
+        wait_for(lambda: run["snapshot"] is not None)
+        assert run["static"] is static
+    finally:
+        p.close()
+
+
+def test_capture_failure_retries_and_clears_message_after_recovery(api):
+    from types import SimpleNamespace as NS
+    m, call, endpoint = api
+    (m.root / "daemon.json").write_text(json.dumps(dict(endpoint=endpoint, producerToken=m.producer_token)))
+    (m.root / "daemon.json").chmod(0o600)
+    p = SimulationPublisher("retry fixture", runtime=m.root, autostart=False, interval=.01)
+    values = arrays()
+    state = NS(t=.1, state=NS(**values))
+    ctx = NS(spec=NS(store=False), config=NS(dt=.01, domain=NS(min=np.zeros(2), max=np.ones(2), periodic=np.ones(2, dtype=bool))), scheme="CRKSPH")
+    try:
+        m.attach(p.id, "viewer-aaaaaaaaaaaa")
+        wait_for(lambda: p.wants_snapshot)
+        # Transient invalid optional field must not consume this capture request.
+        state.state.pressures = np.full(2, np.nan)
+        p.post_step(ctx, state, 1)
+        assert not p.wants_snapshot  # retry is throttled, not attempted at every solver step
+        wait_for(lambda: "Invalid live field pressures" in m.runs[p.id].get("message", ""))
+        assert m.runs[p.id]["status"] == "running"
+        state.state.pressures = np.ones(2)
+        wait_for(lambda: p.wants_snapshot)
+        p.post_step(ctx, state, 2)
+        wait_for(lambda: m.runs[p.id]["snapshot"] is not None)
+        wait_for(lambda: not m.runs[p.id].get("message"))
+        assert m.runs[p.id]["metadata"]["step"] == 2
+    finally:
+        p.close()
+
+
+def test_snapshot_memory_budget_is_negotiated_and_enforced(api):
+    m, call, endpoint = api
+    # A small budget makes both limits testable without allocating hundreds of MiB.
+    m.max_snapshot_bytes = 4096
+    assert json.load(call("/v1/session"))["maxSnapshotBytes"] == 4096
+    (m.root / "daemon.json").write_text(json.dumps(dict(endpoint=endpoint, producerToken=m.producer_token)))
+    (m.root / "daemon.json").chmod(0o600)
+    p = SimulationPublisher("budget fixture", runtime=m.root, autostart=False, interval=.01)
+    try:
+        m.attach(p.id, "viewer-aaaaaaaaaaaa")
+        wait_for(lambda: p.wants_snapshot)
+        assert p.max_snapshot_bytes == 4096
+        values = {k: np.repeat(a, 100, axis=0) for k,a in arrays().items()}
+        with pytest.raises(ValueError, match="Increase --max-snapshot-mib"):
+            p.snapshot(values, step=1, time_value=.1)
+        assert p.wants_snapshot  # no pending or consumed capture on failure
+        static = encode_frame({k:values[k] for k in ("UIDs", "kinds", "masses")}, index=1, time=.1)
+        dynamic = encode_frame({k:v for k,v in values.items() if k not in ("UIDs", "kinds", "masses")}, index=1, time=.1)
+        packet = struct.pack("<II", len(static), len(dynamic)) + static + dynamic
+        with pytest.raises(ValueError, match="--max-snapshot-mib"):
+            m.upload(p.id, packet, {}, "revision", m.runs[p.id]["captureGeneration"])
+        # A larger daemon-selected budget is propagated to an already registered producer.
+        m.max_snapshot_bytes = 32768
+        wait_for(lambda: p.max_snapshot_bytes == 32768)
+        assert p.snapshot(values, step=2, time_value=.2)
+        wait_for(lambda: m.runs[p.id]["snapshot"] is not None)
+    finally:
+        p.close()
+
+
+@pytest.mark.parametrize('budget', [0, -1, True, 2**32, 1.5])
+def test_invalid_snapshot_budget_rejected_before_runtime_creation(tmp_path, budget):
+    root = tmp_path / 'invalid-budget'
+    with pytest.raises(ValueError, match='Snapshot budget'):
+        Manager(root, max_snapshot_bytes=budget)
+    assert not root.exists()
+
+
+def test_daemon_descriptor_advertises_custom_snapshot_budget(tmp_path):
+    from warpsph_remote.daemon import serve
+    root = tmp_path / 'custom-budget'
+    class Checked(Exception):
+        pass
+    def ready(info):
+        assert info['maxSnapshotBytes'] == 512 * 1024**2
+        assert descriptor(root)['maxSnapshotBytes'] == info['maxSnapshotBytes']
+        raise Checked()
+    with pytest.raises(Checked):
+        serve(root, port=0, incidental=True, ready=ready, max_snapshot_bytes=512 * 1024**2)
+    assert not (root / 'daemon.json').exists()

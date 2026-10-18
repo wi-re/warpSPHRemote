@@ -40,6 +40,14 @@ export interface Simulation {
   pauseRequested?: boolean;
   recording?: { enabled: boolean; mode: string };
 }
+/** Keep capture failures visible while the producer retries and controls remain available. */
+export function liveConnectionStatus(run: Simulation): string {
+  if (run.message) return run.message;
+  if (run.stale) return "waiting for a producer heartbeat…";
+  return run.status === "running" || run.status === "paused"
+    ? "waiting for the first live frame…"
+    : "waiting for startup…";
+}
 export interface SimulationControl {
   sourceId: string;
   status: string;
