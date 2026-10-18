@@ -96,6 +96,7 @@ export function liveConnectionStatus(run: Simulation): string {
     : "waiting for startup…";
 }
 export interface SimulationControl {
+  captureDiagnosticsSupported?: boolean;
   sourceId: string;
   setDiagnosticProbes?: (probes: PressureProbe[]) => Promise<void>;
   setVideo?: (

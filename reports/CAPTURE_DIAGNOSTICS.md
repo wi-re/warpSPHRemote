@@ -105,3 +105,9 @@ VP8 video, and restored the saved grid view after inspection. The test browser
 intermittently lost its localhost connection; the partial video remained savable.
 Keep the test tab foregrounded for synchronized-video checks. Browser storage
 quota failures leave the session's in-memory recording preset usable.
+
+When stage metadata is absent, the viewer distinguishes a companion that needs
+a restart, a run started with an older adapter, and a current adapter awaiting
+its first status. These notices never claim that the simulation is stalled.
+Restarting a companion is deliberately left to the user so active video capture
+is not interrupted by a diagnostic UI update.

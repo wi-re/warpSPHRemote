@@ -81,7 +81,7 @@ class SimulationPublisher:
             "time": 0.0,
             "dt": 0.0,
         }
-        body = {"measurements":measurements, "name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo", "stepVideo"]}
+        body = {"measurements":measurements, "name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo", "stepVideo", "captureDiagnostics"]}
         if video is not None:
             from .catalogue import validate_video
             body['videoCapture']=validate_video(video)
@@ -141,7 +141,7 @@ class SimulationPublisher:
             registration = self._request("/producer/runs", dict(
                 id=self.id, name=self.name, pid=os.getpid(), reconnect=True,
                 startedAt=self.started_at, paused=self.pausing.is_set(),
-                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, measurements=self.measurements, capabilities=["synchronizedVideo", "stepVideo"]))
+                managed=os.environ.get("WARPSPH_REMOTE_RUN") == self.id, video=self.video, measurements=self.measurements, capabilities=["synchronizedVideo", "stepVideo", "captureDiagnostics"]))
             if registration["id"] != self.id:
                 raise ValueError("Companion did not preserve the recovered run identity.")
             self.telemetry_supported = "telemetry" in registration.get("features", [])

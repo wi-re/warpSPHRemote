@@ -358,6 +358,8 @@ export function CompanionPanel({
                   }
                 : undefined,
             run,
+            captureDiagnosticsSupported:
+              features.includes("captureDiagnostics"),
             canStepVideo:
               features.includes("stepVideo") &&
               !!run.capabilities?.includes("stepVideo"),

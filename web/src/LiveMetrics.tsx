@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { SimulationControl } from "./companion";
 import {
   duration,
-  solverActivity,
-  captureActivity,
+  pipelinePresentation,
   limitingStage,
   megabytes,
   memorySize,
@@ -35,6 +34,10 @@ export function LiveMetrics({
   const p = run?.performance,
     resources = run?.resources;
   const remaining = run ? remainingSeconds(run) : undefined;
+  const pipeline = pipelinePresentation(
+    run,
+    control.captureDiagnosticsSupported,
+  );
   const paused = control.pauseRequested || control.status === "paused";
   const rate = transfer && transferRate(transfer);
   // Host and browser clocks need not agree. Anchor forecasts to local receipt.
@@ -63,13 +66,11 @@ export function LiveMetrics({
         <dd>{run?.stale ? "Heartbeat overdue" : control.status}</dd>
         <dt>Solver activity</dt>
         <dd>
-          {["completed", "stopped", "failed"].includes(control.status)
-            ? `Run ${control.status}`
-            : solverActivity(run?.pipeline?.solver)}
+          {pipeline.solver}
           {run?.pipeline ? ` · ${run.pipeline.solverSeconds.toFixed(1)} s` : ""}
         </dd>
         <dt>Capture pipeline</dt>
-        <dd>{captureActivity(run?.pipeline?.capture)}</dd>
+        <dd>{pipeline.capture}</dd>
         <dt>Viewer activity</dt>
         <dd>
           {run?.video?.armed
@@ -126,6 +127,11 @@ export function LiveMetrics({
             : "—"}
         </dd>
       </dl>
+      {pipeline.note && (
+        <p className="subtle-note" role="status">
+          {pipeline.note}
+        </p>
+      )}
       <p className="subtle-note" role="status">
         {limitingStage(
           run,

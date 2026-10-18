@@ -124,3 +124,45 @@ export function limitingStage(
   if (!slow) return "Waiting for first frame timings.";
   return `Largest measured frame stage: ${slow[0]} (${slow[1].toFixed(1)} ms). ${run.video?.active ? "Video synchronization can hold the solver for frame delivery." : "This limits live updates; background transfer does not hold the solver."}`;
 }
+
+/** Missing stage metadata is different from a solver/capture stall. */
+export function pipelinePresentation(
+  run: Simulation | undefined,
+  daemonSupports?: boolean,
+) {
+  if (run && ["completed", "stopped", "failed"].includes(run.status))
+    return { solver: `Run ${run.status}`, capture: "Finished" };
+  if (run?.pipeline)
+    return {
+      solver: solverActivity(run.pipeline.solver),
+      capture: captureActivity(run.pipeline.capture),
+    };
+  const solver =
+    run?.status === "paused"
+      ? "Paused · stage not reported"
+      : run?.status === "running"
+        ? "Running · stage not reported"
+        : "Starting · waiting for status";
+  if (daemonSupports === false)
+    return {
+      solver,
+      capture: "Companion restart needed",
+      note: "The companion is running older code without capture diagnostics. Restart the companion to load the update. This does not indicate a stalled simulation; you can finish the current recording first.",
+    };
+  if (
+    !run ||
+    run.registered === false ||
+    run.status === "starting" ||
+    run.capabilities?.some((c) =>
+      ["captureDiagnostics", "stepVideo"].includes(c),
+    )
+  )
+    return { solver, capture: "Waiting for adapter status" };
+  if (daemonSupports === true)
+    return {
+      solver,
+      capture: "Older simulation adapter",
+      note: "This simulation was started with an older adapter. Its normal controls still work. Newly launched runs provide detailed capture stages.",
+    };
+  return { solver, capture: "Stage not reported" };
+}
