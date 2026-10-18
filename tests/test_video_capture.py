@@ -95,3 +95,71 @@ def test_video_requires_capable_adapter_and_terminal_lease_can_finalize(api):
     assert m.attach(key,viewer)['status']=='completed'
     m.video_capture(key,viewer,dict(active=False))
     with pytest.raises(Conflict):m.attach(key,'viewer-bbbbbbbbbbbb')
+
+
+def test_armed_video_captures_initial_state_before_any_step_and_adopts_without_discard(api):
+    from dataclasses import dataclass
+    from warpsph_remote.publisher import SimulationPublisher
+    from warpsph_remote.catalogue import validate_launch
+    import json
+    m,call,endpoint=api
+    (m.root/'daemon.json').write_text(json.dumps(dict(endpoint=endpoint,producerToken=m.producer_token)))
+    (m.root/'daemon.json').chmod(0o600)
+    p=SimulationPublisher('armed',runtime=m.root,autostart=False,interval=.01,video={'fps':24,'interval':.03})
+    values=arrays();ctx=NS(spec=NS(store=False),scratch={},scheme='test',config=NS(dt=.01,
+        domain=NS(min=np.zeros(2),max=np.ones(2),periodic=np.ones(2,dtype=bool))))
+    calls=[];progress=[]
+    @dataclass
+    class Case:
+        postStep:object=None
+        extraData:object=None
+    case=p.bind_case(Case(extraData=lambda ctx,state:(calls.append(float(state.t)) or {'ok':1})))
+    def run():
+        assert case.extraData(ctx,NS(t=0,state=NS(**values)))=={'ok':1}
+        progress.append('first integrator step')
+        case.postStep(ctx,NS(t=.01,state=NS(**values)),0)
+        # Recording may call extraData again; it must not re-enter step zero.
+        case.extraData(ctx,NS(t=.01,state=NS(**values)))
+    worker=threading.Thread(target=run,daemon=True)
+    try:
+        worker.start();wait_for(lambda:m.runs[p.id].get('time')==0)
+        time.sleep(.1);assert not progress and not m.runs[p.id]['lease']
+        viewer='viewer-aaaaaaaaaaaa';m.attach(p.id,viewer)
+        wait_for(lambda:m.runs[p.id]['sequence']==1)
+        packet=m.runs[p.id]['snapshot']
+        assert m.runs[p.id]['metadata']['time']==0
+        assert m.runs[p.id]['metadata']['videoArmed']==dict(fps=24,interval=.03)
+        time.sleep(.1);assert not progress
+        call(f'/v1/runs/{p.id}/video',dict(active=True,interval=.03,adopt=True),headers={'X-Viewer-Id':viewer}).close()
+        assert m.runs[p.id]['snapshot'] is packet and m.runs[p.id]['sequence']==1
+        assert not m.runs[p.id]['video']['armed']
+        # A retry after a lost HTTP response preserves the exact held packet.
+        m.video_capture(p.id,viewer,dict(active=True,interval=.03,adopt=True))
+        assert m.runs[p.id]['snapshot'] is packet
+        m.pause(p.id,False)
+        ack(call,p,viewer,1);worker.join(3)
+        assert not worker.is_alive() and progress==['first integrator step']
+        assert calls==[0,.01]
+        assert 'video' not in validate_launch({'preset':'gresho'})
+        for bad in (True,{'fps':0},{'fps':3.5},{'interval':0},{'interval':float('nan')},{'path':'/tmp/video'}):
+            with pytest.raises(ValueError):validate_launch({'preset':'gresho','video':bad})
+        assert validate_launch({'preset':'gresho','video':{'fps':24,'interval':.03}})['record'] is False
+    finally:
+        p.stopping.set();p.close('stopped');worker.join(3)
+
+
+def test_launch_paused_initial_preview_does_not_require_video(api):
+    m,call,p,ctx,values,viewer=setup(api)
+    done=threading.Event()
+    try:
+        m.pause(p.id,True);wait_for(lambda:p.pausing.is_set())
+        worker=threading.Thread(target=lambda:(p.initial_state(ctx,NS(t=0,state=NS(**values))),done.set()),daemon=True)
+        worker.start();wait_for(lambda:m.runs[p.id]['sequence']==1)
+        assert m.runs[p.id]['metadata']['time']==0 and 'videoArmed' not in m.runs[p.id]['metadata']
+        ack(call,p,viewer,1);time.sleep(.1)
+        assert not done.is_set() and m.runs[p.id]['status']=='paused'
+        m.pause(p.id,False);assert done.wait(3)
+        from warpsph_remote.catalogue import validate_launch
+        assert validate_launch({'preset':'gresho','paused':True})['paused']
+        with pytest.raises(ValueError):validate_launch({'preset':'gresho','paused':1})
+    finally:p.stopping.set();p.close('stopped')

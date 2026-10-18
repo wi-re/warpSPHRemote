@@ -22,7 +22,7 @@ import threading
 import time
 from urllib.parse import urlsplit, parse_qs
 import uuid
-from .catalogue import CATALOGUE, validate_launch
+from .catalogue import armed_video, CATALOGUE, validate_launch
 from .configuration import query_solver
 from .protocol import DEFAULT_SNAPSHOT_BYTES, validate_packet
 from .pairing_token import persistent_token
@@ -101,6 +101,7 @@ class Manager:
         capabilities=data.get('capabilities',[])
         if not isinstance(capabilities,list) or len(capabilities)>32 or any(not isinstance(v,str) or len(v)>80 for v in capabilities):
             raise ValueError('Invalid producer capabilities.')
+        initial_video=armed_video(data['videoCapture']) if data.get('videoCapture') is not None else None
         recovery = data.get("reconnect", False)
         if any(type(data.get(k, False)) is not bool for k in ("reconnect", "paused", "managed")):
             raise ValueError("Invalid producer recovery flags.")
@@ -128,11 +129,14 @@ class Manager:
                     recovered=recovery,
                     pause=bool(recovery and data.get("paused")))
                 self.runs[key] = run
+            if initial_video is not None:
+                run['video']=initial_video
+                run['pause']=True
             if recovery and isinstance(data.get('video'), dict) and data['video'].get('active'):
                 interval = data['video'].get('interval',.04)
                 if type(interval) not in (int,float) or not math.isfinite(interval) or interval<=0:
                     raise ValueError('Invalid recovered video interval.')
-                run['video'] = dict(active=True, interval=interval, nextTime=-1, ackTime=-1, ackStep=-1, orphaned=True)
+                run['video'] = dict(active=True, interval=interval, fps=data['video'].get('fps',30), armed=data['video'].get('armed',False), nextTime=-1, ackTime=-1, ackStep=-1, orphaned=True)
             run.update(
                 name=data["name"],
                 pid=data.get("pid"),
@@ -337,8 +341,10 @@ class Manager:
             return self.public(r)
 
     def video_capture(self, key, viewer, data):
-        if not isinstance(data, dict) or set(data) - {'active', 'interval'} or type(data.get('active')) is not bool:
+        if not isinstance(data, dict) or set(data) - {'active', 'interval', 'adopt'} or type(data.get('active')) is not bool:
             raise ValueError('Invalid video capture settings.')
+        if 'adopt' in data and type(data['adopt']) is not bool:
+            raise ValueError('Video adoption flag must be boolean.')
         interval = data.get('interval', .04)
         if type(interval) not in (int,float) or not math.isfinite(interval) or interval <= 0:
             raise ValueError('Video simulation interval must be positive.')
@@ -348,6 +354,16 @@ class Manager:
                 raise Conflict('Restart this simulation with an updated adapter to synchronize video capture.')
             if data['active'] and r.get('status') in ('completed','failed','stopped'):
                 raise Conflict('The simulation has ended; export its recorded trajectory instead.')
+            if data.get('adopt'):
+                initial_pending=(r.get('snapshot') is not None and (r.get('metadata') or {}).get('videoArmed')
+                    and r.get('video',{}).get('ackTime',-1)<(r.get('metadata') or {}).get('time',0))
+                if not data['active'] or not (r.get('video',{}).get('armed') or initial_pending):
+                    raise Conflict('This run has no armed initial video frame.')
+                # Keep its pending initial snapshot and generation: the viewer
+                # must encode this exact state before acknowledging it.
+                r['video'].update(active=True,armed=False,orphaned=False,interval=interval)
+                self.touch()
+                return self.public(r)
             r['video'] = dict(active=data['active'], interval=interval, nextTime=-1, ackTime=-1, ackStep=-1, orphaned=False)
             r['captureGeneration'] = r.get('captureGeneration',0)+1
             r.update(snapshot=None, static=None, staticRevision=None, streamPaused=False,
@@ -488,10 +504,12 @@ class Manager:
                 sequence=0,
                 createdBy="daemon",
                 launch=spec,
+                **({"video":armed_video(spec["video"])} if "video" in spec else {}),
                 process=p,
                 pid=p.pid,
                 registered=False,
                 stop=False,
+                pause=bool(spec.get("paused")),
             )
             self.touch()
         threading.Thread(target=self._reap, args=(key, p), daemon=True).start()
@@ -697,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
                         "presets": self.manager.available_cases(refresh=parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]),
                         "loopbackOnly": True,
                         "maxSnapshotBytes": self.manager.max_snapshot_bytes,
-                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo"],
+                        "features": ["pause", "recordedHistory", "configuration", "viewerTakeover", "producerRecovery", "streaming", "configurationInspection", "synchronizedVideo", "videoFromStart"],
                     }
                 )
             if parts == ["v1", "configuration"]:
@@ -764,7 +782,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = self.json_body()
                 key = data.pop("id", None)
                 key = self.manager.register(data, key)
-                return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"],
+                return self.send_json({"id": key, "startedAt": self.manager.runs[key]["startedAt"], "video": self.manager.runs[key].get("video"), "pause":bool(self.manager.runs[key].get("pause")),
                     "features": ["telemetry", "producerRecovery", "bufferedCapture", "configurationInspection", "synchronizedVideo"]}, 201)
             if len(parts) == 3 and parts[0] == "producer":
                 key, action = parts[1:]

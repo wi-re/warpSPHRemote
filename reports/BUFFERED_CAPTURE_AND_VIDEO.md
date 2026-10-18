@@ -106,3 +106,52 @@ under `warpSPHDevelopment/remote/buffered-video-20261018/`.
 
 Primary format/API references: [WebCodecs](https://w3c.github.io/webcodecs/)
 and [WebM container guidelines](https://www.webmproject.org/docs/container/).
+
+## Initialize, configure, then Play
+
+The launch wizard offers **Launch paused · configure the initial view before
+Play** for any supported case. It initializes the case and transfers a preview
+of the true initial state, before the first integrator step. Ordinary preview
+ACKs do not release a paused solver.
+
+**Capture video from the initial frame** automatically requires this preparation
+pause. It arms video in the launch request, before starting the worker, but does
+not start the encoder or acknowledge the initial video frame. After the picker
+closes, choose the quantity, colormap, reconstruction, camera and other view
+settings at t=0. Press the plot's Play button (**Start video and simulation**),
+or Space. The viewer waits for the requested visualization to finish loading,
+encodes that configured initial view, acknowledges it, and advances the solver.
+Video settings can also be adjusted in Export video before starting. No image
+of the earlier, unconfigured view is included in the export.
+
+The initial handoff adopts the existing immutable packet rather than dropping
+it or requesting a later state. It is safe to retry adoption before the first
+ACK. Afterwards normal video backpressure and final-frame handoff apply.
+Trajectory recording remains a separate option and stays off by default.
+Unsupported browser encoding is checked before a video-enabled launch; any
+later failure retains the held initial state for explicit recovery/release.
+
+The adapter wraps the standard case `extraData` hook for its initialized-state
+preview and preserves the case's original hook result. This runs before the
+first integrator step, without changing the solver repository or enabling its
+plot/export paths. A one-time guard prevents later recording callbacks from
+re-entering initialization. Python users can also arm an external run with
+`run_live(case, video={"fps": 30, "interval": 0.04}, ...)`.
+
+Reproduce the isolated real-solver check with:
+
+```bash
+PYTHONPATH=python WARPSPH_COMPILE_WALLS=1 /path/to/warp/python \
+  examples/check_initial_video.py --python /path/to/warp/python \
+  --output /tmp/warpSPHDevelopment/remote/new-initial-video-check
+# Add --browser to serve a fixture-owned TGV launcher at 127.0.0.1:18769.
+# The dummy pairing token is printed by the fixture. It accepts the development
+# origin http://127.0.0.1:5175; never use it with a user daemon.
+```
+
+The 2026-10-18 verification held a real 16² TGV at t=0 through delayed attachment
+and render acknowledgement. The browser launch test stayed paused while its view
+changed from vorticity to density with Magma; the decoded six-frame WebM began
+with **Density, t=0** in the selected palette and ended at t=0.01. General
+launch-paused preview without video is covered separately. Evidence is kept in
+`warpSPHDevelopment/remote/initial-video-20261018/` outside source.

@@ -8,6 +8,21 @@ from pathlib import Path
 CATALOGUE = json.loads(Path(__file__).with_name("presets.json").read_text())
 
 
+def validate_video(data):
+    if not isinstance(data,dict) or set(data)-{'fps','interval'}:
+        raise ValueError('Video capture requires fps and a simulation-time interval.')
+    fps,interval=data.get('fps',30),data.get('interval',.04)
+    if type(fps) is not int or not 1<=fps<=120:
+        raise ValueError('Video fps must be an integer between 1 and 120.')
+    if type(interval) not in (int,float) or not math.isfinite(interval) or not .000001<=interval<=10000:
+        raise ValueError('Video interval must be finite and between 1e-6 and 10000.')
+    return dict(fps=fps,interval=float(interval))
+
+
+def armed_video(settings):
+    return dict(active=True,armed=True,**validate_video(settings),nextTime=-1,ackTime=-1,ackStep=-1,orphaned=False)
+
+
 def validate_launch(data, catalogue=None):
     if not isinstance(data, dict) or set(data) - {
         "preset",
@@ -18,6 +33,8 @@ def validate_launch(data, catalogue=None):
         "steps",
         "record",
         "exportInterval",
+        "video",
+        "paused",
         "configuration",
     }:
         raise ValueError("Use a registered preset and its bounded parameters.")
@@ -54,6 +71,8 @@ def validate_launch(data, catalogue=None):
     if (type(export_interval) not in (int, float) or not math.isfinite(export_interval)
             or not 0.000001 <= export_interval <= 10000):
         raise ValueError("Export interval must be finite and between 1e-6 and 10000.")
+    if 'paused' in data and type(data['paused']) is not bool:
+        raise ValueError('Launch paused must be a boolean.')
     configuration = restricted_configuration(data["configuration"]) if "configuration" in data else None
     result = dict(
         preset=case["id"],
@@ -65,6 +84,10 @@ def validate_launch(data, catalogue=None):
         record=record,
         exportInterval=export_interval,
     )
+    if data.get("paused") or "video" in data:
+        result["paused"] = True
+    if "video" in data:
+        result["video"] = validate_video(data["video"])
     if configuration is not None:
         result["configuration"] = configuration
     return result

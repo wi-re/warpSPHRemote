@@ -55,6 +55,7 @@ interface Props {
   onFrame: (reader: TrajectorySource, first: boolean) => void;
   onDetached: (id: string) => void;
   onControl: (control: SimulationControl | null) => void;
+  prepareVideo: (fps: number) => Promise<void>;
 }
 export function CompanionPanel({
   open,
@@ -66,6 +67,7 @@ export function CompanionPanel({
   onFrame,
   onDetached,
   onControl,
+  prepareVideo,
 }: Props) {
   const backdropPress = useRef(false);
   const [offlineMessage, setOfflineMessage] = useState("");
@@ -329,7 +331,7 @@ export function CompanionPanel({
             sourceId: `live-${run.id}`,
             setVideo:
               features.includes("synchronizedVideo") && run.videoSupported
-                ? async (enabled, interval) => {
+                ? async (enabled, interval, adopt) => {
                     const session = active.current;
                     if (!session || session.id !== run.id)
                       throw new Error("Reconnect the simulation first.");
@@ -338,7 +340,12 @@ export function CompanionPanel({
                     setTransfersPaused(false);
                     await session.settingsQueue;
                     try {
-                      await client.videoCapture(run.id, enabled, interval);
+                      await client.videoCapture(
+                        run.id,
+                        enabled,
+                        interval,
+                        adopt,
+                      );
                     } catch (error) {
                       session.video = false;
                       throw error;
@@ -617,7 +624,7 @@ export function CompanionPanel({
         transfersPaused: false,
         captureInterval: 0.5,
         settingsQueue: Promise.resolve(),
-        video: false,
+        video: !!request.run.video?.active,
       };
       active.current = session;
       setAttached(id);
@@ -701,7 +708,12 @@ export function CompanionPanel({
                   }
                   session.waiting = false;
                 };
-                if (!session.video && session.reader?.sameState(snapshot)) {
+                if (
+                  !session.video &&
+                  session.reader?.sameState(snapshot) &&
+                  !!session.reader.metadata.videoArmed ===
+                    !!snapshot.metadata.videoArmed
+                ) {
                   await ack();
                 } else {
                   const first = !session.reader;
@@ -811,6 +823,8 @@ export function CompanionPanel({
     setBusy(true);
     setError("");
     try {
+      const video = (spec as { video?: { fps: number } }).video;
+      if (video) await prepareVideo(video.fps);
       const run = await client.launch(spec);
       if (connectedClient.current !== client) return;
       setRuns((old) => [...old.filter((row) => row.id !== run.id), run]);

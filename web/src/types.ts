@@ -22,6 +22,7 @@ export interface Source {
   liveConnected?: boolean;
   liveRevision?: number;
   liveStep?: number;
+  videoArmed?: { fps: number; interval: number };
   scheme?: string;
   kernel?: string;
   integrator?: string;

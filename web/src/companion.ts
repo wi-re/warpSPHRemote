@@ -42,7 +42,13 @@ export interface Simulation {
   recording?: { enabled: boolean; mode: string };
   configurationAvailable?: boolean;
   videoSupported?: boolean;
-  video?: { active: boolean; interval: number; orphaned?: boolean };
+  video?: {
+    active: boolean;
+    interval: number;
+    fps?: number;
+    armed?: boolean;
+    orphaned?: boolean;
+  };
   performance?: {
     stepMs?: number;
     simulationRate?: number;
@@ -66,7 +72,11 @@ export function liveConnectionStatus(run: Simulation): string {
 }
 export interface SimulationControl {
   sourceId: string;
-  setVideo?: (active: boolean, interval: number) => Promise<void>;
+  setVideo?: (
+    active: boolean,
+    interval: number,
+    adopt?: boolean,
+  ) => Promise<void>;
   status: string;
   pauseRequested: boolean;
   canPause: boolean;
@@ -337,8 +347,17 @@ export class CompanionClient {
   async stop(id: string) {
     await this.request(`/v1/runs/${id}/stop`, {});
   }
-  async videoCapture(id: string, active: boolean, interval: number) {
-    return this.request(`/v1/runs/${id}/video`, { active, interval });
+  async videoCapture(
+    id: string,
+    active: boolean,
+    interval: number,
+    adopt = false,
+  ) {
+    return this.request(`/v1/runs/${id}/video`, {
+      active,
+      interval,
+      ...(adopt ? { adopt } : {}),
+    });
   }
   async ack(id: string, sequence: number) {
     await this.request(`/v1/runs/${id}/ack`, { sequence });

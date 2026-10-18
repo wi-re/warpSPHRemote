@@ -173,6 +173,7 @@ export default function App() {
     useState<CompanionSection>("running");
   const [daemonConnected, setDaemonConnected] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
+  const preparedVideo = useRef("");
   const [videoOpen, setVideoOpen] = useState(false);
   const [videoFPS, setVideoFPS] = useState(30),
     [videoInterval, setVideoInterval] = useState(0.04);
@@ -850,7 +851,7 @@ export default function App() {
               );
             });
         }
-      } else if (reader instanceof LiveSource)
+      } else if (reader instanceof LiveSource && !source.videoArmed)
         void reader
           .displayed(frame.liveRevision)
           .catch((e) => setEngineError(`Live capture paused: ${e.message}`));
@@ -981,13 +982,16 @@ export default function App() {
         settingsOpen ||
         companionOpen ||
         profilesOpen ||
+        videoOpen ||
         ftleOpen
       )
         return;
       if (e.code === "Space") {
         e.preventDefault();
         if (source?.live) {
-          if (simulationControl?.canPause && !simulationControl.busy)
+          if (source.videoArmed && !videoSession.current)
+            void playPreparedVideo();
+          else if (simulationControl?.canPause && !simulationControl.busy)
             simulationControl.toggle();
         } else if (source && source.frames > 1 && !error) setPlaying((v) => !v);
       }
@@ -1020,6 +1024,12 @@ export default function App() {
     profilesOpen,
     simulationControl,
     error,
+    videoOpen,
+    videoFPS,
+    videoInterval,
+    loading,
+    presentation,
+    presentationKey,
   ]);
   useEffect(() => {
     if (!open && !help && !settingsOpen) return;
@@ -1261,13 +1271,17 @@ export default function App() {
     setVideoProgress("");
   }
   async function startVideo() {
-    if (!source || !frame || !engine.current || videoSession.current) return;
+    if (!source || !frame || !engine.current || videoSession.current)
+      return false;
+    const armed = source.live ? source.videoArmed : undefined;
+    const fps = videoFPS,
+      captureInterval = videoInterval;
     setVideoError("");
     setPlaying(false);
     try {
       const canvas = engine.current.captureCanvas();
       const { width, height } = videoDimensions(canvas);
-      if (!(await ViewportVideo.supported(width, height, videoFPS)))
+      if (!(await ViewportVideo.supported(width, height, fps)))
         throw new Error(
           "VP8 video encoding is unavailable in this browser. Try a browser with WebCodecs VideoEncoder support.",
         );
@@ -1276,7 +1290,7 @@ export default function App() {
           "Update the daemon and simulation adapter for synchronized video capture.",
         );
       const session = {
-        encoder: new ViewportVideo(width, height, videoFPS),
+        encoder: new ViewportVideo(width, height, fps),
         sourceId: source.id,
         name: source.name,
         live: !!source.live,
@@ -1286,14 +1300,19 @@ export default function App() {
         pending: Promise.resolve(),
         stopping: false,
         release: source.live
-          ? () => simulationControl!.setVideo!(false, videoInterval)
+          ? () => simulationControl!.setVideo!(false, captureInterval)
           : undefined,
       };
       videoSession.current = session;
       try {
         if (source.live)
-          await simulationControl!.setVideo!(true, videoInterval);
-        else {
+          await simulationControl!.setVideo!(true, captureInterval, !!armed);
+        if (armed) {
+          setVideoFPS(fps);
+          setVideoInterval(captureInterval);
+          setRetryRevision((v) => v + 1);
+        }
+        if (!source.live) {
           setIndex(videoStart);
           setRetryRevision((v) => v + 1);
         }
@@ -1304,10 +1323,39 @@ export default function App() {
       }
       setVideoProgress("Waiting for the first rendered frame…");
       setVideoOpen(false);
+      return true;
     } catch (error) {
       setVideoError(String(error));
+      return false;
     }
   }
+  async function playPreparedVideo() {
+    if (
+      loading ||
+      presentation?.key !== presentationKey ||
+      videoSession.current
+    )
+      return;
+    const control = simulationControl;
+    if (await startVideo()) {
+      if (control?.pauseRequested && control.canPause) control.toggle();
+    }
+  }
+  useEffect(() => {
+    if (
+      !source?.live ||
+      !source.videoArmed ||
+      !frame ||
+      !simulationControl?.setVideo ||
+      videoSession.current
+    )
+      return;
+    const key = `${source.id}:${frame.liveRevision}`;
+    if (preparedVideo.current === key) return;
+    preparedVideo.current = key;
+    setVideoFPS(source.videoArmed.fps);
+    setVideoInterval(source.videoArmed.interval);
+  }, [sourceId, source?.videoArmed, frame, simulationControl]);
   useEffect(() => {
     const session = videoSession.current;
     if (
@@ -1568,9 +1616,9 @@ export default function App() {
                   simulationControl.run.video.orphaned) && (
                   <div className="capture-hold-note">
                     <p>
-                      Video capture is holding this simulation. Resume with
-                      Export video, or release the capture hold to continue
-                      normal monitoring.
+                      {source?.videoArmed
+                        ? "Simulation initialized and paused. Configure the visualization, then press Play to record that view and start the simulation."
+                        : "Video capture is holding this simulation. Resume with Export video, or release the capture hold to continue normal monitoring."}
                     </p>
                     {videoSession.current && (
                       <button
@@ -2093,9 +2141,11 @@ export default function App() {
                 className="play-button"
                 aria-label={
                   source?.live
-                    ? simulationControl?.pauseRequested
-                      ? "Resume simulation"
-                      : "Pause simulation"
+                    ? source.videoArmed && !videoSession.current
+                      ? "Start video and simulation"
+                      : simulationControl?.pauseRequested
+                        ? "Resume simulation"
+                        : "Pause simulation"
                     : playing
                       ? "Pause playback"
                       : "Play trajectory"
@@ -2107,12 +2157,18 @@ export default function App() {
                 }
                 disabled={
                   source?.live
-                    ? !simulationControl?.canPause || simulationControl.busy
+                    ? !simulationControl?.canPause ||
+                      simulationControl.busy ||
+                      (!!source.videoArmed &&
+                        !videoSession.current &&
+                        (loading || presentation?.key !== presentationKey))
                     : !source || source.frames < 2 || !!error
                 }
                 onClick={() => {
                   if (source?.live) {
-                    simulationControl?.toggle();
+                    if (source.videoArmed && !videoSession.current)
+                      void playPreparedVideo();
+                    else simulationControl?.toggle();
                     return;
                   }
                   if (source && index === source.frames - 1 && !loop)
@@ -2990,9 +3046,19 @@ export default function App() {
             {videoError && <p role="alert">{videoError}</p>}
             <button
               className="primary-button"
-              onClick={() => void startVideo()}
+              disabled={
+                !!source?.videoArmed &&
+                (loading || presentation?.key !== presentationKey)
+              }
+              onClick={() =>
+                source?.videoArmed
+                  ? void playPreparedVideo()
+                  : void startVideo()
+              }
             >
-              Start video export
+              {source?.videoArmed
+                ? "Start video and simulation"
+                : "Start video export"}
             </button>
           </section>
         </div>
@@ -3038,6 +3104,21 @@ export default function App() {
         onConnection={setDaemonConnected}
         open={companionOpen}
         onControl={setLiveControl}
+        prepareVideo={async (fps) => {
+          if (videoSession.current)
+            throw new Error(
+              "Finish the current video before launching another capture.",
+            );
+          if (!engine.current)
+            throw new Error("The viewport is still initializing.");
+          const { width, height } = videoDimensions(
+            engine.current.captureCanvas(),
+          );
+          if (!(await ViewportVideo.supported(width, height, fps)))
+            throw new Error(
+              "VP8 video encoding is unavailable in this browser. Use a browser with WebCodecs VideoEncoder support.",
+            );
+        }}
         onOpen={() => {
           setCompanionSection("running");
           setCompanionOpen(true);

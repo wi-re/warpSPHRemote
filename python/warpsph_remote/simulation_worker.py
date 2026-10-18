@@ -103,16 +103,8 @@ def main():
 
         bootstrap(precision="float32")
         from warpSPH.runner import run
-        from dataclasses import replace
 
         case = load_case(c)
-        old = case.postStep
-
-        def post(ctx, state, step):
-            if old:
-                old(ctx, state, step)
-            publisher.post_step(ctx, state, step)
-
         params = {**case.params, **c["variants"][spec["variant"]]}
         overrides = dict(
             nx=spec["nx"],
@@ -131,7 +123,7 @@ def main():
         )
         if spec["steps"] is not None:
             overrides["nSteps"] = spec["steps"]
-        managed_case = replace(case, postStep=post)
+        managed_case = publisher.bind_case(case)
         if 'configuration' in spec or c.get('nativeVariants'):
             run_spec = configured_spec(case, spec, c).merged(**{k:v for k,v in overrides.items()
                 if k not in ('nx', 'tLimit', 'scheme', 'params', 'nSteps')})

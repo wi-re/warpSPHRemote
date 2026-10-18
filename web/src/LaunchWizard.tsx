@@ -39,6 +39,10 @@ export function LaunchWizard({
     [duration, setDuration] = useState(3);
   const [record, setRecord] = useState(false),
     [interval, setIntervalValue] = useState(0.05);
+  const [startPaused, setStartPaused] = useState(false);
+  const [captureVideo, setCaptureVideo] = useState(false),
+    [videoFPS, setVideoFPS] = useState(30),
+    [videoInterval, setVideoInterval] = useState(0.04);
   const [schema, setSchema] = useState<ParameterSchema | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
@@ -120,6 +124,13 @@ export function LaunchWizard({
     !Number.isFinite(duration) ||
     duration < 0.000001 ||
     duration > 10000 ||
+    (captureVideo &&
+      (!Number.isInteger(videoFPS) ||
+        videoFPS < 1 ||
+        videoFPS > 120 ||
+        !Number.isFinite(videoInterval) ||
+        videoInterval < 0.000001 ||
+        videoInterval > 10000)) ||
     (record &&
       (!Number.isFinite(interval) || interval < 0.000001 || interval > 10000));
   return (
@@ -409,6 +420,69 @@ export function LaunchWizard({
                       </small>
                     </>
                   )}
+                  {features.includes("videoFromStart") && (
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={startPaused || captureVideo}
+                        disabled={captureVideo}
+                        onChange={(e) => setStartPaused(e.target.checked)}
+                      />
+                      Launch paused · configure the initial view before Play
+                    </label>
+                  )}
+                  {features.includes("videoFromStart") && (
+                    <>
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={captureVideo}
+                          onChange={(e) => setCaptureVideo(e.target.checked)}
+                        />
+                        Capture video from the initial frame
+                      </label>
+                      <small>
+                        Initializes and transfers the first frame, then waits
+                        while you configure the visualization. Press Play to
+                        record that configured view and begin the simulation.
+                        Trajectory recording is separate.
+                      </small>
+                      {captureVideo && (
+                        <div className="launch-video-settings">
+                          <div className="launch-number-field">
+                            <label htmlFor="launch-video-fps">
+                              Video frames per second
+                            </label>
+                            <NumberControl
+                              id="launch-video-fps"
+                              aria-label="Video frames per second"
+                              value={videoFPS}
+                              onValueChange={setVideoFPS}
+                              min={1}
+                              max={120}
+                              step={1}
+                              required
+                            />
+                          </div>
+                          <div className="launch-number-field">
+                            <label htmlFor="launch-video-interval">
+                              Video interval (simulation time)
+                            </label>
+                            <NumberControl
+                              id="launch-video-interval"
+                              aria-label="Video interval (simulation time)"
+                              value={videoInterval}
+                              onValueChange={setVideoInterval}
+                              min={0.000001}
+                              max={10000}
+                              step="any"
+                              required
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                   {record && (
                     <div className="launch-number-field">
                       <label htmlFor="launch-export-interval">
@@ -445,6 +519,12 @@ export function LaunchWizard({
                       variant,
                       nx,
                       duration,
+                      ...(features.includes("videoFromStart")
+                        ? { paused: startPaused || captureVideo }
+                        : {}),
+                      ...(captureVideo && features.includes("videoFromStart")
+                        ? { video: { fps: videoFPS, interval: videoInterval } }
+                        : {}),
                       ...(features.includes("recordedHistory")
                         ? { record, exportInterval: interval }
                         : {}),

@@ -26,7 +26,7 @@ def numpy_array(value):
 
 
 class SimulationPublisher:
-    def __init__(self, name, *, runtime=None, autostart=True, interval=0.5):
+    def __init__(self, name, *, runtime=None, autostart=True, interval=0.5, video=None):
         self.name = name
         self.runtime = runtime_dir(runtime)
         self.started_at = time.time()
@@ -66,10 +66,20 @@ class SimulationPublisher:
             "dt": 0.0,
         }
         body = {"name": name, "pid": os.getpid(), "capabilities":["synchronizedVideo"]}
+        if video is not None:
+            from .catalogue import validate_video
+            body['videoCapture']=validate_video(video)
         if os.environ.get("WARPSPH_REMOTE_RUN"):
             body["id"] = os.environ["WARPSPH_REMOTE_RUN"]
         registration = self._request("/producer/runs", body)
+        self.video = registration.get("video")
+        if registration.get("pause"):
+            self.pausing.set()
         self.id = registration["id"]
+        if video is not None and not self.video:
+            message='Update the companion daemon to capture video from the initial state.'
+            self._request(f'/producer/{self.id}/status',dict(status='failed',message=message))
+            raise ValueError(message)
         self.started_at = registration.get("startedAt", self.started_at)
         self.telemetry_supported = "telemetry" in registration.get("features", [])
         self.capture_metrics_supported = "bufferedCapture" in registration.get("features", [])
@@ -406,13 +416,33 @@ class SimulationPublisher:
                 arrays, step=int(step), time_value=float(state.t), domain=domain,
                 details=dict(dt=float(ctx.config.dt), scheme=str(ctx.scheme).split(".")[-1],
                     kernel=str(getattr(ctx.config,'kernel','')).split('.')[-1],
-                    integrator=str(getattr(ctx.config,'integrationScheme','')).split('.')[-1])
+                    integrator=str(getattr(ctx.config,'integrationScheme','')).split('.')[-1],
+                    **({'videoArmed':dict(fps=video.get('fps',30),interval=video['interval'])} if video.get('armed') else {}))
             )
         except (ValueError, TypeError, IndexError) as error:
             # Viewing is optional: an unsupported capture must not kill a valid solver run.
             with self.lock:
                 self._capture_retry_at = time.monotonic() + max(0.5, self.interval)
                 self.meta["message"] = ("Live capture unavailable: " + str(error))[:500]
+
+    def initial_state(self, ctx, state):
+        """The extraData hook sees initialized physics before the first step."""
+        if getattr(self,'_initial_seen',False): return
+        self._initial_seen=True
+        if (self.video or {}).get('active') or self.pausing.is_set():
+            self.post_step(ctx,state,0)
+
+    def bind_case(self, case):
+        from dataclasses import replace
+        old_post,old_extra=case.postStep,case.extraData
+        def post(ctx,state,step):
+            if old_post: old_post(ctx,state,step)
+            self.post_step(ctx,state,step)
+        def extra(ctx,state):
+            data=old_extra(ctx,state) if old_extra else {}
+            self.initial_state(ctx,state)
+            return data
+        return replace(case,postStep=post,extraData=extra)
 
     def finish(self, ctx, state, step):
         """Deliver the last rendered video frame before publishing completion."""
@@ -451,21 +481,13 @@ class SimulationPublisher:
         self.close("failed" if kind else "completed", str(error or ""))
 
 
-def run_live(case, *, name=None, runtime=None, **overrides):
+def run_live(case, *, name=None, runtime=None, video=None, **overrides):
     """Wrap an existing Case's postStep without changing simulator source code."""
-    from dataclasses import replace
     from warpSPH.runner import run
 
-    publisher = SimulationPublisher(name or case.name, runtime=runtime)
-    old = case.postStep
-
-    def post(ctx, state, step):
-        if old:
-            old(ctx, state, step)
-        publisher.post_step(ctx, state, step)
-
+    publisher = SimulationPublisher(name or case.name, runtime=runtime, video=video)
     try:
-        result = run(replace(case, postStep=post), **overrides)
+        result = run(publisher.bind_case(case), **overrides)
         publisher.recording(result.ctx)
         publisher.finish(result.ctx, result.state, result.nSteps)
         publisher.update(
