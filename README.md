@@ -237,5 +237,6 @@ direct HDF5 downloads. A reproducible KHH starting view is
 The optional Linux companion discovers running simulations, launches installed
 case presets, pauses/resumes them and attaches one live browser viewer using
 token-authenticated loopback HTTP. Opt-in trajectory export makes the growing
-recorded history seekable alongside the live view. Recorded-file viewing remains independent of Python/warpSPH.
+recorded history seekable alongside the live view. Preset launches attach
+automatically; optional monitor mode follows newly launched external runs. Recorded-file viewing remains independent of Python/warpSPH.
 See [installation, integration and limitations](reports/LOCAL_COMPANION.md).

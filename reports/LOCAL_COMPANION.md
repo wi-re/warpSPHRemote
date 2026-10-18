@@ -101,8 +101,9 @@ capture commands more frequently (20 ms); the browser requests at most about
 An unattached run sends start time, PID, particle
 count, step, physical time, dt and solver name; it does not copy particle arrays
 to the CPU or transmit states. A new run appears in the resident manager and a
-non-modal notice offers the simulation list without replacing the current
-recording. Attach is deliberate.
+non-modal notice offers the simulation list by default. Launching a preset from
+this viewer automatically attaches it and closes the picker. Optional monitor
+mode also follows newly discovered external launches; see below.
 
 `examples/live_simulation.py --case gresho --nx 128 --duration 3` demonstrates the
 wrapper. For custom loops, use `SimulationPublisher` and call `post_step` at safe
@@ -112,6 +113,31 @@ completed-step boundaries, or `update(...)` plus `snapshot(...)` when
 are recorded in `publisher.last_error` and do not stop simulation steps. Initial
 registration failure is explicit. A crashed daemon is not automatically
 re-registered mid-run in this version.
+
+## Automatic attachment and monitor mode
+
+Launching a preset from the viewer closes the simulation picker and queues its
+live connection immediately. The viewer waits for producer registration and
+then the first captured frame; startup/compilation does not cause an early
+"still starting" attachment error. A small **Connecting to …** notice remains
+visible during startup, with **Cancel connection**. Cancelling viewing does not
+stop the simulation. Startup failures return a message in the manager.
+
+Under **Local simulations**, enable **Automatically watch new simulations** to
+use this page as a monitor. It is off by default and remembers its setting in
+this browser. On connection/enabling, it follows the newest active run; while
+connected it switches to newly discovered launches, including simulations
+registered through `run_live` outside the viewer. Discovery uses the existing
+one-second status poll. Only the newest active launch is shown if several arrive
+at once, matching the single-viewer design. Other simulations keep running.
+
+With monitor mode off, externally launched runs produce a notification and keep
+the current recording/live view in place. Viewer-launched presets still attach
+automatically. Turning monitor mode off does not detach the current live view.
+Manual detach/cancellation is respected for that run; only a later launch causes
+a new automatic switch. Disconnecting or changing daemon invalidates pending
+attachments. An existing viewer lease is never stolen; conflicts appear in the
+manager. These controls do not enable trajectory recording.
 
 ## Pause and exported history
 
@@ -360,3 +386,30 @@ The fixture uses localhost port 18767 and the synthetic token printed in its
 terminal. Connect from the viewer, Watch live, pause/resume from the plot, reload
 and reconnect without entering credentials, then Forget pairing and reload.
 Its fixed token protects synthetic test data only; it is not a production daemon.
+
+## Auto-attach/monitor verification (2026-10-18)
+
+97 TypeScript tests and the production build passed. Browser checks launched a
+real nx=64 CRKSPH Gresho case through the preset picker: the picker closed,
+startup status appeared and the 4,096-particle run attached without Watch live.
+The isolated run was paused at step 1742, t≈2.4867, and stopped after testing.
+Monitor mode followed two external synthetic producers in sequence, kept the
+current view for a third while disabled, survived reload/reconnect, respected
+manual detach and honoured cancellation before delayed producer registration.
+No browser console errors were observed in the final checks.
+
+Reproduce using an installed working warpSPH interpreter and a fresh output path:
+
+```bash
+python examples/auto_monitor_fixture.py --python /path/to/warp/bin/python \
+  --output ../warpSPHDevelopment/remote/new-auto-monitor-fixture
+```
+
+The fixture prints its isolated localhost endpoint and test token. Launch a small
+preset from the browser, then enable monitor mode. Creating `external-one.start`
+and `external-two.start` in that output directory registers synthetic producers.
+For cancellation, create `external-delayed.start`; cancel its startup notice,
+then create `register-delayed` to allow registration. The current view should
+remain unchanged. Ctrl+C stops fixture-owned runs. This is a UI/acquisition
+check; it does not validate new numerical methods. Evidence is under
+`../warpSPHDevelopment/remote/auto-monitor-20261018/`.

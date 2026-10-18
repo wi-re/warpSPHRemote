@@ -28,9 +28,15 @@ import {
   forgetPairing,
   samePairingEndpoint,
 } from "./pairing";
+import { discoverSimulations, recallMonitor, rememberMonitor } from "./monitor";
 import type { TrajectorySource } from "./sources/client";
 import { formatNumber } from "./data";
 
+interface PendingAttachment {
+  run: Simulation;
+  client: CompanionClient;
+  reason: "launch" | "monitor" | "manual";
+}
 interface Props {
   open: boolean;
   onOpen: () => void;
@@ -49,6 +55,14 @@ export function CompanionPanel({
   onDetached,
   onControl,
 }: Props) {
+  const [monitor, setMonitor] = useState(recallMonitor);
+  const monitorEnabled = useRef(monitor);
+  monitorEnabled.current = monitor;
+  const [pending, setPending] = useState<PendingAttachment | null>(null);
+  const [awaitingFrame, setAwaitingFrame] = useState<Simulation | null>(null);
+  const pendingAttachment = useRef<PendingAttachment | null>(null);
+  const attaching = useRef(false);
+  const [attachmentRevision, setAttachmentRevision] = useState(0);
   const [saved, setSaved] = useState(recallPairing);
   const [remember, setRemember] = useState(true);
   const [storageMessage, setStorageMessage] = useState("");
@@ -58,6 +72,8 @@ export function CompanionPanel({
     [token, setToken] = useState(saved?.token ?? "");
   const [client, setClient] = useState<CompanionClient | null>(null),
     [presets, setPresets] = useState<Preset[]>([]);
+  const connectedClient = useRef(client);
+  connectedClient.current = client;
   const [runs, setRuns] = useState<Simulation[]>([]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
@@ -88,16 +104,20 @@ export function CompanionPanel({
     onDetached,
     sourceId,
     onOpen,
+    onClose,
     onControl,
     connect,
+    enqueueAttachment,
   });
   callbacks.current = {
     onFrame,
     onDetached,
     sourceId,
     onOpen,
+    onClose,
     onControl,
     connect,
+    enqueueAttachment,
   };
   const known = useRef<Set<string> | null>(null);
   const preset = presets.find((p) => p.id === presetId);
@@ -105,6 +125,10 @@ export function CompanionPanel({
     connection.current?.abort();
     const attempt = new AbortController();
     connection.current = attempt;
+    connectedClient.current = null;
+    cancelAttachment();
+    setClient(null);
+    setRuns([]);
     setBusy(true);
     setError("");
     try {
@@ -114,6 +138,7 @@ export function CompanionPanel({
       setPresets(session.presets);
       setFeatures(session.features || []);
       known.current = null;
+      connectedClient.current = next;
       setClient(next);
       if (remember) {
         const value = { endpoint: next.endpoint, token: secret.trim() };
@@ -192,9 +217,11 @@ export function CompanionPanel({
         ? ""
         : "Browser storage could not be cleared. Clear this site's storage in your browser to forget pairing.",
     );
+    connectedClient.current = null;
+    setClient(null);
+    setRuns([]);
     await detach();
     historySession.current?.abort();
-    setClient(null);
     setToken("");
     setRuns([]);
   }
@@ -226,7 +253,36 @@ export function CompanionPanel({
     window.addEventListener("hashchange", consume);
     return () => window.removeEventListener("hashchange", consume);
   }, []);
+  function cancelAttachment() {
+    pendingAttachment.current = null;
+    setPending(null);
+  }
+  function enqueueAttachment(
+    run: Simulation,
+    reason: PendingAttachment["reason"],
+  ) {
+    if (!client || connectedClient.current !== client) return;
+    known.current?.add(run.id);
+    historySession.current?.abort();
+    setNotice(null);
+    if (active.current?.id === run.id && active.current.client === client)
+      return;
+    callbacks.current.onClose();
+    const previous = pendingAttachment.current;
+    if (previous?.run.id === run.id && previous.client === client) {
+      if (reason !== "monitor") previous.reason = reason;
+      return;
+    }
+    const request = { run, client, reason };
+    pendingAttachment.current = request;
+    setPending(request);
+  }
   async function detach() {
+    cancelAttachment();
+    await detachActive();
+  }
+  async function detachActive() {
+    setAwaitingFrame(null);
     const previous = active.current;
     if (!previous) return;
     active.current = null;
@@ -247,12 +303,21 @@ export function CompanionPanel({
     async function poll() {
       try {
         const list = await client!.runs(abort.signal);
-        if (stopped) return;
-        if (known.current) {
-          const fresh = list.filter((r) => !known.current!.has(r.id)).at(-1);
-          if (fresh) setNotice(fresh);
-        }
-        known.current = new Set(list.map((r) => r.id));
+        if (stopped || connectedClient.current !== client) return;
+        const discovered = discoverSimulations(
+          list,
+          known.current,
+          monitorEnabled.current,
+        );
+        known.current = discovered.known;
+        if (discovered.follow)
+          callbacks.current.enqueueAttachment(discovered.follow, "monitor");
+        else if (
+          discovered.notice &&
+          pendingAttachment.current?.run.id !== discovered.notice.id &&
+          active.current?.id !== discovered.notice.id
+        )
+          setNotice(discovered.notice);
         setRuns(list);
       } catch (e) {
         if (!stopped) setError((e as Error).message);
@@ -273,6 +338,7 @@ export function CompanionPanel({
   }, [sourceId]);
   useEffect(() => {
     const release = () => {
+      pendingAttachment.current = null;
       const current = active.current;
       active.current = null;
       current?.abort.abort();
@@ -287,14 +353,51 @@ export function CompanionPanel({
       release();
     };
   }, []);
+  useEffect(() => {
+    if (
+      !pending ||
+      pendingAttachment.current !== pending ||
+      pending.client !== client ||
+      attaching.current
+    )
+      return;
+    const run = runs.find((row) => row.id === pending.run.id) ?? pending.run;
+    if (!["starting", "running", "paused"].includes(run.status)) {
+      cancelAttachment();
+      setError(
+        `${run.name}: ${run.message || "The simulation ended before live viewing was ready."}`,
+      );
+      callbacks.current.onOpen();
+      return;
+    }
+    if (!run.registered) return;
+    attaching.current = true;
+    void attachPending(pending).finally(() => {
+      attaching.current = false;
+      setAttachmentRevision((value) => value + 1);
+    });
+  }, [pending, runs, client, attachmentRevision]);
   async function attach(id: string) {
+    const run = runs.find((row) => row.id === id);
+    if (run) enqueueAttachment(run, "manual");
+  }
+  async function attachPending(request: PendingAttachment) {
+    const {
+      client,
+      run: { id },
+    } = request;
     historySession.current?.abort();
-    if (!client) return;
     setBusy(true);
     setError("");
-    await detach();
     try {
+      await detachActive();
+      if (pendingAttachment.current !== request) return;
       await client.attach(id);
+      if (pendingAttachment.current !== request) {
+        await client.detach(id).catch(() => {});
+        return;
+      }
+      cancelAttachment();
       const session = {
         id,
         client,
@@ -304,6 +407,7 @@ export function CompanionPanel({
       };
       active.current = session;
       setAttached(id);
+      setAwaitingFrame(request.run);
       setNotice(null);
       onClose();
       // Lease renewal carries no particle data, even while a costly grid is being rendered.
@@ -327,6 +431,7 @@ export function CompanionPanel({
                   session.waiting = false;
                 };
                 const first = !session.reader;
+                if (first) setAwaitingFrame(null);
                 if (session.reader) session.reader.update(snapshot, ack);
                 else session.reader = new LiveSource(snapshot, ack);
                 callbacks.current.onFrame(session.reader, first);
@@ -336,6 +441,7 @@ export function CompanionPanel({
           }
         } catch (e) {
           if (!session.abort.signal.aborted) {
+            setAwaitingFrame(null);
             setError((e as Error).message);
             callbacks.current.onOpen();
           }
@@ -345,11 +451,28 @@ export function CompanionPanel({
       };
       void pump();
     } catch (e) {
-      setError((e as Error).message);
+      if (pendingAttachment.current === request) {
+        cancelAttachment();
+        setError((e as Error).message);
+        callbacks.current.onOpen();
+      }
     } finally {
       setBusy(false);
     }
   }
+  useEffect(() => {
+    if (!awaitingFrame) return;
+    const row = runs.find((run) => run.id === awaitingFrame.id);
+    if (row && ["failed", "stopped", "completed"].includes(row.status)) {
+      void detachActive();
+      if (!pendingAttachment.current) {
+        setError(
+          `${row.name}: ${row.message || "The simulation ended before its first live frame."}`,
+        );
+        callbacks.current.onOpen();
+      }
+    }
+  }, [runs, awaitingFrame]);
   async function viewHistory(id: string) {
     if (!client) return;
     setBusy(true);
@@ -404,17 +527,34 @@ export function CompanionPanel({
           ? { record, exportInterval }
           : {}),
       });
-      setNotice(run);
-      setRuns((old) => [...old, run]);
+      if (connectedClient.current !== client) return;
+      setRuns((old) => [...old.filter((row) => row.id !== run.id), run]);
+      enqueueAttachment(run, "launch");
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
+  const connectingRun = pending?.run ?? awaitingFrame;
   return (
     <>
-      {notice && !open && (
+      {connectingRun && !open && (
+        <div className="companion-notice" role="status">
+          <Radio size={16} />
+          <span>
+            Connecting to <strong>{connectingRun.name}</strong> · waiting for
+            startup…
+          </span>
+          <button onClick={onOpen}>View simulations</button>
+          <button
+            onClick={() => (pending ? cancelAttachment() : void detach())}
+          >
+            Cancel connection
+          </button>
+        </div>
+      )}
+      {notice && !connectingRun && !open && (
         <div className="companion-notice" role="status">
           <Radio size={16} />
           <span>
@@ -579,10 +719,11 @@ export function CompanionPanel({
                   <span className="tiny-dot" /> Connected · {client.endpoint}
                   <button
                     onClick={async () => {
-                      await detach();
-                      historySession.current?.abort();
+                      connectedClient.current = null;
                       setClient(null);
                       setRuns([]);
+                      await detach();
+                      historySession.current?.abort();
                     }}
                   >
                     Disconnect
@@ -594,6 +735,34 @@ export function CompanionPanel({
                     <small role="status">{storageMessage}</small>
                   )}
                 </div>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={monitor}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      monitorEnabled.current = enabled;
+                      setMonitor(enabled);
+                      rememberMonitor(enabled);
+                      if (enabled) known.current = null;
+                      else if (pendingAttachment.current?.reason === "monitor")
+                        cancelAttachment();
+                    }}
+                  />
+                  Automatically watch new simulations
+                </label>
+                <small>
+                  Monitor mode switches this view to the newest active launch,
+                  including simulations started outside this page.
+                </small>
+                {pending && (
+                  <p role="status">
+                    Waiting to connect to {pending.run.name}…{" "}
+                    <button className="text-button" onClick={cancelAttachment}>
+                      Cancel connection
+                    </button>
+                  </p>
+                )}
                 <section className="companion-runs">
                   <div className="section-heading">
                     <Activity size={15} /> RESIDENT SIMULATIONS{" "}
