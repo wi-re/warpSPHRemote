@@ -561,3 +561,11 @@ The launch wizard now exposes the case's supported **Dimension** and a prominent
 **Timestepper · integration method**, with Δt/adaptive controls beside it.
 Finished managed runs have **Run again** to review the saved launch settings.
 See [usage, constraints and regeneration](LAUNCH_PARAMETERS_AND_RERUN.md).
+
+## Empty viewport and bulk history clearing (2026-10-19)
+
+Ordinary page loads now start empty. Open a source from the viewport button, and
+use Close trajectory to return to blank. Cached files remain available in the
+picker. Run history has Clear finished history with a count, confirmation and
+progress; active producers and exported files are retained. This uses existing
+companion endpoints. See [behavior and verification](EMPTY_VIEW_AND_HISTORY.md).

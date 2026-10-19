@@ -302,7 +302,7 @@ export default function App() {
     rememberFiles(files)
       .then(() => {
         if (sequence === saveSequence.current)
-          setStorageStatus("Saved for refresh");
+          setStorageStatus("Saved on this device");
       })
       .catch((e) => {
         if (sequence === saveSequence.current)
@@ -632,13 +632,10 @@ export default function App() {
         const list = await request<Source[]>("/api/sources");
         if (disposed) return;
         for (const meta of list) add(new ServiceSource(meta));
-        if (list.length) chooseSource(list[0], true);
       } else {
         for (const dim of [1, 2, 3] as const) {
           const reader = await BrowserSource.open([], dim);
           add(reader);
-          if (dim === 2 && !disposed && interactions.current === 0)
-            chooseSource(reader.metadata, true);
         }
         if (viewLink.current.demo && !disposed) {
           const demo = recordedDemos.find(
@@ -655,71 +652,6 @@ export default function App() {
           }
           setError("The URL names an unknown demo.");
         }
-        if (rememberRef.current && !disposed && interactions.current === 0) {
-          try {
-            const saved = await recallFiles();
-            if (
-              saved &&
-              !disposed &&
-              interactions.current === 0 &&
-              rememberRef.current
-            ) {
-              setStorageStatus("Restoring last recording…");
-              let restoreFiles = saved.files;
-              let demo = recordedDemos.find(
-                (d) =>
-                  saved.files.length === 1 &&
-                  saved.files[0].name === d.file &&
-                  saved.files[0].size === d.bytes &&
-                  saved.files[0].lastModified === 0,
-              );
-              // Migrate the previous last-file copy, or prefer a current cached
-              // version. A stale copy remains openable as an ordinary local file.
-              if (demo) {
-                try {
-                  const cached = await recallDemo(demo);
-                  if (cached) restoreFiles = [cached];
-                  else await cacheDemo(demo, saved.files[0]);
-                  if (!disposed) markDemoCached(demo.id);
-                } catch (e) {
-                  demo = undefined;
-                  if (!disposed)
-                    setDemoCacheError(
-                      `Could not retain the demo download: ${e instanceof Error ? e.message : String(e)}`,
-                    );
-                }
-              }
-              const reader = await BrowserSource.open(
-                restoreFiles,
-                undefined,
-                demo?.id,
-              );
-              if (demo)
-                reader.metadata = {
-                  ...reader.metadata,
-                  name: demo.name,
-                  format: "Recorded demo",
-                };
-              if (
-                disposed ||
-                interactions.current !== 0 ||
-                !rememberRef.current
-              ) {
-                reader.close();
-                return;
-              }
-              localFiles.current.set(reader.metadata.id, restoreFiles);
-              add(reader);
-              chooseSource(reader.metadata, true);
-              setStorageStatus("Restored local copy");
-            }
-          } catch (e) {
-            if (!disposed)
-              setStorageStatus(
-                `Could not restore recording: ${e instanceof Error ? e.message : String(e)}. Reopen the original file.`,
-              );
-          }
-        }
       }
     };
     load().catch((e) => {
@@ -734,7 +666,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (!host.current) return;
+    if (!host.current || !source) return;
     try {
       const e =
         source?.dimension === 1
@@ -782,7 +714,7 @@ export default function App() {
         `The GPU renderer could not start: ${e instanceof Error ? e.message : String(e)}. Enable WebGL2 in your browser.`,
       );
     }
-  }, [source?.dimension]);
+  }, [!!source, source?.dimension]);
   useEffect(() => {
     if (!source) return;
     const abort = new AbortController();
@@ -1232,19 +1164,42 @@ export default function App() {
       openingRef.current = false;
     }
   };
-  const closeCurrent = () => {
+  const closeCurrent = async () => {
     if (!source) return;
-    registry.current.get(source.id)?.close();
-    registry.current.delete(source.id);
-    if (localFiles.current.has(source.id)) void forgetRecording();
-    localFiles.current.delete(source.id);
-    const remaining = sources.filter((s) => s.id !== source.id);
-    setSources(remaining);
-    if (remaining.length) chooseSource(remaining[0]);
-    else {
-      setSourceId("");
-      setPresentation(null);
+    interactions.current++;
+    cancelDemo();
+    setPlaying(false);
+    if (videoSession.current) await finishVideo();
+    // Keep analytical examples available in the picker; unload actual files.
+    if (source.format !== "Analytical demo") {
+      registry.current.get(source.id)?.close();
+      registry.current.delete(source.id);
+      localFiles.current.delete(source.id);
+      setSources((old) => old.filter((s) => s.id !== source.id));
     }
+    setSourceId("");
+    setPresentation(null);
+    setIndex(0);
+    setRows([]);
+    setActiveFileKey("");
+    setSelection(null);
+    setTraceUid("");
+    setPicking(false);
+    setLoading(false);
+    setError("");
+    setEngineError("");
+    setReconstructionWarning("");
+    setDiagnosticError("");
+    setProfilesOpen(false);
+    setFTLEOpen(false);
+    setVideoOpen(false);
+    setConfigurationView(null);
+    pendingViewport.current = null;
+    // Closing an explicitly linked demo also makes a subsequent refresh blank.
+    const url = new URL(location.href);
+    url.searchParams.delete("demo");
+    history.replaceState(null, "", url);
+    viewLink.current = parseViewLink(url.search);
   };
   useEffect(() => {
     if (remember && activeFileKey)
@@ -1915,7 +1870,9 @@ export default function App() {
                 ? source.liveConnected
                   ? "Live snapshot"
                   : "Detached snapshot"
-                : "Viewing recorded data"}
+                : source
+                  ? "Viewing recorded data"
+                  : "No trajectory loaded"}
               <br />
               <button
                 onClick={() => {
@@ -1936,11 +1893,11 @@ export default function App() {
                   ? `${source.liveConnected ? "LIVE SIMULATION" : "DETACHED SNAPSHOT"} · STEP ${frame?.step ?? source.liveStep ?? "—"}`
                   : source?.format === "Analytical demo"
                     ? "ANALYTICAL FIELD"
-                    : "RECORDED TRAJECTORY"}
+                    : source
+                      ? "RECORDED TRAJECTORY"
+                      : "TRAJECTORY VIEWER"}
               </div>
-              <h1>
-                {source ? friendlyName(source) : "Your simulation, in view."}
-              </h1>
+              <h1>{source ? friendlyName(source) : "No trajectory loaded"}</h1>
             </div>
             <div className="viewport-heading-actions">
               {recordingView?.sourceId === sourceId && (
@@ -1953,23 +1910,26 @@ export default function App() {
                   Restore recording view
                 </button>
               )}
-              {source &&
-                (source.format === "Recorded demo" ||
-                  !source.id.startsWith("demo-")) && (
-                  <IconButton label="Close trajectory" onClick={closeCurrent}>
-                    <X size={16} />
-                  </IconButton>
-                )}
-              <span className="dimension-badge">
-                {source?.dimension ?? "—"}D{" "}
-                {source?.dimension === 1
-                  ? "PROFILE"
-                  : displayMode === "particles"
-                    ? "PARTICLES"
-                    : displayMode === "both"
-                      ? "GRID + PARTICLES"
-                      : "SCALAR GRID"}
-              </span>
+              {source && (
+                <IconButton
+                  label="Close trajectory"
+                  onClick={() => void closeCurrent()}
+                >
+                  <X size={16} />
+                </IconButton>
+              )}
+              {source && (
+                <span className="dimension-badge">
+                  {source?.dimension ?? "—"}D{" "}
+                  {source?.dimension === 1
+                    ? "PROFILE"
+                    : displayMode === "particles"
+                      ? "PARTICLES"
+                      : displayMode === "both"
+                        ? "GRID + PARTICLES"
+                        : "SCALAR GRID"}
+                </span>
+              )}
               <IconButton
                 label="Toggle visualization controls"
                 active={inspector}
@@ -1980,7 +1940,7 @@ export default function App() {
             </div>
           </div>
           <section
-            className={`viewport ${source?.dimension === 1 ? "profile-viewport" : ""} ${options.background === "light" ? "light" : ""} ${selection && (selected >= 0 || selection.uid) ? "has-particle-selection" : ""} ${picking ? "picking" : ""}`}
+            className={`viewport ${!source ? "viewport-empty" : ""} ${source?.dimension === 1 ? "profile-viewport" : ""} ${options.background === "light" ? "light" : ""} ${selection && (selected >= 0 || selection.uid) ? "has-particle-selection" : ""} ${picking ? "picking" : ""}`}
             aria-label="Particle visualization"
           >
             <div className="scene-host" ref={host} />
@@ -2413,7 +2373,9 @@ export default function App() {
                   <strong>
                     {source?.live
                       ? (frame?.liveRevision ?? source.liveRevision)
-                      : String(displayedIndex + 1).padStart(3, "0")}
+                      : source
+                        ? String(displayedIndex + 1).padStart(3, "0")
+                        : "—"}
                   </strong>
                   {source?.live && simulationControl && (
                     <span className="muted">
@@ -3629,13 +3591,14 @@ export default function App() {
               Remember last recording on this device
             </label>
             <p className="subtle-note">
-              Stores one browser-local copy and visualization settings for
-              refresh. Reopen the original to read changes. Browser storage
-              limits apply.
+              Stores one browser-local copy and visualization settings in Open
+              trajectory → On this device. Reopen the original to read changes.
+              Browser storage limits apply.
             </p>
             <p className="subtle-note">
               Downloaded demos are saved separately on this device. This
-              checkbox controls reopening the last recording automatically.
+              checkbox controls retaining the last recording. The page starts
+              with an empty viewport.
             </p>
             {storageStatus && (
               <p className="subtle-note" role="status">

@@ -1,3 +1,4 @@
+import { canForgetRun, clearFinishedHistory } from "./runHistory";
 import { RunAgainButton } from "./RunAgainButton";
 import { rerunDraft, type RerunDraft } from "./rerun";
 import { RunReport } from "./RunReport";
@@ -79,6 +80,11 @@ export function CompanionPanel({
     null,
   );
   const rerunSerial = useRef(0);
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [historyToClear, setHistoryToClear] = useState<Simulation[] | null>(
+    null,
+  );
+  const [clearProgress, setClearProgress] = useState("");
   const backdropPress = useRef(false);
   const [reportSelection, setReportRun] = useState<Simulation | null>(null);
   const [offlineMessage, setOfflineMessage] = useState("");
@@ -195,6 +201,8 @@ export function CompanionPanel({
     setClient(null);
     setRuns([]);
     setRerun(null);
+    setClearProgress("");
+    setHistoryToClear(null);
     setBusy(true);
     setError("");
     try {
@@ -434,6 +442,7 @@ export function CompanionPanel({
     setBusy(false);
   }
   function closePanel() {
+    setHistoryToClear(null);
     cancelConnection();
     onClose();
   }
@@ -857,6 +866,39 @@ export function CompanionPanel({
       if (!abort.signal.aborted) reportError(e, client);
     } finally {
       setBusy(false);
+    }
+  }
+  function removeRunFromView(id: string) {
+    setRuns((old) => old.filter((run) => run.id !== id));
+    setReportRun((old) => (old?.id === id ? null : old));
+  }
+  async function clearHistory() {
+    if (!client || clearingHistory || offline.current) return;
+    const reviewed = historyToClear;
+    if (!reviewed?.length) return;
+    setHistoryToClear(null);
+    setClearingHistory(true);
+    setClearProgress(`Clearing 0 of ${reviewed.length} finished runs…`);
+    setError("");
+    try {
+      if (reviewed.some((run) => run.id === active.current?.id))
+        await detachActive();
+      const count = await clearFinishedHistory(
+        reviewed,
+        (id) => client.forgetRun(id),
+        (id, completed, total) => {
+          removeRunFromView(id);
+          setClearProgress(`Clearing ${completed} of ${total} finished runs…`);
+        },
+      );
+      setClearProgress(
+        `Cleared ${count} finished run${count === 1 ? "" : "s"}.`,
+      );
+    } catch (error) {
+      setClearProgress("");
+      reportError(error, client);
+    } finally {
+      setClearingHistory(false);
     }
   }
   function runAgain(run: Simulation) {
@@ -1340,11 +1382,69 @@ export function CompanionPanel({
                       </small>
                     </div>
                     {section === "history" && (
-                      <p>
-                        Persistent run metadata and optional diagnostic
-                        histories. Replay is available only when trajectory
-                        recording was enabled.
-                      </p>
+                      <>
+                        <p>
+                          Persistent run metadata and optional diagnostic
+                          histories. Replay is available only when trajectory
+                          recording was enabled.
+                        </p>
+                        <div className="history-clear-actions">
+                          <button
+                            className="secondary-button"
+                            disabled={
+                              clearingHistory ||
+                              busy ||
+                              !!offlineMessage ||
+                              !runs.some(canForgetRun)
+                            }
+                            onClick={() =>
+                              setHistoryToClear(runs.filter(canForgetRun))
+                            }
+                          >
+                            {clearingHistory
+                              ? "Clearing history…"
+                              : `Clear finished history (${runs.filter(canForgetRun).length})`}
+                          </button>
+                          <small>
+                            Active simulations stay in the list. Exported
+                            trajectories and logs are kept.
+                          </small>
+                        </div>
+                        {historyToClear && (
+                          <section
+                            className="history-clear-confirm"
+                            role="group"
+                            aria-label="Confirm clearing finished history"
+                          >
+                            <strong>
+                              Clear {historyToClear.length} finished run entries
+                              and their diagnostic histories?
+                            </strong>
+                            <p>
+                              This cannot be undone. Active simulations,
+                              exported trajectories and logs are kept.
+                            </p>
+                            <div className="history-clear-actions">
+                              <button
+                                className="text-button"
+                                onClick={() => setHistoryToClear(null)}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                className="secondary-button"
+                                disabled={
+                                  busy || clearingHistory || !!offlineMessage
+                                }
+                                onClick={() => void clearHistory()}
+                              >
+                                Clear these {historyToClear.length} runs
+                              </button>
+                            </div>
+                          </section>
+                        )}
+                        {clearProgress && <p role="status">{clearProgress}</p>}
+                      </>
                     )}
                     {!runs.filter(
                       (run) =>
@@ -1447,14 +1547,12 @@ export function CompanionPanel({
                             >
                               Run report
                             </button>
-                            {[
-                              "completed",
-                              "stopped",
-                              "failed",
-                              "interrupted",
-                            ].includes(run.status) && (
+                            {canForgetRun(run) && (
                               <button
                                 className="text-button"
+                                disabled={
+                                  clearingHistory || busy || !!offlineMessage
+                                }
                                 onClick={() => {
                                   if (
                                     window.confirm(
@@ -1463,13 +1561,7 @@ export function CompanionPanel({
                                   )
                                     void client
                                       .forgetRun(run.id)
-                                      .then(() => {
-                                        setRuns((old) =>
-                                          old.filter((r) => r.id !== run.id),
-                                        );
-                                        if (reportRun?.id === run.id)
-                                          setReportRun(null);
-                                      })
+                                      .then(() => removeRunFromView(run.id))
                                       .catch((e) => reportError(e, client));
                                 }}
                               >

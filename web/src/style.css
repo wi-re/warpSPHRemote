@@ -3875,3 +3875,23 @@ kbd {
     white-space: normal;
   }
 }
+
+/* Empty views have no renderer or frame-specific controls. */
+.viewport-empty .scene-title,
+.viewport-empty .scene-tools {
+  display: none;
+}
+.history-clear-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.history-clear-confirm {
+  padding: 16px;
+  border: 1px solid #886954;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
