@@ -82,6 +82,50 @@ These are missing pieces within existing workflows, rather than new product scop
    and daemon have large orchestration modules; regression coverage for complete
    browser workflows is mostly manual fixtures, not CI browser tests.
 
+9. **Connection diagnostics (user request, 2026-10-19).** Add structured browser
+   console diagnostics for connection state transitions and failed/timed-out
+   operations: operation/route without credentials, request ID, elapsed time,
+   HTTP status or browser exception, configured deadline, explicit cancellation
+   versus timeout, and whether failure occurred before headers or during body
+   transfer/decode/render/ACK. Include lease/heartbeat age, snapshot sequence,
+   pending-frame age/size and page visibility where useful. Keep a bounded recent
+   event trail so repeated reconnects preserve their first failure; rate-limit
+   repetitive messages and never log pairing tokens, authorization headers,
+   credential-bearing URLs or particle payloads. A timeout on one operation
+   should be distinguishable from confirmed daemon unavailability. Reproduce
+   with an isolated large-frame fixture and test slow transfers, cancellations,
+   reconnects and same-run reattachment. This is a Remote-head follow-up; do not
+   change solver physics or restart user simulations to add diagnostics.
+
+   Trigger: the published viewer repeatedly cycled connected/disconnected while
+   waiting for the first live frame of RM `linear256` (655,360 particles) on the
+   same machine. The solver kept advancing and localhost run-list requests took
+   about 1–7 ms. A temporary explicit diagnostic takeover validated a pending
+   23.6 MB frame, its 10.5 MB static packet, then a fresh frame and both ACKs;
+   dynamic downloads took approximately 14–18 ms. The test viewer detached.
+   The user confirmed a browser refresh restored updates; no daemon/solver
+   restart was needed. The deployed bundle already had no total-duration
+   snapshot/static download deadline. Root cause remains unconfirmed: collect
+   the actual browser failure before refreshing on recurrence. Existing capture
+   stage telemetry alone did not explain this connection failure.
+
+10. **Live viewer memory growth (user report, 2026-10-19; fix implemented; Pages deployment requested).**
+   During RM `nonlinear128`, the user reports roughly 50 MB of additional
+   browser memory per arriving frame, followed by recurring disconnects;
+   refresh recovers the viewer. Distinguish transient allocation/GC from
+   retained snapshots, rendering resources and connection callbacks using an
+   isolated repeat-frame reproduction. Bound live retention and verify that
+   reattachment releases the old session. Keep the physics campaign running;
+   memory pressure as the cause of the disconnect is a hypothesis, not yet
+   established. Record measured evidence and regression coverage before
+   declaring the leak fixed. The full-app reproduction confirmed a historical
+   callback/parent-state retention chain. Stable callback indirection now bounds
+   memory: controlled baseline 942 MiB at 50 frames versus fixed 87 MiB at
+   200 frames (JS heap). Regression, GC checks and production build pass;
+   [findings and reproduction](LIVE_VIEW_MEMORY.md). The user requested Pages
+   deployment; long-session verification in their Chrome remains pending. Chrome LNA Issues
+   counts and the summary-element markup warning are separate follow-ups.
+
 ## Recommended implementation order
 
 The first three phases below now have working implementations. Their original

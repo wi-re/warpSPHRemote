@@ -1,3 +1,4 @@
+import { currentCallback } from "./currentCallback";
 import { canForgetRun, clearFinishedHistory } from "./runHistory";
 import { RunAgainButton } from "./RunAgainButton";
 import { rerunDraft, type RerunDraft } from "./rerun";
@@ -63,6 +64,12 @@ interface Props {
   onControl: (control: SimulationControl | null) => void;
   prepareVideo: (fps: number) => Promise<void>;
 }
+function useCurrentCallback<F extends (...args: any[]) => any>(callback: F) {
+  const slot = useRef<ReturnType<typeof currentCallback<F>> | null>(null);
+  slot.current ??= currentCallback(callback);
+  slot.current.current = callback;
+  return slot.current.call;
+}
 export function CompanionPanel({
   open,
   section,
@@ -76,6 +83,16 @@ export function CompanionPanel({
   onControl,
   prepareVideo,
 }: Props) {
+  // Control functions cross back into parent state. Stable indirection prevents
+  // their render scopes chaining through old parent callbacks and particle frames.
+  onSection = useCurrentCallback(onSection);
+  onConnection = useCurrentCallback(onConnection);
+  onOpen = useCurrentCallback(onOpen);
+  onClose = useCurrentCallback(onClose);
+  onFrame = useCurrentCallback(onFrame);
+  onDetached = useCurrentCallback(onDetached);
+  onControl = useCurrentCallback(onControl);
+  prepareVideo = useCurrentCallback(prepareVideo);
   const [rerun, setRerun] = useState<(RerunDraft & { key: number }) | null>(
     null,
   );
