@@ -518,6 +518,7 @@ class SimulationPublisher:
                 "positions",
                 "UIDs",
                 "kinds",
+                "materials",
                 "masses",
                 "supports",
                 "densities",

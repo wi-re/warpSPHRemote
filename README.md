@@ -259,7 +259,17 @@ See [installation, integration and limitations](reports/LOCAL_COMPANION.md).
 
 The main page separates daemon connection, running simulations, run history, and
 launching. The daemon discovers its installed case catalogue; the staged launcher
-uses its parameter schemas when available. Generic coordinate, radial and vector
+uses its parameter schemas when available. With the updated warpSPH runner,
+**compressible → richtmyerMeshkov** provides CRKSPH, CompSPH and Monaghan with
+per-material ideal-gas EOS settings. Use **Connection → Refresh available cases**
+after updating the solver. Start with `default`, nx=64, end time=2; for the
+larger perturbation choose `demonstration`, nx=64 and explicitly set end time=6.
+The solver checkout includes `examples/remote/richtmyerMeshkov.json` as a
+`POST /v1/runs` request body with particle recording and diagnostics enabled.
+Live snapshots include the optional integer `materials` field, so material
+coloring and profile selection work for this two-gas interface.
+
+Generic coordinate, radial and vector
 profile plots are available under **Quantity analysis → Profile / scatter plots**.
 See [profiles and simulation workflows](reports/PROFILES_AND_SIMULATION_WORKFLOWS.md)
 for controls, configuration requirements and reproduction checks.

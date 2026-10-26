@@ -78,3 +78,9 @@ Issues entry, Chrome version and site permission state. The requested bounded
 connection-event diagnostics remain tracked in the roadmap. Do not disable
 browser protections, broaden daemon exposure or change permissions to hide the
 notices. The interactive-element-in-summary issue is a separate markup follow-up.
+
+Post-deployment feedback: the user reports the memory leak appears fixed in
+Chrome. Their next screenshot explicitly labels 1,793 affected `session`,
+`runs`, `attach`, `snapshot` and `static` requests as Blocked. These are
+browser-reported blocks; fresh request timing and permission diagnostics
+remain a separate unresolved investigation.

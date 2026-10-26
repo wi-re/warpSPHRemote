@@ -109,7 +109,7 @@ These are missing pieces within existing workflows, rather than new product scop
    the actual browser failure before refreshing on recurrence. Existing capture
    stage telemetry alone did not explain this connection failure.
 
-10. **Live viewer memory growth (user report, 2026-10-19; fix implemented; Pages deployment requested).**
+10. **Live viewer memory growth (user report, 2026-10-19; fix deployed as 90521fe).**
    During RM `nonlinear128`, the user reports roughly 50 MB of additional
    browser memory per arriving frame, followed by recurring disconnects;
    refresh recovers the viewer. Distinguish transient allocation/GC from
@@ -123,8 +123,20 @@ These are missing pieces within existing workflows, rather than new product scop
    memory: controlled baseline 942 MiB at 50 frames versus fixed 87 MiB at
    200 frames (JS heap). Regression, GC checks and production build pass;
    [findings and reproduction](LIVE_VIEW_MEMORY.md). The user requested Pages
-   deployment; long-session verification in their Chrome remains pending. Chrome LNA Issues
+   deployment. Pages build/deploy and broader CI passed; the public bundle was
+   verified to contain the fix. Long-session verification in their Chrome
+   remains pending. Chrome LNA Issues
    counts and the summary-element markup warning are separate follow-ups.
+
+User follow-up (2026-10-19): after deployment, the user reports that the
+memory leak appears fixed in Chrome. A subsequent Issues screenshot explicitly
+lists 1,793 affected requests with **Blocked** status, including `session`,
+`runs`, `attach`, `snapshot` and `static`. Record these as browser-reported
+blocked requests, not merely infer their outcome from the affected-request
+count. Correlating fresh Network failures/timestamps with connection events
+remains open; it is separate from the reproduced and corrected memory leak.
+Localhost/SSH forwarding remains the intended workflow; no certificate setup
+or security-policy relaxation is requested.
 
 ## Recommended implementation order
 
